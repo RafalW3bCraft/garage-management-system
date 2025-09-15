@@ -1,4 +1,4 @@
-# Ronak Motor Garage
+# Motor Garage
 
 A comprehensive full-stack web application for automotive service and sales management.
 
