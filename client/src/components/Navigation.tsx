@@ -13,19 +13,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Logo } from "./Logo";
 import { ThemeToggle } from "./ThemeToggle";
+import { AuthDialog } from "./AuthDialog";
 import { Menu, X, User, LogOut, Settings, Car } from "lucide-react";
-
-// Mock user data - todo: remove mock functionality
-const mockUser = {
-  name: "Rajesh Kumar",
-  email: "rajesh@example.com",
-  role: "user" as const,
-  avatar: ""
-};
+import { useAuth } from "@/hooks/use-auth";
 
 export function Navigation() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [location] = useLocation();
+  const { user, isLoading, logout } = useAuth();
   
   const isActive = (path: string) => location === path;
 
@@ -37,12 +32,8 @@ export function Navigation() {
     { href: "/contact", label: "Contact" },
   ];
 
-  const handleAuth = () => {
-    console.log("Authentication triggered");
-  };
-
   const handleLogout = () => {
-    console.log("Logout triggered");
+    logout();
   };
 
   return (
@@ -73,14 +64,14 @@ export function Navigation() {
           <div className="flex items-center gap-2">
             <ThemeToggle />
             
-            {mockUser ? (
+            {user ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="relative h-9 w-9 rounded-full" data-testid="button-user-menu">
                     <Avatar className="h-9 w-9">
-                      <AvatarImage src={mockUser.avatar} alt={mockUser.name} />
+                      <AvatarImage src="" alt={user.name} />
                       <AvatarFallback>
-                        {mockUser.name.split(' ').map(n => n[0]).join('')}
+                        {user.name.split(' ').map(n => n[0]).join('')}
                       </AvatarFallback>
                     </Avatar>
                   </Button>
@@ -88,12 +79,12 @@ export function Navigation() {
                 <DropdownMenuContent className="w-56" align="end" forceMount>
                   <DropdownMenuLabel className="font-normal">
                     <div className="flex flex-col space-y-1">
-                      <p className="text-sm font-medium leading-none">{mockUser.name}</p>
+                      <p className="text-sm font-medium leading-none">{user.name}</p>
                       <p className="text-xs leading-none text-muted-foreground">
-                        {mockUser.email}
+                        {user.email}
                       </p>
                       <Badge variant="secondary" className="w-fit mt-1">
-                        {mockUser.role}
+                        {user.provider === "google" ? "Google" : "Email"}
                       </Badge>
                     </div>
                   </DropdownMenuLabel>
@@ -117,10 +108,16 @@ export function Navigation() {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            ) : (
-              <Button onClick={handleAuth} data-testid="button-login">
-                Login
+            ) : isLoading ? (
+              <Button variant="ghost" disabled data-testid="button-loading">
+                Loading...
               </Button>
+            ) : (
+              <AuthDialog>
+                <Button data-testid="button-login">
+                  Login
+                </Button>
+              </AuthDialog>
             )}
 
             {/* Mobile Menu Button */}

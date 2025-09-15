@@ -3,11 +3,16 @@ import { pgTable, text, varchar, integer, decimal, timestamp, boolean } from "dr
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Users table - keep existing structure
+// Users table - enhanced for email auth and Google OAuth
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+  email: text("email").notNull().unique(),
+  name: text("name").notNull(),
+  password: text("password"), // nullable for OAuth users
+  googleId: text("google_id").unique(), // for Google OAuth
+  provider: text("provider").notNull().default("email"), // "email" or "google"
+  emailVerified: boolean("email_verified").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 // Customers table - people who book services
@@ -91,9 +96,34 @@ export const contacts = pgTable("contacts", {
 });
 
 // Insert schemas for validation
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
+export const insertUserSchema = createInsertSchema(users).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Internal schema for OAuth user creation (includes googleId)
+export const insertOAuthUserSchema = createInsertSchema(users).omit({
+  id: true,
+  createdAt: true,
+  password: true, // OAuth users don't have passwords
+});
+
+// Separate schemas for different auth flows
+export const registerSchema = insertUserSchema.pick({
+  email: true,
+  name: true,
   password: true,
+}).extend({
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  confirmPassword: z.string(),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords don't match",
+  path: ["confirmPassword"],
+});
+
+export const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1, "Password is required"),
 });
 
 export const insertCustomerSchema = createInsertSchema(customers).omit({

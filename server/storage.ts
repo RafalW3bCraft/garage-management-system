@@ -28,7 +28,8 @@ import { randomUUID } from "crypto";
 export interface IStorage {
   // Users
   getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByGoogleId(googleId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
 
   // Customers
@@ -73,9 +74,15 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
+  async getUserByEmail(email: string): Promise<User | undefined> {
     const db = await getDb();
-    const result = await db.select().from(users).where(eq(users.username, username)).limit(1);
+    const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    return result[0];
+  }
+
+  async getUserByGoogleId(googleId: string): Promise<User | undefined> {
+    const db = await getDb();
+    const result = await db.select().from(users).where(eq(users.googleId, googleId)).limit(1);
     return result[0];
   }
 
@@ -284,13 +291,25 @@ export class MemStorage implements IStorage {
     return this.users.get(id);
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(user => user.username === username);
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(user => user.email === email);
+  }
+
+  async getUserByGoogleId(googleId: string): Promise<User | undefined> {
+    return Array.from(this.users.values()).find(user => user.googleId === googleId);
   }
 
   async createUser(user: InsertUser): Promise<User> {
     const id = randomUUID();
-    const newUser: User = { ...user, id };
+    const newUser: User = { 
+      ...user, 
+      id, 
+      createdAt: new Date(),
+      provider: user.provider ?? "email",
+      emailVerified: user.emailVerified ?? false,
+      password: user.password ?? null,
+      googleId: user.googleId ?? null
+    };
     this.users.set(id, newUser);
     return newUser;
   }
@@ -328,7 +347,7 @@ export class MemStorage implements IStorage {
 
   async createService(service: InsertService): Promise<Service> {
     const id = randomUUID();
-    const newService: Service = { ...service, id };
+    const newService: Service = { ...service, id, popular: service.popular ?? false, icon: service.icon ?? null };
     this.services.set(id, newService);
     return newService;
   }
@@ -346,7 +365,7 @@ export class MemStorage implements IStorage {
 
   async createAppointment(appointment: InsertAppointment): Promise<Appointment> {
     const id = randomUUID();
-    const newAppointment: Appointment = { ...appointment, id, status: appointment.status || "pending", createdAt: new Date() };
+    const newAppointment: Appointment = { ...appointment, id, status: appointment.status || "pending", createdAt: new Date(), price: appointment.price ?? null, mechanicName: appointment.mechanicName ?? null, notes: appointment.notes ?? null };
     this.appointments.set(id, newAppointment);
     return newAppointment;
   }
@@ -384,7 +403,7 @@ export class MemStorage implements IStorage {
 
   async createCar(car: InsertCar): Promise<Car> {
     const id = randomUUID();
-    const newCar: Car = { ...car, id, createdAt: new Date() };
+    const newCar: Car = { ...car, id, createdAt: new Date(), description: car.description ?? null, isAuction: car.isAuction ?? false, currentBid: car.currentBid ?? null, auctionEndTime: car.auctionEndTime ?? null };
     this.cars.set(id, newCar);
     return newCar;
   }
@@ -412,7 +431,7 @@ export class MemStorage implements IStorage {
 
   async createLocation(location: InsertLocation): Promise<Location> {
     const id = randomUUID();
-    const newLocation: Location = { ...location, id };
+    const newLocation: Location = { ...location, id, rating: location.rating ?? null };
     this.locations.set(id, newLocation);
     return newLocation;
   }

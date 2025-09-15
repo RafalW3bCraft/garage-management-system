@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Calendar, Shield, Wrench } from "lucide-react";
-import heroImage from "@assets/generated_images/Professional_automotive_garage_interior_88790ce7.png";
+import heroImage from "@assets/generated_images/Professional_automotive_garage_interior_91705c91.png";
 
 export function HeroSection() {
   return (
