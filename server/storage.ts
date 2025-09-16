@@ -13,16 +13,19 @@ import {
   type InsertContact,
   type Location,
   type InsertLocation,
+  type Bid,
+  type InsertBid,
   users,
   services,
   appointments,
   cars,
   customers,
   contacts,
-  locations
+  locations,
+  bids
 } from "@shared/schema";
 import { getDb } from "./db";
-import { eq, and, desc, asc } from "drizzle-orm";
+import { eq, and, desc, asc, gte, lte, ne } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
@@ -48,6 +51,8 @@ export interface IStorage {
   getAppointmentsByCustomer(customerId: string): Promise<Appointment[]>;
   createAppointment(appointment: InsertAppointment): Promise<Appointment>;
   updateAppointmentStatus(id: string, status: string): Promise<Appointment | undefined>;
+  rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined>;
+  checkAppointmentConflict(locationId: string, dateTime: Date, excludeAppointmentId?: string): Promise<boolean>;
   
   // Cars
   getAllCars(): Promise<Car[]>;
@@ -64,6 +69,12 @@ export interface IStorage {
   getAllLocations(): Promise<Location[]>;
   getLocation(id: string): Promise<Location | undefined>;
   createLocation(location: InsertLocation): Promise<Location>;
+  
+  // Bids
+  placeBid(bid: InsertBid): Promise<Bid>;
+  getBidsForCar(carId: string): Promise<Bid[]>;
+  getHighestBidForCar(carId: string): Promise<Bid | undefined>;
+  updateCarCurrentBid(carId: string, bidAmount: number): Promise<Car | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -163,6 +174,45 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
+  async rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined> {
+    const db = await getDb();
+    const result = await db.update(appointments)
+      .set({ 
+        dateTime: new Date(dateTime),
+        locationId: locationId 
+      })
+      .where(eq(appointments.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async checkAppointmentConflict(locationId: string, dateTime: Date, excludeAppointmentId?: string): Promise<boolean> {
+    const db = await getDb();
+    const targetDateTime = new Date(dateTime);
+    // Check for appointments within 1 hour window to avoid overlaps
+    const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
+    const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
+    
+    let whereConditions = [
+      eq(appointments.locationId, locationId),
+      // Check for overlapping time slots
+      gte(appointments.dateTime, startWindow),
+      lte(appointments.dateTime, endWindow),
+      // Only check confirmed appointments
+      eq(appointments.status, "confirmed")
+    ];
+    
+    if (excludeAppointmentId) {
+      // Exclude the current appointment from conflict check
+      whereConditions.push(ne(appointments.id, excludeAppointmentId));
+    }
+    
+    const query = db.select().from(appointments).where(and(...whereConditions));
+    
+    const conflictingAppointments = await query;
+    return conflictingAppointments.length > 0;
+  }
+
   // Cars
   async getAllCars(): Promise<Car[]> {
     const db = await getDb();
@@ -224,6 +274,38 @@ export class DatabaseStorage implements IStorage {
     const result = await db.insert(locations).values(location).returning();
     return result[0];
   }
+
+  // Bids
+  async placeBid(bid: InsertBid): Promise<Bid> {
+    const db = await getDb();
+    const result = await db.insert(bids).values(bid).returning();
+    return result[0];
+  }
+
+  async getBidsForCar(carId: string): Promise<Bid[]> {
+    const db = await getDb();
+    return await db.select().from(bids)
+      .where(eq(bids.carId, carId))
+      .orderBy(desc(bids.bidTime));
+  }
+
+  async getHighestBidForCar(carId: string): Promise<Bid | undefined> {
+    const db = await getDb();
+    const result = await db.select().from(bids)
+      .where(eq(bids.carId, carId))
+      .orderBy(desc(bids.bidAmount))
+      .limit(1);
+    return result[0];
+  }
+
+  async updateCarCurrentBid(carId: string, bidAmount: number): Promise<Car | undefined> {
+    const db = await getDb();
+    const result = await db.update(cars)
+      .set({ currentBid: bidAmount })
+      .where(eq(cars.id, carId))
+      .returning();
+    return result[0];
+  }
 }
 
 // MemStorage with sample data for fallback
@@ -281,7 +363,149 @@ export class MemStorage implements IStorage {
 
     services.forEach(service => this.services.set(service.id, service));
 
-    // This was removed - no cars array defined yet
+    // Seed sample cars
+    const cars: Car[] = [
+      // Cars for sale
+      {
+        id: "car-1",
+        make: "Maruti Suzuki",
+        model: "Swift",
+        year: 2020,
+        price: 650000,
+        mileage: 35000,
+        fuelType: "petrol",
+        location: "Mumbai",
+        condition: "Excellent",
+        image: "https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?w=400&h=300&fit=crop&crop=center",
+        isAuction: false,
+        currentBid: null,
+        auctionEndTime: null,
+        description: "Well-maintained Swift with full service history",
+        createdAt: new Date()
+      },
+      {
+        id: "car-2", 
+        make: "Hyundai",
+        model: "Creta",
+        year: 2019,
+        price: 1200000,
+        mileage: 42000,
+        fuelType: "diesel",
+        location: "Delhi",
+        condition: "Good",
+        image: "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?w=400&h=300&fit=crop&crop=center",
+        isAuction: false,
+        currentBid: null,
+        auctionEndTime: null,
+        description: "Popular SUV with excellent fuel efficiency",
+        createdAt: new Date()
+      },
+      {
+        id: "car-3",
+        make: "Tata",
+        model: "Nexon",
+        year: 2021,
+        price: 950000,
+        mileage: 25000,
+        fuelType: "electric",
+        location: "Bangalore",
+        condition: "Excellent",
+        image: "https://images.unsplash.com/photo-1544896478-d5c7254e1b58?w=400&h=300&fit=crop&crop=center",
+        isAuction: false,
+        currentBid: null,
+        auctionEndTime: null,
+        description: "Electric SUV with modern features",
+        createdAt: new Date()
+      },
+      {
+        id: "car-4",
+        make: "Honda",
+        model: "City",
+        year: 2018,
+        price: 850000,
+        mileage: 48000,
+        fuelType: "petrol",
+        location: "Pune",
+        condition: "Good", 
+        image: "https://images.unsplash.com/photo-1552519507-da3b142c6e3d?w=400&h=300&fit=crop&crop=center",
+        isAuction: false,
+        currentBid: null,
+        auctionEndTime: null,
+        description: "Reliable sedan with excellent comfort",
+        createdAt: new Date()
+      },
+      {
+        id: "car-5",
+        make: "Mahindra",
+        model: "XUV500",
+        year: 2017,
+        price: 1100000,
+        mileage: 65000,
+        fuelType: "diesel",
+        location: "Chennai",
+        condition: "Fair",
+        image: "https://images.unsplash.com/photo-1581540222194-0def2dda95b8?w=400&h=300&fit=crop&crop=center",
+        isAuction: false,
+        currentBid: null,
+        auctionEndTime: null,
+        description: "Spacious 7-seater SUV",
+        createdAt: new Date()
+      },
+      // Auction cars
+      {
+        id: "car-auction-1",
+        make: "BMW",
+        model: "3 Series",
+        year: 2016,
+        price: 1800000,
+        mileage: 55000,
+        fuelType: "petrol",
+        location: "Mumbai",
+        condition: "Good",
+        image: "https://images.unsplash.com/photo-1555215695-3004980ad54e?w=400&h=300&fit=crop&crop=center",
+        isAuction: true,
+        currentBid: 1650000,
+        auctionEndTime: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days from now
+        description: "Luxury sedan with premium features",
+        createdAt: new Date()
+      },
+      {
+        id: "car-auction-2",
+        make: "Ford",
+        model: "EcoSport",
+        year: 2019,
+        price: 750000,
+        mileage: 35000,
+        fuelType: "petrol",
+        location: "Delhi",
+        condition: "Excellent",
+        image: "https://images.unsplash.com/photo-1503376821350-e25f4b67162f?w=400&h=300&fit=crop&crop=center",
+        isAuction: true,
+        currentBid: 720000,
+        auctionEndTime: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000), // 1 day from now
+        description: "Compact SUV perfect for city driving",
+        createdAt: new Date()
+      },
+      {
+        id: "car-auction-3",
+        make: "Toyota",
+        model: "Innova",
+        year: 2020,
+        price: 1650000,
+        mileage: 30000,
+        fuelType: "diesel",
+        location: "Bangalore",
+        condition: "Excellent",
+        image: "https://images.unsplash.com/photo-1593941707882-a5bac6861d75?w=400&h=300&fit=crop&crop=center",
+        isAuction: true,
+        currentBid: 1580000,
+        auctionEndTime: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000), // 5 days from now
+        description: "Reliable MPV with excellent build quality",
+        createdAt: new Date()
+      }
+    ];
+
+    cars.forEach(car => this.cars.set(car.id, car));
 
     console.log("MemStorage initialized with sample data");
   }
@@ -380,6 +604,40 @@ export class MemStorage implements IStorage {
     return undefined;
   }
 
+  async rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined> {
+    const appointment = this.appointments.get(id);
+    if (appointment) {
+      appointment.dateTime = new Date(dateTime);
+      appointment.locationId = locationId;
+      this.appointments.set(id, appointment);
+      return appointment;
+    }
+    return undefined;
+  }
+
+  async checkAppointmentConflict(locationId: string, dateTime: Date, excludeAppointmentId?: string): Promise<boolean> {
+    const targetDateTime = new Date(dateTime);
+    // Check for appointments within 1 hour window to avoid overlaps
+    const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
+    const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
+    
+    const conflictingAppointments = Array.from(this.appointments.values()).filter(apt => {
+      // Skip cancelled or pending appointments
+      if (apt.status !== "confirmed") return false;
+      
+      // Skip if different location
+      if (apt.locationId !== locationId) return false;
+      
+      // Skip the current appointment being rescheduled
+      if (excludeAppointmentId && apt.id === excludeAppointmentId) return false;
+      
+      // Check if appointment falls within the time window
+      return apt.dateTime >= startWindow && apt.dateTime <= endWindow;
+    });
+    
+    return conflictingAppointments.length > 0;
+  }
+
   // Cars
   async getAllCars(): Promise<Car[]> {
     return Array.from(this.cars.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -435,16 +693,61 @@ export class MemStorage implements IStorage {
     this.locations.set(id, newLocation);
     return newLocation;
   }
+
+  // Bids
+  private bids: Map<string, Bid> = new Map();
+
+  async placeBid(bid: InsertBid): Promise<Bid> {
+    const id = randomUUID();
+    const newBid: Bid = { 
+      ...bid, 
+      id, 
+      bidTime: new Date() 
+    };
+    this.bids.set(id, newBid);
+    return newBid;
+  }
+
+  async getBidsForCar(carId: string): Promise<Bid[]> {
+    return Array.from(this.bids.values())
+      .filter(bid => bid.carId === carId)
+      .sort((a, b) => b.bidTime.getTime() - a.bidTime.getTime());
+  }
+
+  async getHighestBidForCar(carId: string): Promise<Bid | undefined> {
+    const carBids = Array.from(this.bids.values())
+      .filter(bid => bid.carId === carId)
+      .sort((a, b) => b.bidAmount - a.bidAmount);
+    return carBids[0];
+  }
+
+  async updateCarCurrentBid(carId: string, bidAmount: number): Promise<Car | undefined> {
+    const car = this.cars.get(carId);
+    if (car) {
+      const updatedCar = { ...car, currentBid: bidAmount };
+      this.cars.set(carId, updatedCar);
+      return updatedCar;
+    }
+    return undefined;
+  }
 }
 
 // Factory function to create storage instance
 async function createStorage(): Promise<IStorage> {
   try {
-    await getDb();
+    console.log("Attempting database connection...");
+    const db = await getDb();
     console.log("Database connection successful - using DatabaseStorage");
+    
+    // Test the connection with a simple query
+    await db.select().from(users).limit(1);
+    console.log("Database query test successful");
+    
     return new DatabaseStorage();
   } catch (error) {
-    console.log("Database connection failed - using MemStorage with sample data");
+    console.error("Database connection failed:", error instanceof Error ? error.message : error);
+    console.error("Full error:", error);
+    console.log("Falling back to MemStorage with sample data");
     return new MemStorage();
   }
 }

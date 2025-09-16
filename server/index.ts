@@ -2,6 +2,15 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
+// Environment validation and logging
+console.log("=== RonakMotorGarage Application Starting ===");
+console.log("Environment variables check:");
+console.log("- GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID ? "✓ Available" : "✗ Missing");
+console.log("- GOOGLE_CLIENT_SECRET:", process.env.GOOGLE_CLIENT_SECRET ? "✓ Available" : "✗ Missing");
+console.log("- DATABASE_URL:", process.env.DATABASE_URL ? "✓ Available" : "✗ Missing");
+console.log("- SESSION_SECRET:", process.env.SESSION_SECRET ? "✓ Available" : "✗ Missing");
+console.log("- NODE_ENV:", process.env.NODE_ENV || "development");
+
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));

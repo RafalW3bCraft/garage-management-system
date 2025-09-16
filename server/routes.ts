@@ -10,7 +10,9 @@ import {
   insertContactSchema,
   insertLocationSchema,
   registerSchema,
-  loginSchema
+  loginSchema,
+  rescheduleAppointmentSchema,
+  placeBidSchema
 } from "@shared/schema";
 import { fromZodError } from "zod-validation-error";
 import { hashPassword, verifyPassword, passport } from "./auth";
@@ -69,11 +71,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         emailVerified: false
       });
 
-      // Don't return password in response
-      const { password, ...userResponse } = user;
-      res.status(201).json({ 
-        message: "User created successfully",
-        user: userResponse
+      // Log the user in immediately after registration
+      req.login(user, (err) => {
+        if (err) {
+          return res.status(500).json({ message: "Registration successful but failed to log in" });
+        }
+        
+        // Don't return password in response
+        const { password, ...userResponse } = user;
+        res.status(201).json({ 
+          message: "Account created and logged in successfully",
+          user: userResponse
+        });
       });
     } catch (error) {
       if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
@@ -152,6 +161,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } else {
       res.status(401).json({ message: "Not authenticated" });
     }
+  });
+
+  // Get available auth providers
+  app.get("/api/auth/providers", (req, res) => {
+    const providers = ["email"]; // Email auth is always available
+    
+    // Check if Google OAuth is configured
+    if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+      providers.push("google");
+    }
+    
+    res.json({ providers });
   });
 
   // Services API
@@ -268,6 +289,96 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Authentication middleware for protected routes
+  const requireAuth = (req: any, res: any, next: any) => {
+    if (!req.user) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+    next();
+  };
+
+  // Reschedule appointment with full security and validation
+  app.patch("/api/appointments/:id/reschedule", requireAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const user = req.user as any;
+      
+      // Validate the reschedule payload
+      const validationResult = rescheduleAppointmentSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        const errorMessages = validationResult.error.errors.map(err => err.message).join(", ");
+        return res.status(400).json({ 
+          message: "Validation failed", 
+          errors: errorMessages 
+        });
+      }
+      
+      const { dateTime, locationId } = validationResult.data;
+      const storage = await getStorage();
+      
+      // Check if appointment exists
+      const appointment = await storage.getAppointment(id);
+      if (!appointment) {
+        return res.status(404).json({ message: "Appointment not found" });
+      }
+      
+      // Authorization: Check if user owns the appointment (via customer email)
+      // For now, we'll check if user's email matches a customer's email
+      // In a full implementation, you'd have proper user-customer relationships
+      const customer = await storage.getCustomer(appointment.customerId);
+      if (!customer || customer.email !== user.email) {
+        // Only allow users to reschedule their own appointments
+        // TODO: Add admin role check here if needed
+        return res.status(403).json({ message: "You can only reschedule your own appointments" });
+      }
+      
+      // Verify appointment is in a reschedulable state
+      if (appointment.status !== "confirmed") {
+        return res.status(400).json({ 
+          message: `Cannot reschedule appointment with status '${appointment.status}'. Only confirmed appointments can be rescheduled.` 
+        });
+      }
+      
+      // Verify the location exists
+      const location = await storage.getLocation(locationId);
+      if (!location) {
+        return res.status(400).json({ message: "Invalid location ID. The specified location does not exist." });
+      }
+      
+      // Check for appointment conflicts at the new time slot
+      const hasConflict = await storage.checkAppointmentConflict(
+        locationId, 
+        new Date(dateTime), 
+        id // exclude current appointment from conflict check
+      );
+      
+      if (hasConflict) {
+        return res.status(409).json({ 
+          message: "Time slot conflict. Another appointment is already scheduled at this location and time. Please choose a different time." 
+        });
+      }
+      
+      // All checks passed - perform the reschedule
+      const rescheduledAppointment = await storage.rescheduleAppointment(id, dateTime, locationId);
+      if (!rescheduledAppointment) {
+        return res.status(500).json({ message: "Failed to update appointment. Please try again." });
+      }
+      
+      res.json({
+        message: "Appointment rescheduled successfully",
+        appointment: rescheduledAppointment
+      });
+      
+    } catch (error) {
+      console.error("Reschedule appointment error:", error);
+      if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
+        res.status(400).json({ message: fromZodError(error as any).toString() });
+      } else {
+        res.status(500).json({ message: "Failed to reschedule appointment. Please try again." });
+      }
+    }
+  });
+
   // Cars API
   app.get("/api/cars", async (req, res) => {
     try {
@@ -325,6 +436,81 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         res.status(500).json({ message: "Failed to create car" });
       }
+    }
+  });
+
+  // Bid endpoints
+  app.post("/api/cars/:carId/bids", requireAuth, async (req, res) => {
+    try {
+      const { carId } = req.params;
+      const { bidAmount } = req.body;
+      const user = req.user!; // requireAuth ensures this exists
+      
+      // Validate request body
+      const validatedData = placeBidSchema.parse({ carId, bidAmount });
+      
+      const storage = await getStorage();
+      
+      // Check if car exists and is an auction
+      const car = await storage.getCar(carId);
+      if (!car) {
+        return res.status(404).json({ message: "Car not found" });
+      }
+      
+      if (!car.isAuction) {
+        return res.status(400).json({ message: "This car is not available for auction" });
+      }
+      
+      // Check if auction has ended
+      if (car.auctionEndTime && new Date() > car.auctionEndTime) {
+        return res.status(400).json({ message: "Auction has ended" });
+      }
+      
+      // Check if bid amount is higher than current bid
+      const currentBid = car.currentBid || car.price;
+      if (bidAmount <= currentBid) {
+        return res.status(400).json({ 
+          message: `Bid amount must be higher than current bid of ₹${currentBid.toLocaleString('en-IN')}` 
+        });
+      }
+      
+      // Place the bid
+      const bid = await storage.placeBid({
+        carId,
+        bidderEmail: user.email,
+        bidAmount
+      });
+      
+      // Update car's current bid
+      await storage.updateCarCurrentBid(carId, bidAmount);
+      
+      res.status(201).json(bid);
+    } catch (error) {
+      console.error("Error placing bid:", error);
+      if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
+        res.status(400).json({ message: fromZodError(error as any).toString() });
+      } else {
+        res.status(500).json({ message: "Failed to place bid" });
+      }
+    }
+  });
+
+  app.get("/api/cars/:carId/bids", async (req, res) => {
+    try {
+      const { carId } = req.params;
+      const storage = await getStorage();
+      
+      // Check if car exists
+      const car = await storage.getCar(carId);
+      if (!car) {
+        return res.status(404).json({ message: "Car not found" });
+      }
+      
+      const bids = await storage.getBidsForCar(carId);
+      res.json(bids);
+    } catch (error) {
+      console.error("Error fetching bids:", error);
+      res.status(500).json({ message: "Failed to fetch bids" });
     }
   });
 

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -10,9 +11,12 @@ import {
   Mail, 
   Clock, 
   Star,
-  Send
+  Send,
+  Loader2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
+import type { Location, InsertContact } from "@shared/schema";
 
 export default function Contact() {
   const [formData, setFormData] = useState({
@@ -24,6 +28,42 @@ export default function Contact() {
   });
   const { toast } = useToast();
 
+  // Fetch locations from API
+  const { data: locations, isLoading: locationsLoading, isError: locationsError, error: locationsErrorData, refetch: refetchLocations } = useQuery<Location[]>({
+    queryKey: ["/api/locations"],
+    staleTime: 10 * 60 * 1000, // 10 minutes
+    retry: 3,
+  });
+
+  // Contact form mutation
+  const contactMutation = useMutation({
+    mutationFn: async (data: InsertContact) => {
+      const response = await apiRequest("POST", "/api/contacts", data);
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Message Sent!",
+        description: "Thank you for contacting us. We'll get back to you soon.",
+      });
+      // Reset form
+      setFormData({
+        name: "",
+        email: "",
+        phone: "",
+        subject: "",
+        message: ""
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to send message. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setFormData({
       ...formData,
@@ -33,51 +73,9 @@ export default function Contact() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    console.log("Contact form submitted:", formData);
-    toast({
-      title: "Message Sent!",
-      description: "Thank you for contacting us. We'll get back to you soon.",
-    });
-    // Reset form
-    setFormData({
-      name: "",
-      email: "",
-      phone: "",
-      subject: "",
-      message: ""
-    });
+    contactMutation.mutate(formData);
   };
 
-  // Mock data - todo: remove mock functionality
-  const locations = [
-    {
-      name: "Mumbai Branch",
-      address: "123 Service Road, Andheri West, Mumbai - 400058",
-      phone: "+91-22-2345-6789",
-      email: "mumbai@ronakmotorgarage.com",
-      hours: "Mon-Sat: 9:00 AM - 7:00 PM",
-      rating: 4.8,
-      services: ["All Services", "Emergency Repairs", "Car Sales"]
-    },
-    {
-      name: "Delhi Branch", 
-      address: "456 Auto Street, Karol Bagh, New Delhi - 110005",
-      phone: "+91-11-3456-7890",
-      email: "delhi@ronakmotorgarage.com", 
-      hours: "Mon-Sat: 9:00 AM - 7:00 PM",
-      rating: 4.7,
-      services: ["All Services", "AC Specialist", "Auctions"]
-    },
-    {
-      name: "Bangalore Branch",
-      address: "789 Tech Park Road, Whitefield, Bangalore - 560066", 
-      phone: "+91-80-4567-8901",
-      email: "bangalore@ronakmotorgarage.com",
-      hours: "Mon-Sat: 9:00 AM - 7:00 PM", 
-      rating: 4.9,
-      services: ["All Services", "Electric Vehicle Specialist"]
-    }
-  ];
 
   return (
     <div className="min-h-screen bg-background">
@@ -187,9 +185,23 @@ export default function Contact() {
                     />
                   </div>
 
-                  <Button type="submit" className="w-full" data-testid="button-send-message">
-                    <Send className="mr-2 h-4 w-4" />
-                    Send Message
+                  <Button 
+                    type="submit" 
+                    className="w-full" 
+                    disabled={contactMutation.isPending}
+                    data-testid="button-send-message"
+                  >
+                    {contactMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Sending...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="mr-2 h-4 w-4" />
+                        Send Message
+                      </>
+                    )}
                   </Button>
                 </form>
               </CardContent>
@@ -231,55 +243,76 @@ export default function Contact() {
             {/* Location Cards */}
             <div className="space-y-4">
               <h3 className="text-xl font-semibold">Our Locations</h3>
-              {locations.map((location, index) => (
-                <Card key={index} className="hover-elevate">
-                  <CardHeader>
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <CardTitle className="text-lg">{location.name}</CardTitle>
-                        <div className="flex items-center gap-1 mt-1">
-                          <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                          <span className="text-sm font-medium">{location.rating}</span>
+              {locationsLoading ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : locationsError ? (
+                <div className="text-center py-8">
+                  <h4 className="text-lg font-semibold mb-2">Failed to load locations</h4>
+                  <p className="text-muted-foreground mb-4">
+                    {locationsErrorData?.message || "Something went wrong. Please try again."}
+                  </p>
+                  <Button onClick={() => refetchLocations()} data-testid="button-retry-locations">
+                    Try Again
+                  </Button>
+                </div>
+              ) : locations && locations.length > 0 ? (
+                locations.map((location) => (
+                  <Card key={location.id} className="hover-elevate">
+                    <CardHeader>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <CardTitle className="text-lg">{location.name}</CardTitle>
+                          <div className="flex items-center gap-1 mt-1">
+                            <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                            <span className="text-sm font-medium">{location.rating || "4.5"}</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div className="flex items-start gap-2">
-                      <MapPin className="h-4 w-4 text-muted-foreground mt-0.5" />
-                      <p className="text-sm">{location.address}</p>
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      <Phone className="h-4 w-4 text-muted-foreground" />
-                      <p className="text-sm">{location.phone}</p>
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      <Mail className="h-4 w-4 text-muted-foreground" />
-                      <p className="text-sm">{location.email}</p>
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-4 w-4 text-muted-foreground" />
-                      <p className="text-sm">{location.hours}</p>
-                    </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="flex items-start gap-2">
+                        <MapPin className="h-4 w-4 text-muted-foreground mt-0.5" />
+                        <p className="text-sm">{location.address}</p>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <Phone className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-sm">{location.phone}</p>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <Mail className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-sm">{location.email}</p>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        <Clock className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-sm">{location.hours}</p>
+                      </div>
 
-                    <div className="flex flex-wrap gap-1 mt-2">
-                      {location.services.map((service, serviceIndex) => (
-                        <Badge key={serviceIndex} variant="secondary" className="text-xs">
-                          {service}
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        <Badge variant="secondary" className="text-xs">
+                          All Services
                         </Badge>
-                      ))}
-                    </div>
+                        <Badge variant="secondary" className="text-xs">
+                          Expert Technicians
+                        </Badge>
+                      </div>
 
-                    <Button variant="outline" size="sm" className="w-full mt-3">
-                      <MapPin className="mr-2 h-4 w-4" />
-                      Get Directions
-                    </Button>
-                  </CardContent>
-                </Card>
-              ))}
+                      <Button variant="outline" size="sm" className="w-full mt-3">
+                        <MapPin className="mr-2 h-4 w-4" />
+                        Get Directions
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))
+              ) : (
+                <div className="text-center py-8">
+                  <p className="text-muted-foreground">No locations available</p>
+                </div>
+              )}
             </div>
           </div>
         </div>

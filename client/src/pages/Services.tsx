@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ServiceCard } from "@/components/ServiceCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,99 +20,42 @@ import {
   Droplets,
   Gauge,
   AlertTriangle,
-  Search
+  Search,
+  Loader2,
+  Cog
 } from "lucide-react";
+import type { Service } from "@shared/schema";
+
+// Icon mapping function
+const getIconComponent = (iconName: string | null) => {
+  const iconMap: Record<string, JSX.Element> = {
+    'droplets': <Droplets className="h-6 w-6" />,
+    'car': <Car className="h-6 w-6" />,
+    'zap': <Zap className="h-6 w-6" />,
+    'alert-triangle': <AlertTriangle className="h-6 w-6" />,
+    'settings': <Settings className="h-6 w-6" />,
+    'gauge': <Gauge className="h-6 w-6" />,
+    'shield': <Shield className="h-6 w-6" />,
+    'wrench': <Wrench className="h-6 w-6" />,
+    'cog': <Cog className="h-6 w-6" />
+  };
+  return iconMap[iconName || ''] || <Wrench className="h-6 w-6" />;
+};
 
 export default function Services() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [priceRange, setPriceRange] = useState("all");
 
-  // Mock data - todo: remove mock functionality
-  const services = [
-    {
-      title: "Oil Change",
-      description: "Complete engine oil and filter replacement with quality oil",
-      price: 2500,
-      duration: "30 mins",
-      category: "maintenance",
-      features: ["Engine oil replacement", "Oil filter change", "Free inspection", "Digital report"],
-      icon: <Droplets className="h-6 w-6" />
-    },
-    {
-      title: "Complete Service",
-      description: "Comprehensive vehicle maintenance and inspection",
-      price: 8500,
-      duration: "3 hours",
-      category: "maintenance",
-      features: ["Full inspection", "Oil change", "Brake check", "AC service", "Washing"],
-      popular: true,
-      icon: <Car className="h-6 w-6" />
-    },
-    {
-      title: "AC Service",
-      description: "Air conditioning system cleaning and maintenance",
-      price: 3500,
-      duration: "1 hour",
-      category: "ac",
-      features: ["Filter replacement", "Gas refill", "Vent cleaning", "Performance check"],
-      icon: <Zap className="h-6 w-6" />
-    },
-    {
-      title: "Brake Service",
-      description: "Complete brake system inspection and maintenance",
-      price: 4500,
-      duration: "1.5 hours",
-      category: "brakes",
-      features: ["Brake pad inspection", "Brake fluid check", "Disc inspection", "Performance test"],
-      icon: <AlertTriangle className="h-6 w-6" />
-    },
-    {
-      title: "Tire Service",
-      description: "Tire rotation, alignment, and balancing service",
-      price: 2000,
-      duration: "45 mins",
-      category: "tires",
-      features: ["Tire rotation", "Wheel alignment", "Balancing", "Pressure check"],
-      icon: <Settings className="h-6 w-6" />
-    },
-    {
-      title: "Engine Diagnostics",
-      description: "Computer diagnostics and engine health check",
-      price: 1500,
-      duration: "1 hour",
-      category: "diagnostics",
-      features: ["OBD scan", "Error code analysis", "Performance report", "Recommendations"],
-      icon: <Gauge className="h-6 w-6" />
-    },
-    {
-      title: "Battery Service",
-      description: "Battery testing, cleaning, and replacement if needed",
-      price: 1000,
-      duration: "30 mins",
-      category: "electrical",
-      features: ["Battery test", "Terminal cleaning", "Voltage check", "Installation if needed"],
-      icon: <Zap className="h-6 w-6" />
-    },
-    {
-      title: "Transmission Service",
-      description: "Transmission fluid change and system check",
-      price: 5500,
-      duration: "2 hours",
-      category: "transmission",
-      features: ["Fluid replacement", "Filter change", "System inspection", "Performance test"],
-      icon: <Settings className="h-6 w-6" />
-    },
-    {
-      title: "Paint Protection",
-      description: "Ceramic coating and paint protection service",
-      price: 12000,
-      duration: "4 hours",
-      category: "detailing",
-      features: ["Surface preparation", "Ceramic coating", "Paint correction", "6-month warranty"],
-      icon: <Shield className="h-6 w-6" />
-    }
-  ];
+  // Fetch services from API
+  const { data: servicesData, isLoading, error, refetch } = useQuery<Service[]>({
+    queryKey: ["/api/services"],
+    retry: 3,
+    staleTime: 60 * 1000 // 60 seconds
+  });
+
+  // Use original API data without transformation
+  const services = servicesData || [];
 
   const categories = [
     { value: "all", label: "All Services" },
@@ -133,20 +77,23 @@ export default function Services() {
     { value: "above-10000", label: "Above ₹10,000" }
   ];
 
-  const filteredServices = services.filter(service => {
-    const matchesSearch = service.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         service.description.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesCategory = selectedCategory === "all" || service.category === selectedCategory;
-    
-    const matchesPrice = priceRange === "all" || 
-      (priceRange === "under-2000" && service.price < 2000) ||
-      (priceRange === "2000-5000" && service.price >= 2000 && service.price <= 5000) ||
-      (priceRange === "5000-10000" && service.price >= 5000 && service.price <= 10000) ||
-      (priceRange === "above-10000" && service.price > 10000);
+  // Memoized filtering for performance
+  const filteredServices = useMemo(() => {
+    return services.filter(service => {
+      const matchesSearch = service.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                           service.description.toLowerCase().includes(searchTerm.toLowerCase());
+      
+      const matchesCategory = selectedCategory === "all" || service.category === selectedCategory;
+      
+      const matchesPrice = priceRange === "all" || 
+        (priceRange === "under-2000" && service.price < 2000) ||
+        (priceRange === "2000-5000" && service.price >= 2000 && service.price <= 5000) ||
+        (priceRange === "5000-10000" && service.price >= 5000 && service.price <= 10000) ||
+        (priceRange === "above-10000" && service.price > 10000);
 
-    return matchesSearch && matchesCategory && matchesPrice;
-  });
+      return matchesSearch && matchesCategory && matchesPrice;
+    });
+  }, [services, searchTerm, selectedCategory, priceRange]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -231,7 +178,29 @@ export default function Services() {
       {/* Services Grid */}
       <section className="py-12">
         <div className="container mx-auto px-4">
-          {filteredServices.length > 0 ? (
+          {isLoading ? (
+            <div className="text-center py-16">
+              <Loader2 className="h-16 w-16 text-muted-foreground mx-auto mb-4 animate-spin" />
+              <h3 className="text-xl font-semibold mb-2">Loading Services</h3>
+              <p className="text-muted-foreground">
+                Please wait while we fetch our latest services...
+              </p>
+            </div>
+          ) : error ? (
+            <div className="text-center py-16">
+              <AlertTriangle className="h-16 w-16 text-destructive mx-auto mb-4" />
+              <h3 className="text-xl font-semibold mb-2">Failed to Load Services</h3>
+              <p className="text-muted-foreground mb-6">
+                There was an error loading our services. Please try again later.
+              </p>
+              <Button 
+                onClick={() => refetch()}
+                data-testid="button-retry-services"
+              >
+                Try Again
+              </Button>
+            </div>
+          ) : filteredServices.length > 0 ? (
             <>
               <div className="flex justify-between items-center mb-8">
                 <h2 className="text-2xl font-semibold">
@@ -244,7 +213,12 @@ export default function Services() {
               
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredServices.map((service, index) => (
-                  <ServiceCard key={index} {...service} />
+                  <ServiceCard 
+                    key={service.id} 
+                    service={service} 
+                    popular={service.popular || false}
+                    icon={getIconComponent(service.icon)}
+                  />
                 ))}
               </div>
             </>

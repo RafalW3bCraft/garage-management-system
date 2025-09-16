@@ -89,17 +89,23 @@ export function Navigation() {
                     </div>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem data-testid="menu-profile">
-                    <User className="mr-2 h-4 w-4" />
-                    <span>Profile</span>
+                  <DropdownMenuItem asChild data-testid="menu-profile">
+                    <Link href="/appointments">
+                      <User className="mr-2 h-4 w-4" />
+                      <span>My Appointments</span>
+                    </Link>
                   </DropdownMenuItem>
-                  <DropdownMenuItem data-testid="menu-my-cars">
-                    <Car className="mr-2 h-4 w-4" />
-                    <span>My Cars</span>
+                  <DropdownMenuItem asChild data-testid="menu-my-cars">
+                    <Link href="/cars">
+                      <Car className="mr-2 h-4 w-4" />
+                      <span>Browse Cars</span>
+                    </Link>
                   </DropdownMenuItem>
-                  <DropdownMenuItem data-testid="menu-settings">
-                    <Settings className="mr-2 h-4 w-4" />
-                    <span>Settings</span>
+                  <DropdownMenuItem asChild data-testid="menu-services">
+                    <Link href="/services">
+                      <Settings className="mr-2 h-4 w-4" />
+                      <span>Book Service</span>
+                    </Link>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout} data-testid="menu-logout">

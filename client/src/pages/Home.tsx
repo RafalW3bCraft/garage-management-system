@@ -14,36 +14,34 @@ import {
   Star,
   CheckCircle
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
+import type { Service } from "@shared/schema";
 
 export default function Home() {
-  // Mock data - todo: remove mock functionality
-  const featuredServices = [
-    {
-      title: "Oil Change",
-      description: "Complete engine oil and filter replacement",
-      price: 2500,
-      duration: "30 mins",
-      features: ["Engine oil replacement", "Oil filter change", "Free inspection", "Digital report"],
-      icon: <Wrench className="h-6 w-6" />
-    },
-    {
-      title: "Complete Service",
-      description: "Comprehensive vehicle maintenance",
-      price: 8500,
-      duration: "3 hours",
-      features: ["Full inspection", "Oil change", "Brake check", "AC service", "Washing"],
-      popular: true,
-      icon: <Car className="h-6 w-6" />
-    },
-    {
-      title: "AC Service",
-      description: "Air conditioning system maintenance",
-      price: 3500,
-      duration: "1 hour",
-      features: ["Filter replacement", "Gas refill", "Vent cleaning", "Performance check"],
-      icon: <Zap className="h-6 w-6" />
-    }
-  ];
+  // Fetch services from API
+  const { data: services = [], isLoading: servicesLoading, error: servicesError } = useQuery<Service[]>({
+    queryKey: ["/api/services"],
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+
+  // Get featured services (first 3 services)
+  const featuredServices = services.slice(0, 3).map(service => {
+    const getServiceIcon = () => {
+      switch (service.category) {
+        case "maintenance": return <Wrench className="h-6 w-6" />;
+        case "ac": return <Zap className="h-6 w-6" />;
+        case "electrical": return <Zap className="h-6 w-6" />;
+        default: return <Car className="h-6 w-6" />;
+      }
+    };
+    
+    return {
+      service,
+      icon: getServiceIcon(),
+      popular: service.title.toLowerCase().includes("complete") || service.title.toLowerCase().includes("service")
+    };
+  });
 
   const testimonials = [
     {
@@ -115,13 +113,45 @@ export default function Home() {
             </p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-            {featuredServices.map((service, index) => (
-              <ServiceCard key={index} {...service} />
-            ))}
+            {servicesLoading ? (
+              // Loading state
+              [...Array(3)].map((_, index) => (
+                <Card key={index} className="animate-pulse">
+                  <div className="h-48 bg-muted rounded-t-lg"></div>
+                  <div className="p-6 space-y-4">
+                    <div className="h-4 bg-muted rounded"></div>
+                    <div className="h-4 bg-muted rounded w-3/4"></div>
+                    <div className="h-4 bg-muted rounded w-1/2"></div>
+                  </div>
+                </Card>
+              ))
+            ) : servicesError ? (
+              // Error state
+              <div className="col-span-3 text-center py-8">
+                <p className="text-muted-foreground">Unable to load services. Please try again later.</p>
+              </div>
+            ) : featuredServices.length > 0 ? (
+              // Services loaded successfully
+              featuredServices.map((item, index) => (
+                <ServiceCard 
+                  key={item.service.id} 
+                  service={item.service} 
+                  popular={item.popular} 
+                  icon={item.icon} 
+                />
+              ))
+            ) : (
+              // No services available
+              <div className="col-span-3 text-center py-8">
+                <p className="text-muted-foreground">No services available at the moment.</p>
+              </div>
+            )}
           </div>
           <div className="text-center">
-            <Button size="lg" data-testid="button-view-all-services">
-              View All Services
+            <Button size="lg" asChild>
+              <Link href="/services" data-testid="link-view-all-services">
+                View All Services
+              </Link>
             </Button>
           </div>
         </div>
@@ -211,16 +241,19 @@ export default function Home() {
             <Button 
               size="lg" 
               variant="secondary"
-              data-testid="button-book-now-cta"
+              asChild
             >
-              <Calendar className="mr-2 h-5 w-5" />
-              Book Service Now
+              <Link href="/services" data-testid="link-book-now-cta">
+                <Calendar className="mr-2 h-5 w-5" />
+                Book Service Now
+              </Link>
             </Button>
             <Button 
               size="lg" 
               variant="outline" 
               className="border-primary-foreground text-primary-foreground hover:bg-primary-foreground hover:text-primary"
               data-testid="button-call-us-cta"
+              onClick={() => window.open('tel:+919876543210', '_self')}
             >
               Call Us: +91-98765-43210
             </Button>

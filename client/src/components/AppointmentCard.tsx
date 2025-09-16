@@ -2,6 +2,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Calendar, Clock, Car, MapPin, User } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { RescheduleDialog } from "@/components/RescheduleDialog";
 
 interface AppointmentCardProps {
   id: string;
@@ -12,6 +16,7 @@ interface AppointmentCardProps {
   mechanicName: string;
   estimatedDuration: string;
   location: string;
+  locationId: string;
   price?: number;
 }
 
@@ -24,8 +29,36 @@ export function AppointmentCard({
   mechanicName,
   estimatedDuration,
   location,
+  locationId,
   price
 }: AppointmentCardProps) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  const updateStatusMutation = useMutation({
+    mutationFn: async (newStatus: string) => {
+      return apiRequest("PATCH", `/api/appointments/${id}/status`, { status: newStatus });
+    },
+    onSuccess: (data, newStatus) => {
+      toast({
+        title: "Appointment Updated",
+        description: `Appointment ${newStatus} successfully.`,
+      });
+      // Invalidate appointment queries to refresh the list
+      queryClient.invalidateQueries({ 
+        predicate: (query) => 
+          typeof query.queryKey?.[0] === 'string' && 
+          (query.queryKey[0] as string).startsWith('/api/appointments')
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to update appointment. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
   
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -46,34 +79,46 @@ export function AppointmentCard({
             <Button 
               variant="outline" 
               size="sm"
-              onClick={() => console.log(`Cancelling appointment ${id}`)}
+              onClick={() => updateStatusMutation.mutate("cancelled")}
+              disabled={updateStatusMutation.isPending}
               data-testid={`button-cancel-${id}`}
             >
-              Cancel
+              {updateStatusMutation.isPending ? "Cancelling..." : "Cancel"}
             </Button>
             <Button 
               size="sm"
-              onClick={() => console.log(`Confirming appointment ${id}`)}
+              onClick={() => updateStatusMutation.mutate("confirmed")}
+              disabled={updateStatusMutation.isPending}
               data-testid={`button-confirm-${id}`}
             >
-              Confirm
+              {updateStatusMutation.isPending ? "Confirming..." : "Confirm"}
             </Button>
           </div>
         );
       case "confirmed":
         return (
           <div className="flex gap-2">
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={() => console.log(`Rescheduling appointment ${id}`)}
-              data-testid={`button-reschedule-${id}`}
+            <RescheduleDialog 
+              appointmentId={id}
+              currentDateTime={dateTime}
+              currentLocationId={locationId}
             >
-              Reschedule
-            </Button>
+              <Button 
+                variant="outline" 
+                size="sm"
+                data-testid={`button-reschedule-${id}`}
+              >
+                Reschedule
+              </Button>
+            </RescheduleDialog>
             <Button 
               size="sm"
-              onClick={() => console.log(`Viewing details for appointment ${id}`)}
+              onClick={() => {
+                toast({
+                  title: "Appointment Details",
+                  description: `${serviceType} for ${carDetails} on ${dateTime}`,
+                });
+              }}
               data-testid={`button-details-${id}`}
             >
               View Details
@@ -84,7 +129,12 @@ export function AppointmentCard({
         return (
           <Button 
             size="sm"
-            onClick={() => console.log(`Leaving feedback for appointment ${id}`)}
+            onClick={() => {
+              toast({
+                title: "Leave Feedback",
+                description: "Feedback system coming soon. We value your input!",
+              });
+            }}
             data-testid={`button-feedback-${id}`}
           >
             Leave Feedback
@@ -95,7 +145,12 @@ export function AppointmentCard({
           <Button 
             variant="outline" 
             size="sm"
-            onClick={() => console.log(`Viewing appointment ${id}`)}
+            onClick={() => {
+              toast({
+                title: "Appointment Details",
+                description: `${serviceType} for ${carDetails} scheduled for ${dateTime}`,
+              });
+            }}
             data-testid={`button-view-${id}`}
           >
             View

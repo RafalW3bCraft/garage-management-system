@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { CarCard } from "@/components/CarCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, SlidersHorizontal } from "lucide-react";
+import { Search, SlidersHorizontal, Loader2 } from "lucide-react";
+import type { Car } from "@shared/schema";
 
 export default function Cars() {
   const [searchTerm, setSearchTerm] = useState("");
@@ -19,90 +21,15 @@ export default function Cars() {
   const [priceRange, setPriceRange] = useState("all");
   const [fuelType, setFuelType] = useState("all");
 
-  // Mock data - todo: remove mock functionality
-  const carsForSale = [
-    {
-      id: "car-1",
-      make: "Maruti Suzuki",
-      model: "Swift",
-      year: 2020,
-      price: 550000,
-      mileage: 45000,
-      fuelType: "Petrol",
-      location: "Mumbai, Maharashtra",
-      image: "https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?w=400&h=300&fit=crop",
-      condition: "Excellent" as const
-    },
-    {
-      id: "car-2",
-      make: "Hyundai",
-      model: "i20",
-      year: 2019,
-      price: 480000,
-      mileage: 52000,
-      fuelType: "Diesel",
-      location: "Delhi, NCR",
-      image: "https://images.unsplash.com/photo-1549399736-bf80deef1d17?w=400&h=300&fit=crop",
-      condition: "Good" as const
-    },
-    {
-      id: "car-3",
-      make: "Tata",
-      model: "Nexon",
-      year: 2021,
-      price: 850000,
-      mileage: 28000,
-      fuelType: "Electric",
-      location: "Bangalore, Karnataka",
-      image: "https://images.unsplash.com/photo-1572927651086-5f4bc5bd3ca6?w=400&h=300&fit=crop",
-      condition: "Excellent" as const
-    },
-    {
-      id: "car-4",
-      make: "Honda",
-      model: "City",
-      year: 2018,
-      price: 720000,
-      mileage: 65000,
-      fuelType: "Petrol",
-      location: "Pune, Maharashtra",
-      image: "https://images.unsplash.com/photo-1553440569-bcc63803a83d?w=400&h=300&fit=crop",
-      condition: "Good" as const
-    }
-  ];
+  // Fetch cars data from API
+  const { data: allCars, isLoading, isError, error, refetch } = useQuery<Car[]>({
+    queryKey: ["/api/cars"],
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: 3,
+  });
 
-  const auctionCars = [
-    {
-      id: "auction-1",
-      make: "Mahindra",
-      model: "XUV500",
-      year: 2017,
-      price: 350000,
-      currentBid: 320000,
-      mileage: 78000,
-      fuelType: "Diesel",
-      location: "Chennai, Tamil Nadu",
-      image: "https://images.unsplash.com/photo-1593941707882-a5bac6861d75?w=400&h=300&fit=crop",
-      condition: "Fair" as const,
-      isAuction: true,
-      auctionEndTime: "2 days"
-    },
-    {
-      id: "auction-2",
-      make: "Ford",
-      model: "EcoSport",
-      year: 2019,
-      price: 450000,
-      currentBid: 415000,
-      mileage: 42000,
-      fuelType: "Petrol",
-      location: "Kolkata, West Bengal",
-      image: "https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?w=400&h=300&fit=crop",
-      condition: "Good" as const,
-      isAuction: true,
-      auctionEndTime: "5 hours"
-    }
-  ];
+  const carsForSale = allCars?.filter(car => !car.isAuction) || [];
+  const auctionCars = allCars?.filter(car => car.isAuction) || [];
 
   const brands = [
     { value: "all", label: "All Brands" },
@@ -130,7 +57,7 @@ export default function Cars() {
     { value: "hybrid", label: "Hybrid" }
   ];
 
-  const filterCars = (cars: typeof carsForSale) => {
+  const filterCars = (cars: Car[]) => {
     return cars.filter(car => {
       const matchesSearch = 
         car.make.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -153,7 +80,7 @@ export default function Cars() {
   };
 
   const filteredCarsForSale = filterCars(carsForSale);
-  const filteredAuctionCars = filterCars(auctionCars as any);
+  const filteredAuctionCars = filterCars(auctionCars);
 
   return (
     <div className="min-h-screen bg-background">
@@ -267,10 +194,37 @@ export default function Cars() {
             </TabsList>
 
             <TabsContent value="for-sale">
-              {filteredCarsForSale.length > 0 ? (
+              {isLoading ? (
+                <div className="flex justify-center py-16">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : isError ? (
+                <div className="text-center py-16">
+                  <h3 className="text-xl font-semibold mb-2">Failed to load cars</h3>
+                  <p className="text-muted-foreground mb-6">
+                    {error?.message || "Something went wrong. Please try again."}
+                  </p>
+                  <Button onClick={() => refetch()} data-testid="button-retry-cars">
+                    Try Again
+                  </Button>
+                </div>
+              ) : filteredCarsForSale.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   {filteredCarsForSale.map((car) => (
-                    <CarCard key={car.id} {...car} />
+                    <CarCard 
+                      key={car.id} 
+                      id={car.id}
+                      make={car.make}
+                      model={car.model}
+                      year={car.year}
+                      price={car.price}
+                      mileage={car.mileage}
+                      fuelType={car.fuelType}
+                      location={car.location}
+                      image={car.image}
+                      condition={car.condition as "Excellent" | "Good" | "Fair"}
+                      isAuction={false}
+                    />
                   ))}
                 </div>
               ) : (
@@ -296,11 +250,53 @@ export default function Cars() {
             </TabsContent>
 
             <TabsContent value="auction">
-              {filteredAuctionCars.length > 0 ? (
+              {isLoading ? (
+                <div className="flex justify-center py-16">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : isError ? (
+                <div className="text-center py-16">
+                  <h3 className="text-xl font-semibold mb-2">Failed to load auction cars</h3>
+                  <p className="text-muted-foreground mb-6">
+                    {error?.message || "Something went wrong. Please try again."}
+                  </p>
+                  <Button onClick={() => refetch()} data-testid="button-retry-auctions">
+                    Try Again
+                  </Button>
+                </div>
+              ) : filteredAuctionCars.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                  {filteredAuctionCars.map((car) => (
-                    <CarCard key={car.id} {...car} />
-                  ))}
+                  {filteredAuctionCars.map((car) => {
+                    const formatAuctionEndTime = (endTime: string | Date | null) => {
+                      if (!endTime) return "Soon";
+                      const date = new Date(endTime);
+                      const now = new Date();
+                      const diffMs = date.getTime() - now.getTime();
+                      const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+                      if (diffDays > 0) return `${diffDays} days`;
+                      const diffHours = Math.ceil(diffMs / (1000 * 60 * 60));
+                      return diffHours > 0 ? `${diffHours} hours` : "Soon";
+                    };
+                    
+                    return (
+                      <CarCard 
+                        key={car.id}
+                        id={car.id}
+                        make={car.make}
+                        model={car.model}
+                        year={car.year}
+                        price={car.price}
+                        mileage={car.mileage}
+                        fuelType={car.fuelType}
+                        location={car.location}
+                        image={car.image}
+                        condition={car.condition as "Excellent" | "Good" | "Fair"}
+                        isAuction={true}
+                        currentBid={car.currentBid || undefined}
+                        auctionEndTime={formatAuctionEndTime(car.auctionEndTime)}
+                      />
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="text-center py-16">

@@ -1,6 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { Calendar, Shield, Wrench } from "lucide-react";
-import heroImage from "@assets/generated_images/Professional_automotive_garage_interior_91705c91.png";
+
+// Using a professional automotive garage image from Unsplash
+const heroImage = "https://images.unsplash.com/photo-1621939514649-280e2198acc0?w=1920&h=600&fit=crop&crop=center";
 
 export function HeroSection() {
   return (

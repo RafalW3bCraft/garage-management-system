@@ -2,7 +2,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Calendar, MapPin, Fuel, Gauge, IndianRupee, Heart } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useToast } from "@/hooks/use-toast";
+import { BidDialog } from "./BidDialog";
+import type { Car } from "@shared/schema";
 
 interface CarCardProps {
   id: string;
@@ -35,19 +38,54 @@ export function CarCard({
   currentBid,
   auctionEndTime
 }: CarCardProps) {
+  const { toast } = useToast();
   const [isFavorited, setIsFavorited] = useState(false);
+  const [bidDialogOpen, setBidDialogOpen] = useState(false);
+
+  // Load favorites from localStorage on mount
+  useEffect(() => {
+    const favorites = JSON.parse(localStorage.getItem('car-favorites') || '[]');
+    setIsFavorited(favorites.includes(id));
+  }, [id]);
 
   const handleAction = () => {
     if (isAuction) {
-      console.log(`Placing bid on ${make} ${model}`);
+      setBidDialogOpen(true);
     } else {
-      console.log(`Viewing details for ${make} ${model}`);
+      toast({
+        title: `${make} ${model} (${year})`,
+        description: `Price: ₹${price.toLocaleString('en-IN')} • Condition: ${condition} • Mileage: ${mileage.toLocaleString()} km • Fuel: ${fuelType} • Location: ${location}`,
+      });
     }
   };
 
   const handleFavorite = () => {
+    const favorites = JSON.parse(localStorage.getItem('car-favorites') || '[]');
+    let newFavorites;
+    
+    if (isFavorited) {
+      newFavorites = favorites.filter((fav: string) => fav !== id);
+      toast({
+        title: "Removed from Favorites",
+        description: `${make} ${model} removed from your favorites.`,
+      });
+    } else {
+      newFavorites = [...favorites, id];
+      toast({
+        title: "Added to Favorites",
+        description: `${make} ${model} added to your favorites.`,
+      });
+    }
+    
+    localStorage.setItem('car-favorites', JSON.stringify(newFavorites));
     setIsFavorited(!isFavorited);
-    console.log(`${isFavorited ? 'Removed from' : 'Added to'} favorites: ${make} ${model}`);
+  };
+
+  const handleContactSeller = () => {
+    toast({
+      title: "Contact Seller",
+      description: `Contact functionality coming soon for ${make} ${model}. You can call us at +91-9876543210.`,
+    });
   };
 
   const getConditionColor = (condition: string) => {
@@ -140,13 +178,38 @@ export function CarCard({
         {!isAuction && (
           <Button 
             variant="outline" 
-            onClick={() => console.log(`Contacting seller for ${make} ${model}`)}
+            onClick={handleContactSeller}
             data-testid={`button-contact-${id}`}
           >
             Contact
           </Button>
         )}
       </CardFooter>
+
+      {/* Bid Dialog for Auction Cars */}
+      {isAuction && (
+        <BidDialog
+          car={{
+            id,
+            make,
+            model,
+            year,
+            price,
+            mileage,
+            fuelType,
+            location,
+            image,
+            condition,
+            isAuction,
+            currentBid: currentBid || null,
+            auctionEndTime: auctionEndTime ? new Date(auctionEndTime) : null,
+            description: "",
+            createdAt: new Date()
+          } as Car}
+          open={bidDialogOpen}
+          onOpenChange={setBidDialogOpen}
+        />
+      )}
     </Card>
   );
 }

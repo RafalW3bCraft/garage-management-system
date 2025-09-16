@@ -83,6 +83,15 @@ export const cars = pgTable("cars", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// Car auction bids
+export const bids = pgTable("bids", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carId: varchar("car_id").notNull().references(() => cars.id),
+  bidderEmail: text("bidder_email").notNull(), // Match email with customers/users
+  bidAmount: integer("bid_amount").notNull(),
+  bidTime: timestamp("bid_time").defaultNow().notNull(),
+});
+
 // Contact form submissions
 export const contacts = pgTable("contacts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -155,6 +164,31 @@ export const insertLocationSchema = createInsertSchema(locations).omit({
   id: true,
 });
 
+export const insertBidSchema = createInsertSchema(bids).omit({
+  id: true,
+  bidTime: true,
+});
+
+// Place bid schema with validation
+export const placeBidSchema = z.object({
+  carId: z.string().uuid({ message: "Car ID must be a valid UUID" }),
+  bidAmount: z.number()
+    .int({ message: "Bid amount must be a whole number" })
+    .positive({ message: "Bid amount must be positive" })
+    .min(1000, { message: "Minimum bid is ₹1,000" })
+});
+
+// Reschedule appointment schema with validation
+export const rescheduleAppointmentSchema = z.object({
+  dateTime: z.string()
+    .datetime({ message: "Invalid datetime format. Use ISO 8601 format (YYYY-MM-DDTHH:MM:SSZ)" })
+    .refine((dateStr) => new Date(dateStr) > new Date(), {
+      message: "Appointment date must be in the future"
+    }),
+  locationId: z.string()
+    .uuid({ message: "Location ID must be a valid UUID" })
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -176,3 +210,6 @@ export type InsertContact = z.infer<typeof insertContactSchema>;
 
 export type Location = typeof locations.$inferSelect;
 export type InsertLocation = z.infer<typeof insertLocationSchema>;
+
+export type Bid = typeof bids.$inferSelect;
+export type InsertBid = z.infer<typeof insertBidSchema>;

@@ -1,30 +1,21 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { BookingDialog } from "@/components/BookingDialog";
 import { Clock, IndianRupee } from "lucide-react";
+import type { Service } from "@shared/schema";
 
 interface ServiceCardProps {
-  title: string;
-  description: string;
-  price: number;
-  duration: string;
-  features: string[];
+  service: Service;
   popular?: boolean;
   icon: React.ReactNode;
 }
 
 export function ServiceCard({ 
-  title, 
-  description, 
-  price, 
-  duration, 
-  features, 
+  service,
   popular, 
   icon 
 }: ServiceCardProps) {
-  const handleBookService = () => {
-    console.log(`Booking ${title} service`);
-  };
 
   return (
     <Card className={`relative h-full flex flex-col ${popular ? 'border-accent' : ''}`}>
@@ -40,8 +31,8 @@ export function ServiceCard({
             {icon}
           </div>
           <div>
-            <CardTitle className="text-lg">{title}</CardTitle>
-            <CardDescription>{description}</CardDescription>
+            <CardTitle className="text-lg">{service.title}</CardTitle>
+            <CardDescription>{service.description}</CardDescription>
           </div>
         </div>
       </CardHeader>
@@ -51,18 +42,18 @@ export function ServiceCard({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1 text-2xl font-bold">
               <IndianRupee className="h-6 w-6" />
-              {price.toLocaleString('en-IN')}
+              {service.price.toLocaleString('en-IN')}
             </div>
             <div className="flex items-center gap-1 text-sm text-muted-foreground">
               <Clock className="h-4 w-4" />
-              {duration}
+              {service.duration}
             </div>
           </div>
 
           <div className="space-y-2">
             <h4 className="font-medium text-sm">Includes:</h4>
             <ul className="text-sm space-y-1">
-              {features.map((feature, index) => (
+              {service.features.map((feature: string, index: number) => (
                 <li key={index} className="flex items-center gap-2">
                   <div className="h-1.5 w-1.5 bg-accent rounded-full" />
                   {feature}
@@ -74,14 +65,15 @@ export function ServiceCard({
       </CardContent>
 
       <CardFooter>
-        <Button 
-          className="w-full" 
-          onClick={handleBookService}
-          variant={popular ? "default" : "outline"}
-          data-testid={`button-book-${title.toLowerCase().replace(/\s+/g, '-')}`}
-        >
-          Book Now
-        </Button>
+        <BookingDialog service={service}>
+          <Button 
+            className="w-full" 
+            variant={popular ? "default" : "outline"}
+            data-testid={`button-book-${service.title.toLowerCase().replace(/\s+/g, '-')}`}
+          >
+            Book Now
+          </Button>
+        </BookingDialog>
       </CardFooter>
     </Card>
   );

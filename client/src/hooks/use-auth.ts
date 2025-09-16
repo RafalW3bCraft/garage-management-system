@@ -42,6 +42,26 @@ export function useAuth() {
     retry: false,
   });
 
+  // Get available auth providers
+  const { data: providers } = useQuery<string[]>({
+    queryKey: ["/api/auth/providers"],
+    queryFn: async () => {
+      try {
+        const response = await fetch("/api/auth/providers", {
+          credentials: "include",
+        });
+        if (response.ok) {
+          const data = await response.json();
+          return data.providers;
+        }
+        return ["email"]; // fallback to email only
+      } catch {
+        return ["email"];
+      }
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes - providers don't change often
+  });
+
   // Login mutation
   const loginMutation = useMutation({
     mutationFn: async (data: LoginData): Promise<AuthResponse> => {
@@ -93,6 +113,8 @@ export function useAuth() {
     user,
     isLoading,
     isAuthenticated: !!user,
+    providers: providers || ["email"],
+    isGoogleEnabled: providers?.includes("google") || false,
     login,
     register,
     logout,

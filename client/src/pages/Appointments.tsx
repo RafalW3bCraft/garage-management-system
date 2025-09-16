@@ -1,83 +1,26 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "@/hooks/use-auth";
+import { Link } from "wouter";
 import { AppointmentCard } from "@/components/AppointmentCard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Calendar, Clock, Plus } from "lucide-react";
+import { Calendar, Clock, Plus, Loader2 } from "lucide-react";
+import type { Appointment } from "@shared/schema";
 
 export default function Appointments() {
   const [activeTab, setActiveTab] = useState("upcoming");
+  const { user, isLoading: authLoading } = useAuth();
 
-  // Mock data - todo: remove mock functionality
-  const appointments = [
-    {
-      id: "apt-1",
-      serviceType: "Oil Change Service",
-      carDetails: "Maruti Swift 2020 (MH-01-AB-1234)",
-      dateTime: "Dec 20, 2024 at 10:00 AM",
-      status: "confirmed" as const,
-      mechanicName: "Rajesh Kumar",
-      estimatedDuration: "30 minutes",
-      location: "RonakMotorGarage, Mumbai",
-      price: 2500
-    },
-    {
-      id: "apt-2",
-      serviceType: "Complete Vehicle Service",
-      carDetails: "Hyundai Creta 2019 (DL-08-CD-5678)",
-      dateTime: "Dec 22, 2024 at 2:00 PM",
-      status: "pending" as const,
-      mechanicName: "Suresh Sharma",
-      estimatedDuration: "3 hours",
-      location: "RonakMotorGarage, Delhi",
-      price: 8500
-    },
-    {
-      id: "apt-3",
-      serviceType: "AC Service",
-      carDetails: "Tata Nexon 2021 (KA-03-EF-9012)",
-      dateTime: "Dec 18, 2024 at 11:30 AM",
-      status: "completed" as const,
-      mechanicName: "Anil Patel",
-      estimatedDuration: "1 hour",
-      location: "RonakMotorGarage, Bangalore",
-      price: 3500
-    },
-    {
-      id: "apt-4",
-      serviceType: "Brake Service",
-      carDetails: "Honda City 2018 (MH-12-GH-3456)",
-      dateTime: "Dec 25, 2024 at 9:00 AM",
-      status: "confirmed" as const,
-      mechanicName: "Vikram Singh",
-      estimatedDuration: "1.5 hours",
-      location: "RonakMotorGarage, Pune",
-      price: 4500
-    },
-    {
-      id: "apt-5",
-      serviceType: "Engine Diagnostics",
-      carDetails: "Ford EcoSport 2019 (WB-04-JK-7890)",
-      dateTime: "Nov 28, 2024 at 3:00 PM",
-      status: "completed" as const,
-      mechanicName: "Ramesh Gupta",
-      estimatedDuration: "1 hour",
-      location: "RonakMotorGarage, Kolkata",
-      price: 1500
-    },
-    {
-      id: "apt-6",
-      serviceType: "Battery Replacement",
-      carDetails: "Mahindra XUV500 2017 (TN-09-LM-2345)",
-      dateTime: "Dec 15, 2024 at 4:00 PM",
-      status: "cancelled" as const,
-      mechanicName: "Karthik Raj",
-      estimatedDuration: "30 minutes",
-      location: "RonakMotorGarage, Chennai",
-      price: 5500
-    }
-  ];
+  // Fetch user's appointments
+  const { data: appointments = [], isLoading, error } = useQuery<Appointment[]>({
+    queryKey: ["/api/appointments/customer", user?.id],
+    enabled: !!user?.id, // Only fetch when user is authenticated
+    retry: 3,
+    staleTime: 30 * 1000 // 30 seconds
+  });
 
   const upcomingAppointments = appointments.filter(apt => 
     apt.status === "pending" || apt.status === "confirmed"
@@ -98,9 +41,36 @@ export default function Appointments() {
 
   const stats = getStatusStats();
 
-  const handleBookNewAppointment = () => {
-    console.log("Booking new appointment");
-  };
+  // Show loading state while checking authentication
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex items-center gap-2">
+          <Loader2 className="h-6 w-6 animate-spin" />
+          <span>Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Show message for unauthenticated users
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-background">
+        <section className="py-16 bg-muted/50">
+          <div className="container mx-auto px-4 text-center">
+            <h1 className="text-4xl font-bold mb-4">My Appointments</h1>
+            <p className="text-xl text-muted-foreground mb-8">
+              Please log in to view your appointments
+            </p>
+            <Button size="lg">
+              Login to Continue
+            </Button>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -116,11 +86,13 @@ export default function Appointments() {
             </div>
             <Button 
               size="lg" 
-              onClick={handleBookNewAppointment}
+              asChild
               data-testid="button-book-new-appointment"
             >
-              <Plus className="mr-2 h-5 w-5" />
-              Book New Service
+              <Link href="/services">
+                <Plus className="mr-2 h-5 w-5" />
+                Book New Service
+              </Link>
             </Button>
           </div>
         </div>
@@ -156,7 +128,12 @@ export default function Appointments() {
               <CardHeader className="pb-2">
                 <CardDescription>This Month</CardDescription>
                 <CardTitle className="text-2xl">
-                  {appointments.filter(apt => apt.dateTime.includes("Dec")).length}
+                  {appointments.filter(apt => {
+                    const now = new Date();
+                    const appointmentDate = new Date(apt.dateTime);
+                    return appointmentDate.getMonth() === now.getMonth() && 
+                           appointmentDate.getFullYear() === now.getFullYear();
+                  }).length}
                 </CardTitle>
               </CardHeader>
             </Card>
@@ -196,7 +173,18 @@ export default function Appointments() {
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {upcomingAppointments.map((appointment) => (
-                      <AppointmentCard key={appointment.id} {...appointment} />
+                      <AppointmentCard 
+                        key={appointment.id}
+                        id={appointment.id}
+                        serviceType={`Service ${appointment.serviceId}`}
+                        carDetails={appointment.carDetails}
+                        dateTime={new Date(appointment.dateTime).toLocaleString()}
+                        status={appointment.status as "pending" | "confirmed" | "in-progress" | "completed" | "cancelled"}
+                        mechanicName={appointment.mechanicName || "TBD"}
+                        estimatedDuration={appointment.estimatedDuration}
+                        location={`Location ${appointment.locationId}`}
+                        price={appointment.price || undefined}
+                      />
                     ))}
                   </div>
                 </div>
@@ -208,11 +196,13 @@ export default function Appointments() {
                     Book a service appointment to keep your vehicle in top condition
                   </p>
                   <Button 
-                    onClick={handleBookNewAppointment}
+                    asChild
                     data-testid="button-book-first-appointment"
                   >
-                    <Plus className="mr-2 h-4 w-4" />
-                    Book Your First Service
+                    <Link href="/services">
+                      <Plus className="mr-2 h-4 w-4" />
+                      Book Your First Service
+                    </Link>
                   </Button>
                 </div>
               )}
@@ -237,7 +227,18 @@ export default function Appointments() {
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {pastAppointments.map((appointment) => (
-                      <AppointmentCard key={appointment.id} {...appointment} />
+                      <AppointmentCard 
+                        key={appointment.id}
+                        id={appointment.id}
+                        serviceType={`Service ${appointment.serviceId}`}
+                        carDetails={appointment.carDetails}
+                        dateTime={new Date(appointment.dateTime).toLocaleString()}
+                        status={appointment.status as "pending" | "confirmed" | "in-progress" | "completed" | "cancelled"}
+                        mechanicName={appointment.mechanicName || "TBD"}
+                        estimatedDuration={appointment.estimatedDuration}
+                        location={`Location ${appointment.locationId}`}
+                        price={appointment.price || undefined}
+                      />
                     ))}
                   </div>
                 </div>
@@ -266,44 +267,47 @@ export default function Appointments() {
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto">
-            <Card className="text-center p-6 hover-elevate cursor-pointer" 
-                  onClick={() => console.log("Emergency service")}>
-              <CardHeader>
-                <div className="h-12 w-12 bg-red-100 dark:bg-red-900 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Calendar className="h-6 w-6 text-red-600" />
-                </div>
-                <CardTitle>Emergency Service</CardTitle>
-                <CardDescription>
-                  Need urgent repairs? Book emergency service
-                </CardDescription>
-              </CardHeader>
-            </Card>
+            <Link href="/services" data-testid="link-emergency-service">
+              <Card className="text-center p-6 hover-elevate cursor-pointer">
+                <CardHeader>
+                  <div className="h-12 w-12 bg-red-100 dark:bg-red-900 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Calendar className="h-6 w-6 text-red-600" />
+                  </div>
+                  <CardTitle>Emergency Service</CardTitle>
+                  <CardDescription>
+                    Need urgent repairs? Book emergency service
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            </Link>
 
-            <Card className="text-center p-6 hover-elevate cursor-pointer"
-                  onClick={() => console.log("Regular maintenance")}>
-              <CardHeader>
-                <div className="h-12 w-12 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Clock className="h-6 w-6 text-blue-600" />
-                </div>
-                <CardTitle>Regular Maintenance</CardTitle>
-                <CardDescription>
-                  Schedule routine maintenance for your vehicle
-                </CardDescription>
-              </CardHeader>
-            </Card>
+            <Link href="/services" data-testid="link-regular-maintenance">
+              <Card className="text-center p-6 hover-elevate cursor-pointer">
+                <CardHeader>
+                  <div className="h-12 w-12 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Clock className="h-6 w-6 text-blue-600" />
+                  </div>
+                  <CardTitle>Regular Maintenance</CardTitle>
+                  <CardDescription>
+                    Schedule routine maintenance for your vehicle
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            </Link>
 
-            <Card className="text-center p-6 hover-elevate cursor-pointer"
-                  onClick={() => console.log("Service reminder")}>
-              <CardHeader>
-                <div className="h-12 w-12 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Plus className="h-6 w-6 text-green-600" />
-                </div>
-                <CardTitle>Service Reminder</CardTitle>
-                <CardDescription>
-                  Set up automatic service reminders
-                </CardDescription>
-              </CardHeader>
-            </Card>
+            <Link href="/services" data-testid="link-service-reminder">
+              <Card className="text-center p-6 hover-elevate cursor-pointer">
+                <CardHeader>
+                  <div className="h-12 w-12 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Plus className="h-6 w-6 text-green-600" />
+                  </div>
+                  <CardTitle>Service Reminder</CardTitle>
+                  <CardDescription>
+                    Set up automatic service reminders
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            </Link>
           </div>
         </div>
       </section>
