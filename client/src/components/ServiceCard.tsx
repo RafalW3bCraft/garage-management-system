@@ -2,7 +2,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { BookingDialog } from "@/components/BookingDialog";
-import { Clock, IndianRupee } from "lucide-react";
+import { Clock, IndianRupee, Eye } from "lucide-react";
+import { Link } from "wouter";
 import type { Service } from "@shared/schema";
 
 interface ServiceCardProps {
@@ -64,11 +65,22 @@ export function ServiceCard({
         </div>
       </CardContent>
 
-      <CardFooter>
+      <CardFooter className="flex gap-2">
+        <Link href={`/services/${service.id}`} className="flex-1">
+          <Button 
+            variant="outline"
+            className="w-full"
+            data-testid={`button-view-details-${service.title.toLowerCase().replace(/\s+/g, '-')}`}
+          >
+            <Eye className="h-4 w-4 mr-2" />
+            View Details
+          </Button>
+        </Link>
+        
         <BookingDialog service={service}>
           <Button 
-            className="w-full" 
-            variant={popular ? "default" : "outline"}
+            className="flex-1" 
+            variant={popular ? "default" : "secondary"}
             data-testid={`button-book-${service.title.toLowerCase().replace(/\s+/g, '-')}`}
           >
             Book Now

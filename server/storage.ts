@@ -25,7 +25,7 @@ import {
   bids
 } from "@shared/schema";
 import { getDb } from "./db";
-import { eq, and, desc, asc, gte, lte, ne } from "drizzle-orm";
+import { eq, and, desc, asc, gte, lte, ne, isNull } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
@@ -34,6 +34,8 @@ export interface IStorage {
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByGoogleId(googleId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
+  linkGoogleAccount(userId: string, googleId: string): Promise<User | undefined>;
 
   // Customers
   getCustomer(id: string): Promise<Customer | undefined>;
@@ -103,6 +105,54 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    const db = await getDb();
+    const result = await db.update(users)
+      .set(updates)
+      .where(eq(users.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async linkGoogleAccount(userId: string, googleId: string): Promise<User | undefined> {
+    const db = await getDb();
+    try {
+      // Atomic update with condition to prevent race conditions
+      // Only update if the user exists and googleId is not already set
+      const result = await db.update(users)
+        .set({
+          googleId,
+          provider: "google",
+          emailVerified: true
+        })
+        .where(and(
+          eq(users.id, userId),
+          isNull(users.googleId) // Only link if not already linked
+        ))
+        .returning();
+      
+      if (result.length === 0) {
+        // Either user doesn't exist or already has googleId
+        const existingUser = await this.getUser(userId);
+        if (!existingUser) {
+          throw new Error("User not found");
+        }
+        if (existingUser.googleId) {
+          throw new Error("User already linked to Google account");
+        }
+        throw new Error("Failed to link Google account");
+      }
+      
+      return result[0];
+    } catch (error: any) {
+      // Handle unique constraint violations
+      if (error.code === '23505' && error.constraint?.includes('google')) {
+        throw new Error("This Google account is already linked to another user");
+      }
+      throw error;
+    }
+  }
+
   // Customers
   async getCustomer(id: string): Promise<Customer | undefined> {
     const db = await getDb();
@@ -161,12 +211,33 @@ export class DatabaseStorage implements IStorage {
 
   async createAppointment(appointment: InsertAppointment): Promise<Appointment> {
     const db = await getDb();
+    
+    // Check for appointment conflicts before creating
+    const hasConflict = await this.checkAppointmentConflict(
+      appointment.locationId, 
+      new Date(appointment.dateTime)
+    );
+    
+    if (hasConflict) {
+      throw {
+        status: 409,
+        message: "Appointment time conflicts with existing booking. Please choose a different time."
+      };
+    }
+    
     const result = await db.insert(appointments).values(appointment).returning();
     return result[0];
   }
 
   async updateAppointmentStatus(id: string, status: string): Promise<Appointment | undefined> {
     const db = await getDb();
+    
+    // For "confirmed" status, we need atomic conflict checking to prevent race conditions
+    if (status === "confirmed") {
+      return await this.updateAppointmentStatusWithConflictCheck(id, status);
+    }
+    
+    // For other status changes, proceed normally
     const result = await db.update(appointments)
       .set({ status })
       .where(eq(appointments.id, id))
@@ -174,8 +245,74 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
+  async updateAppointmentStatusWithConflictCheck(id: string, status: string): Promise<Appointment | undefined> {
+    const db = await getDb();
+    
+    // Use a database transaction to ensure atomicity
+    return await db.transaction(async (tx) => {
+      // First, get the current appointment details
+      const currentAppointment = await tx.select()
+        .from(appointments)
+        .where(eq(appointments.id, id))
+        .limit(1);
+      
+      if (!currentAppointment[0]) {
+        throw {
+          status: 404,
+          message: "Appointment not found"
+        };
+      }
+      
+      const appointment = currentAppointment[0];
+      const targetDateTime = new Date(appointment.dateTime);
+      const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
+      const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
+      
+      // Check for conflicts within the transaction (ensuring consistency)
+      const conflictingAppointments = await tx.select()
+        .from(appointments)
+        .where(and(
+          eq(appointments.locationId, appointment.locationId),
+          gte(appointments.dateTime, startWindow),
+          lte(appointments.dateTime, endWindow),
+          eq(appointments.status, "confirmed"),
+          ne(appointments.id, id) // Exclude current appointment
+        ));
+      
+      if (conflictingAppointments.length > 0) {
+        throw {
+          status: 409,
+          message: "Cannot confirm appointment: time conflicts with existing confirmed booking"
+        };
+      }
+      
+      // No conflicts found, safe to update status
+      const result = await tx.update(appointments)
+        .set({ status })
+        .where(eq(appointments.id, id))
+        .returning();
+      
+      return result[0];
+    });
+  }
+
   async rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined> {
     const db = await getDb();
+    
+    // Check for conflicts with the new appointment time (excluding current appointment)
+    const hasConflict = await this.checkAppointmentConflict(
+      locationId, 
+      new Date(dateTime),
+      id  // Exclude current appointment from conflict check
+    );
+    
+    if (hasConflict) {
+      throw {
+        status: 409,
+        message: "Rescheduled time conflicts with existing booking. Please choose a different time."
+      };
+    }
+    
     const result = await db.update(appointments)
       .set({ 
         dateTime: new Date(dateTime),
@@ -536,6 +673,45 @@ export class MemStorage implements IStorage {
     };
     this.users.set(id, newUser);
     return newUser;
+  }
+
+  async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
+    const existingUser = this.users.get(id);
+    if (!existingUser) {
+      return undefined;
+    }
+    
+    const updatedUser: User = { ...existingUser, ...updates };
+    this.users.set(id, updatedUser);
+    return updatedUser;
+  }
+
+  async linkGoogleAccount(userId: string, googleId: string): Promise<User | undefined> {
+    const existingUser = this.users.get(userId);
+    if (!existingUser) {
+      throw new Error("User not found");
+    }
+    
+    if (existingUser.googleId) {
+      throw new Error("User already linked to Google account");
+    }
+    
+    // Check if this googleId is already linked to another user
+    const duplicateUser = Array.from(this.users.values()).find(user => user.googleId === googleId);
+    if (duplicateUser) {
+      throw new Error("This Google account is already linked to another user");
+    }
+    
+    // Atomic update in memory
+    const updatedUser: User = {
+      ...existingUser,
+      googleId,
+      provider: "google",
+      emailVerified: true
+    };
+    
+    this.users.set(userId, updatedUser);
+    return updatedUser;
   }
 
   // Customers
