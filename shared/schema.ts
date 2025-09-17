@@ -118,6 +118,7 @@ export const insertOAuthUserSchema = createInsertSchema(users).omit({
 });
 
 // Separate schemas for different auth flows
+// Client-side registration schema (includes confirmPassword for validation)
 export const registerSchema = insertUserSchema.pick({
   email: true,
   name: true,
@@ -128,6 +129,15 @@ export const registerSchema = insertUserSchema.pick({
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
+});
+
+// Server-side registration schema (without confirmPassword as client strips it)
+export const serverRegisterSchema = insertUserSchema.pick({
+  email: true,
+  name: true,
+  password: true,
+}).extend({
+  password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
 export const loginSchema = z.object({

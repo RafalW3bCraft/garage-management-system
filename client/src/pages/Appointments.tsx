@@ -183,6 +183,7 @@ export default function Appointments() {
                         mechanicName={appointment.mechanicName || "TBD"}
                         estimatedDuration={appointment.estimatedDuration}
                         location={`Location ${appointment.locationId}`}
+                        locationId={appointment.locationId}
                         price={appointment.price || undefined}
                       />
                     ))}
@@ -237,6 +238,7 @@ export default function Appointments() {
                         mechanicName={appointment.mechanicName || "TBD"}
                         estimatedDuration={appointment.estimatedDuration}
                         location={`Location ${appointment.locationId}`}
+                        locationId={appointment.locationId}
                         price={appointment.price || undefined}
                       />
                     ))}

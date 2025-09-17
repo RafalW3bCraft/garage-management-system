@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import { Navigation } from "@/components/Navigation";
 import Home from "@/pages/Home";
 import Services from "@/pages/Services";
+import ServiceDetail from "@/pages/ServiceDetail";
 import Cars from "@/pages/Cars";
 import Appointments from "@/pages/Appointments";
 import Contact from "@/pages/Contact";
@@ -20,6 +21,7 @@ function Router() {
         <Switch>
           <Route path="/" component={Home} />
           <Route path="/services" component={Services} />
+          <Route path="/services/:id" component={ServiceDetail} />
           <Route path="/cars" component={Cars} />
           <Route path="/appointments" component={Appointments} />
           <Route path="/contact" component={Contact} />
