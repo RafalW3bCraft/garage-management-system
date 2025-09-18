@@ -4,7 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { format } from "date-fns";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequestVoid } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -89,7 +89,7 @@ export function RescheduleDialog({
         locationId: data.locationId,
       };
 
-      return apiRequest("PATCH", `/api/appointments/${appointmentId}/reschedule`, rescheduleData);
+      return apiRequestVoid("PATCH", `/api/appointments/${appointmentId}/reschedule`, rescheduleData);
     },
     onSuccess: () => {
       toast({
@@ -168,9 +168,11 @@ export function RescheduleDialog({
                         mode="single"
                         selected={field.value}
                         onSelect={field.onChange}
-                        disabled={(date) =>
-                          date < new Date() || date < new Date("1900-01-01")
-                        }
+                        disabled={(date) => {
+                          const today = new Date();
+                          today.setHours(0, 0, 0, 0);
+                          return date < today;
+                        }}
                         initialFocus
                       />
                     </PopoverContent>

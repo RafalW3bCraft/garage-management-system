@@ -48,7 +48,7 @@ export default function ServiceDetail() {
 
   // Fetch service details
   const { data: service, isLoading: serviceLoading, error: serviceError } = useQuery<Service>({
-    queryKey: ["/api/services", id],
+    queryKey: [`/api/services/${id}`],
     enabled: !!id,
     retry: 3,
     staleTime: 5 * 60 * 1000, // 5 minutes
@@ -336,8 +336,10 @@ export default function ServiceDetail() {
                       Contact Support
                     </Button>
                   </Link>
-                  <Button variant="outline" className="w-full" data-testid="button-call-support">
-                    Call: +91-98765-43210
+                  <Button variant="outline" className="w-full" data-testid="button-call-support" asChild>
+                    <a href="tel:+919876543210">
+                      Call: +91-98765-43210
+                    </a>
                   </Button>
                 </CardContent>
               </Card>

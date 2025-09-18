@@ -26,7 +26,7 @@ interface EmailParams {
 
 export async function sendEmail(params: EmailParams): Promise<boolean> {
   if (!initializeMailService() || !mailService) {
-    console.log("Email service not initialized - skipping email");
+    console.log("[EMAIL] Service not initialized - skipping email");
     return false;
   }
 
@@ -44,11 +44,18 @@ export async function sendEmail(params: EmailParams): Promise<boolean> {
       emailData.html = params.html;
     }
 
-    await mailService.send(emailData);
-    console.log(`Email sent successfully to ${params.to}`);
+    // Add timeout to prevent hanging email operations
+    const emailPromise = mailService.send(emailData);
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Email send timeout')), 15000) // 15 second timeout
+    );
+
+    await Promise.race([emailPromise, timeoutPromise]);
+    console.log(`[EMAIL] Successfully sent to ${params.to} - Subject: "${params.subject}"`);
     return true;
-  } catch (error) {
-    console.error('SendGrid email error:', error);
+  } catch (error: any) {
+    const errorMsg = error?.message || 'Unknown error';
+    console.error(`[EMAIL] Failed to send to ${params.to} - Error: ${errorMsg}`);
     return false;
   }
 }
@@ -66,6 +73,18 @@ export interface AppointmentEmailData {
 
 export class EmailNotificationService {
   private static FROM_EMAIL = "noreply@ronakmotorgarage.com"; // Should be verified sender in SendGrid
+
+  // Non-blocking email helper for appointment operations
+  static async sendAppointmentConfirmationAsync(to: string, data: AppointmentEmailData): Promise<void> {
+    // Send email asynchronously without blocking appointment creation
+    setImmediate(async () => {
+      try {
+        await this.sendAppointmentConfirmation(to, data);
+      } catch (error: any) {
+        console.error(`[EMAIL] Async appointment confirmation failed for ${to}:`, error?.message);
+      }
+    });
+  }
 
   // Appointment confirmation email
   static async sendAppointmentConfirmation(to: string, data: AppointmentEmailData): Promise<boolean> {
@@ -121,7 +140,7 @@ Ronak Motor Garage Team
       from: this.FROM_EMAIL,
       subject,
       html,
-      text
+      text: text.trim()
     });
   }
 

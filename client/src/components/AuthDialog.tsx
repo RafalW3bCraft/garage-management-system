@@ -21,8 +21,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+import { MobileRegistration } from "@/components/MobileRegistration";
+import { Mail, Smartphone } from "lucide-react";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email"),
@@ -51,6 +54,7 @@ interface AuthDialogProps {
 export function AuthDialog({ children }: AuthDialogProps) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [showMobileRegistration, setShowMobileRegistration] = useState(false);
   const { login, register, googleLogin, loginMutation, registerMutation, isGoogleEnabled } = useAuth();
   const { toast } = useToast();
 
@@ -124,25 +128,68 @@ export function AuthDialog({ children }: AuthDialogProps) {
     googleLogin();
   };
 
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>
-            {mode === "login" ? "Sign in to your account" : "Create an account"}
-          </DialogTitle>
-          <DialogDescription>
-            {mode === "login"
-              ? "Enter your email and password to access your account"
-              : "Enter your details to create a new account"}
-          </DialogDescription>
-        </DialogHeader>
+  const handleMobileRegistrationSuccess = () => {
+    // Refresh auth state and close dialogs
+    window.location.reload();
+  };
 
-        <div className="space-y-4">
-          {/* Google Login Button - only show if enabled */}
-          {isGoogleEnabled && (
-            <>
+  return (
+    <>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogTrigger asChild>{children}</DialogTrigger>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {mode === "login" ? "Sign in to your account" : "Create an account"}
+            </DialogTitle>
+            <DialogDescription>
+              {mode === "login"
+                ? "Choose how you'd like to access your account"
+                : "Choose how you'd like to create your account"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {mode === "register" && (
+              <Tabs defaultValue="email" className="w-full">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="email" className="flex items-center gap-2">
+                    <Mail className="w-4 h-4" />
+                    Email
+                  </TabsTrigger>
+                  <TabsTrigger value="mobile" className="flex items-center gap-2">
+                    <Smartphone className="w-4 h-4" />
+                    Mobile
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="email" className="space-y-4 mt-4">
+                  {/* Email registration content will go here */}
+                </TabsContent>
+                <TabsContent value="mobile" className="space-y-4 mt-4">
+                  <div className="text-center">
+                    <p className="text-sm text-muted-foreground mb-4">
+                      Register with your mobile number for quick access
+                    </p>
+                    <Button
+                      onClick={() => {
+                        setShowMobileRegistration(true);
+                        setOpen(false);
+                      }}
+                      className="w-full"
+                      data-testid="button-mobile-register"
+                    >
+                      <Smartphone className="w-4 h-4 mr-2" />
+                      Register with Mobile Number
+                    </Button>
+                  </div>
+                </TabsContent>
+              </Tabs>
+            )}
+
+            {/* Show standard login/register for login mode or email tab */}
+            {/* Google Login Button - only show if enabled */}
+            {isGoogleEnabled && (
+              <>
               <Button
                 variant="outline"
                 className="w-full"
@@ -178,13 +225,13 @@ export function AuthDialog({ children }: AuthDialogProps) {
                   <span className="bg-background px-2 text-muted-foreground">or</span>
                 </div>
               </div>
-            </>
-          )}
+              </>
+            )}
 
-          {/* Login Form */}
-          {mode === "login" ? (
-            <Form {...loginForm}>
-              <form onSubmit={loginForm.handleSubmit(onLoginSubmit)} className="space-y-4">
+            {/* Login Form */}
+            {mode === "login" ? (
+              <Form {...loginForm}>
+                <form onSubmit={loginForm.handleSubmit(onLoginSubmit)} className="space-y-4">
                 <FormField
                   control={loginForm.control}
                   name="email"
@@ -229,12 +276,13 @@ export function AuthDialog({ children }: AuthDialogProps) {
                 >
                   {loginMutation.isPending ? "Signing in..." : "Sign in"}
                 </Button>
-              </form>
-            </Form>
-          ) : (
-            /* Register Form */
-            <Form {...registerForm}>
-              <form onSubmit={registerForm.handleSubmit(onRegisterSubmit)} className="space-y-4">
+                </form>
+              </Form>
+            ) : mode === "register" ? (
+              /* Register Form - only show for email tab or when tabs not visible */
+              <div style={{ display: mode === "register" ? "block" : "none" }}>
+                <Form {...registerForm}>
+                  <form onSubmit={registerForm.handleSubmit(onRegisterSubmit)} className="space-y-4">
                 <FormField
                   control={registerForm.control}
                   name="name"
@@ -313,27 +361,54 @@ export function AuthDialog({ children }: AuthDialogProps) {
                   data-testid="button-submit"
                 >
                   {registerMutation.isPending ? "Creating account..." : "Create account"}
-                </Button>
-              </form>
-            </Form>
-          )}
+                  </Button>
+                  </form>
+                </Form>
+              </div>
+            ) : null}
 
-          {/* Switch between login/register */}
-          <div className="text-center text-sm">
-            <span className="text-muted-foreground">
-              {mode === "login" ? "Don't have an account?" : "Already have an account?"}
-            </span>{" "}
-            <Button
-              variant="ghost"
-              className="p-0 h-auto font-normal underline"
-              onClick={() => setMode(mode === "login" ? "register" : "login")}
-              data-testid="button-switch-mode"
-            >
-              {mode === "login" ? "Sign up" : "Sign in"}
-            </Button>
+            {/* Mobile registration option for login mode */}
+            {mode === "login" && (
+              <div className="text-center">
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    setShowMobileRegistration(true);
+                    setOpen(false);
+                  }}
+                  data-testid="button-mobile-login"
+                >
+                  <Smartphone className="w-4 h-4 mr-2" />
+                  Continue with Mobile Number
+                </Button>
+              </div>
+            )}
+
+            {/* Switch between login/register */}
+            <div className="text-center text-sm">
+              <span className="text-muted-foreground">
+                {mode === "login" ? "Don't have an account?" : "Already have an account?"}
+              </span>{" "}
+              <Button
+                variant="ghost"
+                className="p-0 h-auto font-normal underline"
+                onClick={() => setMode(mode === "login" ? "register" : "login")}
+                data-testid="button-switch-mode"
+              >
+                {mode === "login" ? "Sign up" : "Sign in"}
+              </Button>
+            </div>
           </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+        </DialogContent>
+      </Dialog>
+
+      {/* Mobile Registration Dialog */}
+      <MobileRegistration
+        open={showMobileRegistration}
+        onOpenChange={setShowMobileRegistration}
+        onSuccess={handleMobileRegistrationSuccess}
+      />
+    </>
   );
 }

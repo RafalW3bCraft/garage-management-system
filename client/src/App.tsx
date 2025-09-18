@@ -11,6 +11,8 @@ import ServiceDetail from "@/pages/ServiceDetail";
 import Cars from "@/pages/Cars";
 import Appointments from "@/pages/Appointments";
 import Contact from "@/pages/Contact";
+import AdminDashboard from "@/pages/admin/Dashboard";
+import AdminAppointments from "@/pages/admin/Appointments";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -25,6 +27,8 @@ function Router() {
           <Route path="/cars" component={Cars} />
           <Route path="/appointments" component={Appointments} />
           <Route path="/contact" component={Contact} />
+          <Route path="/admin" component={AdminDashboard} />
+          <Route path="/admin/appointments" component={AdminAppointments} />
           <Route component={NotFound} />
         </Switch>
       </main>

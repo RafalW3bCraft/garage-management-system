@@ -5,6 +5,7 @@ import {
   type InsertService, 
   type Appointment,
   type InsertAppointment,
+  type AppointmentWithDetails,
   type Car,
   type InsertCar,
   type Customer,
@@ -15,6 +16,10 @@ import {
   type InsertLocation,
   type Bid,
   type InsertBid,
+  type OtpVerification,
+  type InsertOtpVerification,
+  type WhatsAppMessage,
+  type InsertWhatsAppMessage,
   users,
   services,
   appointments,
@@ -22,10 +27,12 @@ import {
   customers,
   contacts,
   locations,
-  bids
+  bids,
+  otpVerifications,
+  whatsappMessages
 } from "@shared/schema";
 import { getDb } from "./db";
-import { eq, and, desc, asc, gte, lte, ne, isNull } from "drizzle-orm";
+import { eq, and, desc, asc, gte, lte, ne, isNull, or, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
@@ -49,8 +56,9 @@ export interface IStorage {
   createService(service: InsertService): Promise<Service>;
   
   // Appointments
+  getAllAppointments(): Promise<AppointmentWithDetails[]>;
   getAppointment(id: string): Promise<Appointment | undefined>;
-  getAppointmentsByCustomer(customerId: string): Promise<Appointment[]>;
+  getAppointmentsByCustomer(customerId: string): Promise<AppointmentWithDetails[]>;
   createAppointment(appointment: InsertAppointment): Promise<Appointment>;
   updateAppointmentStatus(id: string, status: string): Promise<Appointment | undefined>;
   rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined>;
@@ -77,6 +85,23 @@ export interface IStorage {
   getBidsForCar(carId: string): Promise<Bid[]>;
   getHighestBidForCar(carId: string): Promise<Bid | undefined>;
   updateCarCurrentBid(carId: string, bidAmount: number): Promise<Car | undefined>;
+
+  // OTP Verification
+  storeOTPVerification(otp: InsertOtpVerification): Promise<OtpVerification>;
+  getActiveOtpVerification(phone: string, countryCode: string, purpose: string): Promise<OtpVerification | undefined>;
+  incrementOtpAttempts(otpId: string): Promise<boolean>;
+  markOtpAsVerified(otpId: string): Promise<boolean>;
+  markOtpAsExpired(otpId: string): Promise<boolean>;
+  expireAllActiveOtpsForTarget(phone: string, countryCode: string, purpose: string): Promise<number>;
+  getRecentOtpAttempts(phone: string, countryCode: string, since: Date): Promise<OtpVerification[]>;
+  cleanupExpiredOtps(cutoffDate: Date): Promise<number>;
+
+  // Phone-based user operations
+  getUserByPhone(phone: string, countryCode: string): Promise<User | undefined>;
+
+  // WhatsApp Messages
+  logWhatsAppMessage(message: InsertWhatsAppMessage): Promise<WhatsAppMessage>;
+  getWhatsAppMessageHistory(phone: string, limit?: number): Promise<WhatsAppMessage[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -196,17 +221,77 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Appointments
+  async getAllAppointments(): Promise<AppointmentWithDetails[]> {
+    const db = await getDb();
+    
+    // Get all appointments with service, location, and customer names resolved
+    const result = await db
+      .select({
+        // Appointment fields
+        id: appointments.id,
+        customerId: appointments.customerId,
+        serviceId: appointments.serviceId,
+        locationId: appointments.locationId,
+        carDetails: appointments.carDetails,
+        dateTime: appointments.dateTime,
+        status: appointments.status,
+        mechanicName: appointments.mechanicName,
+        estimatedDuration: appointments.estimatedDuration,
+        price: appointments.price,
+        notes: appointments.notes,
+        createdAt: appointments.createdAt,
+        // Resolved names
+        serviceName: services.title,
+        locationName: locations.name,
+        customerName: customers.name
+      })
+      .from(appointments)
+      .innerJoin(services, eq(appointments.serviceId, services.id))
+      .innerJoin(locations, eq(appointments.locationId, locations.id))
+      .innerJoin(customers, eq(appointments.customerId, customers.id))
+      .orderBy(desc(appointments.createdAt));
+    
+    return result;
+  }
+
   async getAppointment(id: string): Promise<Appointment | undefined> {
     const db = await getDb();
     const result = await db.select().from(appointments).where(eq(appointments.id, id)).limit(1);
     return result[0];
   }
 
-  async getAppointmentsByCustomer(customerId: string): Promise<Appointment[]> {
+  async getAppointmentsByCustomer(customerId: string): Promise<AppointmentWithDetails[]> {
     const db = await getDb();
-    return await db.select().from(appointments)
+    
+    // Join appointments with services, locations, and customers to get names
+    const result = await db
+      .select({
+        // Appointment fields
+        id: appointments.id,
+        customerId: appointments.customerId,
+        serviceId: appointments.serviceId,
+        locationId: appointments.locationId,
+        carDetails: appointments.carDetails,
+        dateTime: appointments.dateTime,
+        status: appointments.status,
+        mechanicName: appointments.mechanicName,
+        estimatedDuration: appointments.estimatedDuration,
+        price: appointments.price,
+        notes: appointments.notes,
+        createdAt: appointments.createdAt,
+        // Resolved names
+        serviceName: services.title,
+        locationName: locations.name,
+        customerName: customers.name
+      })
+      .from(appointments)
+      .innerJoin(services, eq(appointments.serviceId, services.id))
+      .innerJoin(locations, eq(appointments.locationId, locations.id))
+      .innerJoin(customers, eq(appointments.customerId, customers.id))
       .where(eq(appointments.customerId, customerId))
       .orderBy(desc(appointments.dateTime));
+    
+    return result;
   }
 
   async createAppointment(appointment: InsertAppointment): Promise<Appointment> {
@@ -443,6 +528,119 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return result[0];
   }
+
+  // OTP Verification
+  async storeOTPVerification(otp: InsertOtpVerification): Promise<OtpVerification> {
+    const db = await getDb();
+    const result = await db.insert(otpVerifications).values(otp).returning();
+    return result[0];
+  }
+
+  async getActiveOtpVerification(phone: string, countryCode: string, purpose: string): Promise<OtpVerification | undefined> {
+    const db = await getDb();
+    const result = await db.select().from(otpVerifications)
+      .where(and(
+        eq(otpVerifications.phone, phone),
+        eq(otpVerifications.countryCode, countryCode),
+        eq(otpVerifications.purpose, purpose),
+        eq(otpVerifications.verified, false),
+        gte(otpVerifications.expiresAt, new Date())
+      ))
+      .orderBy(desc(otpVerifications.createdAt))
+      .limit(1);
+    return result[0];
+  }
+
+  async incrementOtpAttempts(otpId: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.update(otpVerifications)
+      .set({ attempts: sql`${otpVerifications.attempts} + 1` })
+      .where(eq(otpVerifications.id, otpId))
+      .returning();
+    return result.length > 0;
+  }
+
+  async markOtpAsVerified(otpId: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.update(otpVerifications)
+      .set({ verified: true })
+      .where(eq(otpVerifications.id, otpId))
+      .returning();
+    return result.length > 0;
+  }
+
+  async markOtpAsExpired(otpId: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.update(otpVerifications)
+      .set({ expiresAt: new Date() })
+      .where(eq(otpVerifications.id, otpId))
+      .returning();
+    return result.length > 0;
+  }
+
+  async expireAllActiveOtpsForTarget(phone: string, countryCode: string, purpose: string): Promise<number> {
+    const db = await getDb();
+    const result = await db.update(otpVerifications)
+      .set({ expiresAt: new Date() })
+      .where(and(
+        eq(otpVerifications.phone, phone),
+        eq(otpVerifications.countryCode, countryCode),
+        eq(otpVerifications.purpose, purpose),
+        eq(otpVerifications.verified, false),
+        gte(otpVerifications.expiresAt, new Date())
+      ))
+      .returning();
+    return result.length;
+  }
+
+  async getRecentOtpAttempts(phone: string, countryCode: string, since: Date): Promise<OtpVerification[]> {
+    const db = await getDb();
+    return await db.select().from(otpVerifications)
+      .where(and(
+        eq(otpVerifications.phone, phone),
+        eq(otpVerifications.countryCode, countryCode),
+        gte(otpVerifications.createdAt, since)
+      ))
+      .orderBy(desc(otpVerifications.createdAt));
+  }
+
+  async cleanupExpiredOtps(cutoffDate: Date): Promise<number> {
+    const db = await getDb();
+    const result = await db.delete(otpVerifications)
+      .where(or(
+        lte(otpVerifications.createdAt, cutoffDate),
+        lte(otpVerifications.expiresAt, new Date())
+      ))
+      .returning();
+    return result.length;
+  }
+
+  // Phone-based user operations
+  async getUserByPhone(phone: string, countryCode: string): Promise<User | undefined> {
+    const db = await getDb();
+    const result = await db.select().from(users)
+      .where(and(
+        eq(users.phone, phone),
+        eq(users.countryCode, countryCode)
+      ))
+      .limit(1);
+    return result[0];
+  }
+
+  // WhatsApp Messages
+  async logWhatsAppMessage(message: InsertWhatsAppMessage): Promise<WhatsAppMessage> {
+    const db = await getDb();
+    const result = await db.insert(whatsappMessages).values(message).returning();
+    return result[0];
+  }
+
+  async getWhatsAppMessageHistory(phone: string, limit: number = 50): Promise<WhatsAppMessage[]> {
+    const db = await getDb();
+    return await db.select().from(whatsappMessages)
+      .where(eq(whatsappMessages.phone, phone))
+      .orderBy(desc(whatsappMessages.sentAt))
+      .limit(limit);
+  }
 }
 
 // MemStorage with sample data for fallback
@@ -665,11 +863,23 @@ export class MemStorage implements IStorage {
     const newUser: User = { 
       ...user, 
       id, 
+      email: user.email ?? null,
+      phone: user.phone ?? null,
+      phoneVerified: user.phoneVerified ?? false,
+      countryCode: user.countryCode ?? "+91",
+      registrationNumbers: user.registrationNumbers ?? null,
+      dateOfBirth: user.dateOfBirth ?? null,
+      profileImage: user.profileImage ?? null,
+      address: user.address ?? null,
+      city: user.city ?? null,
+      state: user.state ?? null,
+      zipCode: user.zipCode ?? null,
       createdAt: new Date(),
       provider: user.provider ?? "email",
       emailVerified: user.emailVerified ?? false,
       password: user.password ?? null,
-      googleId: user.googleId ?? null
+      googleId: user.googleId ?? null,
+      role: user.role ?? "customer"
     };
     this.users.set(id, newUser);
     return newUser;
@@ -753,14 +963,47 @@ export class MemStorage implements IStorage {
   }
 
   // Appointments
+  async getAllAppointments(): Promise<AppointmentWithDetails[]> {
+    const allAppointments = Array.from(this.appointments.values())
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    
+    // Resolve service, location, and customer names
+    return allAppointments.map(apt => {
+      const service = this.services.get(apt.serviceId);
+      const location = this.locations.get(apt.locationId);
+      const customer = this.customers.get(apt.customerId);
+      
+      return {
+        ...apt,
+        serviceName: service?.title || `Unknown Service (${apt.serviceId})`,
+        locationName: location?.name || `Unknown Location (${apt.locationId})`,
+        customerName: customer?.name || `Unknown Customer (${apt.customerId})`
+      };
+    });
+  }
+
   async getAppointment(id: string): Promise<Appointment | undefined> {
     return this.appointments.get(id);
   }
 
-  async getAppointmentsByCustomer(customerId: string): Promise<Appointment[]> {
-    return Array.from(this.appointments.values())
+  async getAppointmentsByCustomer(customerId: string): Promise<AppointmentWithDetails[]> {
+    const customerAppointments = Array.from(this.appointments.values())
       .filter(apt => apt.customerId === customerId)
       .sort((a, b) => b.dateTime.getTime() - a.dateTime.getTime());
+    
+    // Resolve service, location, and customer names
+    return customerAppointments.map(apt => {
+      const service = this.services.get(apt.serviceId);
+      const location = this.locations.get(apt.locationId);
+      const customer = this.customers.get(apt.customerId);
+      
+      return {
+        ...apt,
+        serviceName: service?.title || `Unknown Service (${apt.serviceId})`,
+        locationName: location?.name || `Unknown Location (${apt.locationId})`,
+        customerName: customer?.name || `Unknown Customer (${apt.customerId})`
+      };
+    });
   }
 
   async createAppointment(appointment: InsertAppointment): Promise<Appointment> {
@@ -905,6 +1148,133 @@ export class MemStorage implements IStorage {
       return updatedCar;
     }
     return undefined;
+  }
+
+  // OTP Verification
+  private otpVerifications: Map<string, OtpVerification> = new Map();
+
+  async storeOTPVerification(otp: InsertOtpVerification): Promise<OtpVerification> {
+    const id = randomUUID();
+    const newOtp: OtpVerification = {
+      ...otp,
+      id,
+      verified: false,
+      attempts: 0,
+      maxAttempts: otp.maxAttempts ?? 3,
+      createdAt: new Date()
+    };
+    this.otpVerifications.set(id, newOtp);
+    return newOtp;
+  }
+
+  async getActiveOtpVerification(phone: string, countryCode: string, purpose: string): Promise<OtpVerification | undefined> {
+    return Array.from(this.otpVerifications.values())
+      .filter(otp => 
+        otp.phone === phone && 
+        otp.countryCode === countryCode && 
+        otp.purpose === purpose && 
+        !otp.verified && 
+        new Date() < otp.expiresAt
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  }
+
+  async incrementOtpAttempts(otpId: string): Promise<boolean> {
+    const otp = this.otpVerifications.get(otpId);
+    if (otp) {
+      otp.attempts = (otp.attempts ?? 0) + 1;
+      this.otpVerifications.set(otpId, otp);
+      return true;
+    }
+    return false;
+  }
+
+  async markOtpAsVerified(otpId: string): Promise<boolean> {
+    const otp = this.otpVerifications.get(otpId);
+    if (otp) {
+      otp.verified = true;
+      this.otpVerifications.set(otpId, otp);
+      return true;
+    }
+    return false;
+  }
+
+  async markOtpAsExpired(otpId: string): Promise<boolean> {
+    const otp = this.otpVerifications.get(otpId);
+    if (otp) {
+      otp.expiresAt = new Date(); // Mark as expired by setting expiry to now
+      this.otpVerifications.set(otpId, otp);
+      return true;
+    }
+    return false;
+  }
+
+  async expireAllActiveOtpsForTarget(phone: string, countryCode: string, purpose: string): Promise<number> {
+    let expiredCount = 0;
+    const now = new Date();
+    
+    Array.from(this.otpVerifications.entries()).forEach(([id, otp]) => {
+      if (otp.phone === phone && 
+          otp.countryCode === countryCode && 
+          otp.purpose === purpose && 
+          !otp.verified && 
+          otp.expiresAt > now) {
+        otp.expiresAt = now;
+        this.otpVerifications.set(id, otp);
+        expiredCount++;
+      }
+    });
+    
+    return expiredCount;
+  }
+
+  async getRecentOtpAttempts(phone: string, countryCode: string, since: Date): Promise<OtpVerification[]> {
+    return Array.from(this.otpVerifications.values())
+      .filter(otp => 
+        otp.phone === phone && 
+        otp.countryCode === countryCode && 
+        otp.createdAt >= since
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async cleanupExpiredOtps(cutoffDate: Date): Promise<number> {
+    const expired = Array.from(this.otpVerifications.entries())
+      .filter(([_, otp]) => otp.createdAt < cutoffDate || otp.expiresAt < new Date());
+    
+    expired.forEach(([id]) => this.otpVerifications.delete(id));
+    return expired.length;
+  }
+
+  // Phone-based user operations
+  async getUserByPhone(phone: string, countryCode: string): Promise<User | undefined> {
+    return Array.from(this.users.values())
+      .find(user => user.phone === phone && user.countryCode === countryCode);
+  }
+
+  // WhatsApp Messages
+  private whatsappMessages: Map<string, WhatsAppMessage> = new Map();
+
+  async logWhatsAppMessage(message: InsertWhatsAppMessage): Promise<WhatsAppMessage> {
+    const id = randomUUID();
+    const newMessage: WhatsAppMessage = {
+      ...message,
+      id,
+      countryCode: message.countryCode ?? null,
+      status: message.status ?? "sent",
+      appointmentId: message.appointmentId ?? null,
+      providerResponse: message.providerResponse ?? null,
+      sentAt: new Date()
+    };
+    this.whatsappMessages.set(id, newMessage);
+    return newMessage;
+  }
+
+  async getWhatsAppMessageHistory(phone: string, limit: number = 50): Promise<WhatsAppMessage[]> {
+    return Array.from(this.whatsappMessages.values())
+      .filter(msg => msg.phone === phone)
+      .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())
+      .slice(0, limit);
   }
 }
 

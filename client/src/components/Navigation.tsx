@@ -14,7 +14,7 @@ import {
 import { Logo } from "./Logo";
 import { ThemeToggle } from "./ThemeToggle";
 import { AuthDialog } from "./AuthDialog";
-import { Menu, X, User, LogOut, Settings, Car } from "lucide-react";
+import { Menu, X, User, LogOut, Settings, Car, Shield } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
 export function Navigation() {
@@ -107,6 +107,17 @@ export function Navigation() {
                       <span>Book Service</span>
                     </Link>
                   </DropdownMenuItem>
+                  {user.role === "admin" && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem asChild data-testid="menu-admin">
+                        <Link href="/admin">
+                          <Shield className="mr-2 h-4 w-4" />
+                          <span>Admin Dashboard</span>
+                        </Link>
+                      </DropdownMenuItem>
+                    </>
+                  )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogout} data-testid="menu-logout">
                     <LogOut className="mr-2 h-4 w-4" />

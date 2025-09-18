@@ -8,14 +8,14 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Calendar, Clock, Plus, Loader2 } from "lucide-react";
-import type { Appointment } from "@shared/schema";
+import type { AppointmentWithDetails } from "@shared/schema";
 
 export default function Appointments() {
   const [activeTab, setActiveTab] = useState("upcoming");
   const { user, isLoading: authLoading } = useAuth();
 
   // Fetch user's appointments
-  const { data: appointments = [], isLoading, error } = useQuery<Appointment[]>({
+  const { data: appointments = [], isLoading, error } = useQuery<AppointmentWithDetails[]>({
     queryKey: ["/api/appointments/customer", user?.id],
     enabled: !!user?.id, // Only fetch when user is authenticated
     retry: 3,
@@ -176,13 +176,13 @@ export default function Appointments() {
                       <AppointmentCard 
                         key={appointment.id}
                         id={appointment.id}
-                        serviceType={`Service ${appointment.serviceId}`}
+                        serviceType={appointment.serviceName}
                         carDetails={appointment.carDetails}
                         dateTime={new Date(appointment.dateTime).toLocaleString()}
                         status={appointment.status as "pending" | "confirmed" | "in-progress" | "completed" | "cancelled"}
                         mechanicName={appointment.mechanicName || "TBD"}
                         estimatedDuration={appointment.estimatedDuration}
-                        location={`Location ${appointment.locationId}`}
+                        location={appointment.locationName}
                         locationId={appointment.locationId}
                         price={appointment.price || undefined}
                       />
@@ -231,13 +231,13 @@ export default function Appointments() {
                       <AppointmentCard 
                         key={appointment.id}
                         id={appointment.id}
-                        serviceType={`Service ${appointment.serviceId}`}
+                        serviceType={appointment.serviceName}
                         carDetails={appointment.carDetails}
                         dateTime={new Date(appointment.dateTime).toLocaleString()}
                         status={appointment.status as "pending" | "confirmed" | "in-progress" | "completed" | "cancelled"}
                         mechanicName={appointment.mechanicName || "TBD"}
                         estimatedDuration={appointment.estimatedDuration}
-                        location={`Location ${appointment.locationId}`}
+                        location={appointment.locationName}
                         locationId={appointment.locationId}
                         price={appointment.price || undefined}
                       />
