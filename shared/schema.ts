@@ -297,6 +297,7 @@ export const mobileRegisterSchema = z.object({
   email: z.string().email("Invalid email format").optional(),
   dateOfBirth: z.string().datetime().optional(),
   registrationNumbers: z.array(z.string()).optional(),
+  profileImage: z.string().url("Invalid image URL").optional(),
   address: z.string().optional(),
   city: z.string().optional(),
   state: z.string().optional(),

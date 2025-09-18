@@ -13,7 +13,11 @@ import {
   serverRegisterSchema,
   loginSchema,
   rescheduleAppointmentSchema,
-  placeBidSchema
+  placeBidSchema,
+  mobileRegisterSchema,
+  verifyOtpSchema,
+  sendOtpSchema,
+  updateProfileSchema
 } from "@shared/schema";
 import { fromZodError } from "zod-validation-error";
 import { hashPassword, verifyPassword, passport } from "./auth";
@@ -296,16 +300,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   app.post("/api/auth/mobile/verify-otp", asyncRoute("verify mobile OTP", async (req: any, res: any) => {
-    const { phone, countryCode, otp, name } = req.body;
+    const { phone, countryCode, otpCode } = req.body;
     
     // Basic validation
-    if (!phone || !countryCode || !otp) {
+    if (!phone || !countryCode || !otpCode) {
       return res.status(400).json({ 
         message: "Phone number, country code, and OTP are required" 
       });
     }
 
-    const result = await OTPService.verifyOTP(phone, countryCode, otp, "registration");
+    const result = await OTPService.verifyOTP(phone, countryCode, otpCode, "registration");
     
     if (!result.success) {
       return res.status(400).json({
@@ -316,44 +320,141 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
 
+    // OTP verified successfully - just return success
+    res.json({ 
+      message: "OTP verified successfully. Please complete registration.",
+      verified: true
+    });
+  }));
+
+  // Complete mobile registration with profile data
+  app.post("/api/auth/mobile/register", asyncRoute("complete mobile registration", async (req: any, res: any) => {
+    // Validate request data using schema
+    const validationResult = mobileRegisterSchema.safeParse(req.body);
+    
+    if (!validationResult.success) {
+      return res.status(400).json({
+        message: "Validation failed",
+        errors: fromZodError(validationResult.error).toString()
+      });
+    }
+
+    const {
+      phone,
+      countryCode,
+      name,
+      email,
+      dateOfBirth,
+      registrationNumbers,
+      profileImage,
+      address,
+      city,
+      state,
+      zipCode
+    } = validationResult.data;
+
     const storage = await getStorage();
     
     // Check if user already exists with this phone number
     let user = await storage.getUserByPhone(phone, countryCode);
     
     if (user) {
-      // User exists, just log them in
-      req.login(user, (err: any) => {
+      // User exists, just log them in and update profile if needed
+      if (email || dateOfBirth || registrationNumbers || profileImage || address || city || state || zipCode) {
+        // Update profile with new data
+        const updateData: any = {};
+        if (email) updateData.email = email;
+        if (dateOfBirth) updateData.dateOfBirth = new Date(dateOfBirth);
+        if (registrationNumbers) updateData.registrationNumbers = registrationNumbers;
+        if (profileImage) updateData.profileImage = profileImage;
+        if (address) updateData.address = address;
+        if (city) updateData.city = city;
+        if (state) updateData.state = state;
+        if (zipCode) updateData.zipCode = zipCode;
+        
+        user = await storage.updateUser(user.id, updateData);
+      }
+      
+      req.login(user!, async (err: any) => {
         if (err) {
-          console.error("Login after OTP verification failed:", err);
+          console.error("Login after mobile registration failed:", err);
           return res.status(500).json({ 
-            message: "OTP verified but login failed. Please try again." 
+            message: "Registration completed but login failed. Please try logging in." 
           });
         }
         
-        const { password, ...userResponse } = user;
+        // Send welcome WhatsApp message for new registrations
+        try {
+          if (user!.phone && user!.countryCode) {
+            const welcomeResult = await WhatsAppService.sendWelcomeMessage(
+              user!.phone,
+              user!.countryCode,
+              user!.name
+            );
+            
+            if (welcomeResult.success) {
+              console.log(`[REGISTRATION] Welcome WhatsApp sent to ${user!.countryCode}${user!.phone}`);
+            } else {
+              console.error(`[REGISTRATION] Welcome WhatsApp failed: ${welcomeResult.error}`);
+            }
+          }
+        } catch (welcomeError: any) {
+          console.error(`[REGISTRATION] Welcome message error: ${welcomeError.message}`);
+        }
+        
+        const { password, ...userResponse } = user!;
         res.json({ 
-          message: "OTP verified and logged in successfully",
+          message: "Profile updated and logged in successfully",
           user: userResponse
         });
       });
     } else {
-      // New user, create account
-      const newUser = await storage.createUser({
+      // Create new user with complete profile
+      const userData: any = {
         phone,
         countryCode,
         phoneVerified: true,
-        name: name || null,
-        provider: "phone",
+        name,
+        provider: "mobile",
         role: "customer"
-      });
+      };
+      
+      if (email) userData.email = email;
+      if (dateOfBirth) userData.dateOfBirth = new Date(dateOfBirth);
+      if (registrationNumbers) userData.registrationNumbers = registrationNumbers;
+      if (profileImage) userData.profileImage = profileImage;
+      if (address) userData.address = address;
+      if (city) userData.city = city;
+      if (state) userData.state = state;
+      if (zipCode) userData.zipCode = zipCode;
 
-      req.login(newUser, (err: any) => {
+      const newUser = await storage.createUser(userData);
+
+      req.login(newUser, async (err: any) => {
         if (err) {
           console.error("Login after mobile registration failed:", err);
           return res.status(500).json({ 
             message: "Account created but login failed. Please try logging in." 
           });
+        }
+        
+        // Send welcome WhatsApp message for new registrations
+        try {
+          if (newUser.phone && newUser.countryCode) {
+            const welcomeResult = await WhatsAppService.sendWelcomeMessage(
+              newUser.phone,
+              newUser.countryCode,
+              newUser.name
+            );
+            
+            if (welcomeResult.success) {
+              console.log(`[REGISTRATION] Welcome WhatsApp sent to ${newUser.countryCode}${newUser.phone}`);
+            } else {
+              console.error(`[REGISTRATION] Welcome WhatsApp failed: ${welcomeResult.error}`);
+            }
+          }
+        } catch (welcomeError: any) {
+          console.error(`[REGISTRATION] Welcome message error: ${welcomeError.message}`);
         }
         
         const { password, ...userResponse } = newUser;
@@ -372,6 +473,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     next();
   };
+
+  // Get user profile
+  app.get("/api/profile", requireAuth, asyncRoute("get user profile", async (req: any, res: any) => {
+    const { password, ...userProfile } = req.user;
+    res.json({ user: userProfile });
+  }));
+
+  // Update user profile
+  app.patch("/api/profile", requireAuth, asyncRoute("update user profile", async (req: any, res: any) => {
+    const validationResult = updateProfileSchema.safeParse(req.body);
+    
+    if (!validationResult.success) {
+      return res.status(400).json({
+        message: "Validation failed",
+        errors: fromZodError(validationResult.error).toString()
+      });
+    }
+
+    const updateData: any = { ...validationResult.data };
+    const storage = await getStorage();
+    
+    // Convert dateOfBirth to Date if provided
+    if (updateData.dateOfBirth) {
+      updateData.dateOfBirth = new Date(updateData.dateOfBirth);
+    }
+
+    const updatedUser = await storage.updateUser(req.user.id, updateData);
+    const { password, ...userResponse } = updatedUser!;
+    
+    res.json({ 
+      message: "Profile updated successfully",
+      user: userResponse 
+    });
+  }));
 
   // WhatsApp Messaging Routes
   app.post("/api/whatsapp/send-confirmation", requireAuth, asyncRoute("send WhatsApp confirmation", async (req: any, res: any) => {
