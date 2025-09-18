@@ -18,6 +18,8 @@ import {
 import { fromZodError } from "zod-validation-error";
 import { hashPassword, verifyPassword, passport } from "./auth";
 import { EmailNotificationService } from "./email-service";
+import { OTPService } from "./otp-service";
+import { WhatsAppService } from "./whatsapp-service";
 
 // Centralized error handling types
 interface DatabaseError extends Error {
@@ -64,9 +66,11 @@ function handleDatabaseError(error: DatabaseError, operation: string) {
 function handleApiError(error: any, operation: string, res: any) {
   // Handle Zod validation errors
   if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
+    const errorMessage = fromZodError(error).toString();
+    console.error(`[VALIDATION ERROR] ${operation}:`, errorMessage);
     return res.status(400).json({ 
       message: "Validation failed",
-      errors: fromZodError(error).toString()
+      errors: errorMessage
     });
   }
   
@@ -264,6 +268,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ providers });
   });
 
+  // Mobile Registration Routes
+  app.post("/api/auth/mobile/send-otp", asyncRoute("send mobile OTP", async (req: any, res: any) => {
+    const { phone, countryCode } = req.body;
+    
+    // Basic validation
+    if (!phone || !countryCode) {
+      return res.status(400).json({ 
+        message: "Phone number and country code are required" 
+      });
+    }
+
+    const result = await OTPService.sendOTP(phone, countryCode, "registration");
+    
+    if (result.success) {
+      res.json({
+        message: "OTP sent successfully",
+        expiresIn: result.expiresIn
+      });
+    } else {
+      res.status(400).json({
+        message: result.message,
+        attempts: result.attempts,
+        maxAttempts: result.maxAttempts
+      });
+    }
+  }));
+
+  app.post("/api/auth/mobile/verify-otp", asyncRoute("verify mobile OTP", async (req: any, res: any) => {
+    const { phone, countryCode, otp, name } = req.body;
+    
+    // Basic validation
+    if (!phone || !countryCode || !otp) {
+      return res.status(400).json({ 
+        message: "Phone number, country code, and OTP are required" 
+      });
+    }
+
+    const result = await OTPService.verifyOTP(phone, countryCode, otp, "registration");
+    
+    if (!result.success) {
+      return res.status(400).json({
+        message: result.message,
+        attempts: result.attempts,
+        maxAttempts: result.maxAttempts,
+        expired: result.expired
+      });
+    }
+
+    const storage = await getStorage();
+    
+    // Check if user already exists with this phone number
+    let user = await storage.getUserByPhone(phone, countryCode);
+    
+    if (user) {
+      // User exists, just log them in
+      req.login(user, (err: any) => {
+        if (err) {
+          console.error("Login after OTP verification failed:", err);
+          return res.status(500).json({ 
+            message: "OTP verified but login failed. Please try again." 
+          });
+        }
+        
+        const { password, ...userResponse } = user;
+        res.json({ 
+          message: "OTP verified and logged in successfully",
+          user: userResponse
+        });
+      });
+    } else {
+      // New user, create account
+      const newUser = await storage.createUser({
+        phone,
+        countryCode,
+        phoneVerified: true,
+        name: name || null,
+        provider: "phone",
+        role: "customer"
+      });
+
+      req.login(newUser, (err: any) => {
+        if (err) {
+          console.error("Login after mobile registration failed:", err);
+          return res.status(500).json({ 
+            message: "Account created but login failed. Please try logging in." 
+          });
+        }
+        
+        const { password, ...userResponse } = newUser;
+        res.status(201).json({ 
+          message: "Account created and logged in successfully",
+          user: userResponse
+        });
+      });
+    }
+  }));
+
   // Authentication middleware for protected routes
   const requireAuth = (req: any, res: any, next: any) => {
     if (!req.user) {
@@ -272,21 +373,141 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   };
 
+  // WhatsApp Messaging Routes
+  app.post("/api/whatsapp/send-confirmation", requireAuth, asyncRoute("send WhatsApp confirmation", async (req: any, res: any) => {
+    const { phone, countryCode, appointmentData, appointmentId } = req.body;
+    
+    // Validate required fields
+    if (!phone || !countryCode || !appointmentData) {
+      return res.status(400).json({ 
+        message: "Phone number, country code, and appointment data are required" 
+      });
+    }
+
+    // Validate phone number format
+    const validation = WhatsAppService.validateWhatsAppNumber(phone, countryCode);
+    if (!validation.valid) {
+      return res.status(400).json({ message: validation.message });
+    }
+
+    const result = await WhatsAppService.sendAppointmentConfirmation(
+      phone, 
+      countryCode, 
+      appointmentData,
+      appointmentId
+    );
+    
+    if (result.success) {
+      res.json({
+        message: "WhatsApp confirmation sent successfully",
+        messageSid: result.messageSid
+      });
+    } else {
+      res.status(500).json({
+        message: result.message,
+        error: result.error
+      });
+    }
+  }));
+
+  app.post("/api/whatsapp/send-status-update", requireAuth, asyncRoute("send WhatsApp status update", async (req: any, res: any) => {
+    const { phone, countryCode, statusData, appointmentId } = req.body;
+    
+    if (!phone || !countryCode || !statusData) {
+      return res.status(400).json({ 
+        message: "Phone number, country code, and status data are required" 
+      });
+    }
+
+    const result = await WhatsAppService.sendStatusUpdate(
+      phone, 
+      countryCode, 
+      statusData,
+      appointmentId
+    );
+    
+    if (result.success) {
+      res.json({
+        message: "WhatsApp status update sent successfully",
+        messageSid: result.messageSid
+      });
+    } else {
+      res.status(500).json({
+        message: result.message,
+        error: result.error
+      });
+    }
+  }));
+
+  app.post("/api/whatsapp/send-bid-notification", requireAuth, asyncRoute("send WhatsApp bid notification", async (req: any, res: any) => {
+    const { phone, countryCode, bidData } = req.body;
+    
+    if (!phone || !countryCode || !bidData) {
+      return res.status(400).json({ 
+        message: "Phone number, country code, and bid data are required" 
+      });
+    }
+
+    const result = await WhatsAppService.sendBidNotification(
+      phone, 
+      countryCode, 
+      bidData
+    );
+    
+    if (result.success) {
+      res.json({
+        message: "WhatsApp bid notification sent successfully",
+        messageSid: result.messageSid
+      });
+    } else {
+      res.status(500).json({
+        message: result.message,
+        error: result.error
+      });
+    }
+  }));
+
+  app.get("/api/whatsapp/history/:phone", requireAuth, asyncRoute("get WhatsApp message history", async (req: any, res: any) => {
+    const { phone } = req.params;
+    const limit = parseInt(req.query.limit as string) || 20;
+    
+    if (!phone) {
+      return res.status(400).json({ message: "Phone number is required" });
+    }
+
+    const history = await WhatsAppService.getMessageHistory(phone, limit);
+    res.json({ 
+      messages: history,
+      count: history.length 
+    });
+  }));
+
+  // Admin authorization middleware
+  const requireAdmin = (req: any, res: any, next: any) => {
+    if (!req.user) {
+      return res.status(401).json({ message: "Authentication required" });
+    }
+    if (req.user.role !== "admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+    next();
+  };
+
   // Services API
-  app.get("/api/services", asyncRoute("fetch services", async (req, res) => {
+  app.get("/api/services", asyncRoute("fetch services", async (req: any, res: any) => {
     const storage = await getStorage();
     const services = await storage.getAllServices();
     res.json(services);
   }));
 
-  app.get("/api/services/category/:category", asyncRoute("fetch services by category", async (req, res) => {
+  app.get("/api/services/category/:category", asyncRoute("fetch services by category", async (req: any, res: any) => {
     const { category } = req.params;
     const storage = await getStorage();
     const services = await storage.getServicesByCategory(category);
     res.json(services);
   }));
 
-  app.get("/api/services/:id", asyncRoute("fetch service", async (req, res) => {
+  app.get("/api/services/:id", asyncRoute("fetch service", async (req: any, res: any) => {
     const { id } = req.params;
     const storage = await getStorage();
     const service = await storage.getService(id);
@@ -298,7 +519,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(service);
   }));
 
-  app.post("/api/services", async (req, res) => {
+  app.post("/api/services", requireAdmin, async (req, res) => {
     try {
       const storage = await getStorage();
       const validatedData = insertServiceSchema.parse(req.body);
@@ -311,7 +532,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Customers API
-  app.post("/api/customers", async (req, res) => {
+  app.post("/api/customers", requireAuth, async (req: any, res: any) => {
     try {
       const storage = await getStorage();
       const validatedData = insertCustomerSchema.parse(req.body);
@@ -323,22 +544,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/customers/email/:email", async (req, res) => {
+  // REMOVED: GET /api/customers/email/:email - Email enumeration vulnerability
+  // Secure replacement: authenticated customer lookup/creation for current user only
+  app.post("/api/customers/ensure-own", requireAuth, async (req: any, res: any) => {
     try {
-      const { email } = req.params;
+      const user = req.user as any;
       const storage = await getStorage();
-      const customer = await storage.getCustomerByEmail(email);
+      
+      // First try to find existing customer for the authenticated user's email
+      let customer = await storage.getCustomerByEmail(user.email);
+      
       if (!customer) {
-        return res.status(404).json({ message: "Customer not found" });
+        // Customer doesn't exist, create one for the authenticated user
+        const customerData = {
+          name: user.name || "User",
+          email: user.email,
+          phone: "Not provided" // Default value, can be updated later
+        };
+        
+        const validatedData = insertCustomerSchema.parse(customerData);
+        customer = await storage.createCustomer(validatedData);
       }
+      
       res.json(customer);
     } catch (error) {
-      res.status(500).json({ message: "Failed to fetch customer" });
+      handleApiError(error, "ensure customer", res);
     }
   });
 
+  // Admin Routes - must be defined before other appointment routes
+  app.get("/api/admin/appointments", requireAdmin, asyncRoute("fetch all appointments for admin", async (req: any, res: any) => {
+    const storage = await getStorage();
+    const appointments = await storage.getAllAppointments();
+    res.json(appointments);
+  }));
+
+  app.patch("/api/admin/appointments/:id/status", requireAdmin, asyncRoute("update appointment status as admin", async (req: any, res: any) => {
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    if (!["pending", "confirmed", "in-progress", "completed", "cancelled"].includes(status)) {
+      return res.status(400).json({ message: "Invalid status value" });
+    }
+    
+    const storage = await getStorage();
+    const success = await storage.updateAppointmentStatus(id, status);
+    
+    if (!success) {
+      return res.status(404).json({ message: "Appointment not found" });
+    }
+    
+    res.json({ message: "Appointment status updated successfully" });
+  }));
+
+  // Conflict checking endpoint
+  app.post("/api/appointments/check-conflict", requireAuth, asyncRoute("check appointment conflict", async (req: any, res: any) => {
+    const { locationId, dateTime } = req.body;
+    
+    if (!locationId || !dateTime) {
+      return res.status(400).json({ 
+        message: "locationId and dateTime are required" 
+      });
+    }
+    
+    const storage = await getStorage();
+    const hasConflict = await storage.checkAppointmentConflict(
+      locationId, 
+      new Date(dateTime)
+    );
+    
+    res.json({ hasConflict });
+  }));
+
   // Appointments API
-  app.get("/api/appointments/customer/:customerId", requireAuth, asyncRoute("fetch customer appointments", async (req, res) => {
+  app.get("/api/appointments/customer/:customerId", requireAuth, asyncRoute("fetch customer appointments", async (req: any, res: any) => {
     const { customerId } = req.params;
     const user = req.user as any;
     const storage = await getStorage();
@@ -360,66 +639,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(appointments);
   }));
 
-  app.post("/api/appointments", async (req, res) => {
+  app.post("/api/appointments", requireAuth, asyncRoute("create appointment", async (req: any, res: any) => {
     try {
       const storage = await getStorage();
       const validatedData = insertAppointmentSchema.parse(req.body);
       const appointment = await storage.createAppointment(validatedData);
       
-      // Send appointment confirmation email with user feedback
-      let emailStatus = "success";
+      // Send appointment confirmation notifications asynchronously (non-blocking)
       try {
         const customer = await storage.getCustomer(appointment.customerId);
         const service = await storage.getService(appointment.serviceId);
         const location = await storage.getLocation(appointment.locationId);
         
         if (customer && service && location) {
-          const emailSent = await EmailNotificationService.sendAppointmentConfirmation(customer.email, {
+          const appointmentData = {
             customerName: customer.name,
             serviceName: service.title,
             dateTime: new Date(appointment.dateTime).toLocaleString('en-IN'),
             location: location.name,
             carDetails: appointment.carDetails,
             mechanicName: appointment.mechanicName || undefined,
-            price: appointment.price || undefined
-          });
+            price: appointment.price || undefined,
+            bookingId: appointment.id
+          };
+
+          // Send email confirmation
+          EmailNotificationService.sendAppointmentConfirmationAsync(customer.email, appointmentData);
+          console.log(`[APPOINTMENT] Confirmation email queued for ${customer.email}`);
           
-          if (!emailSent) {
-            emailStatus = "failed";
-            console.error("Email service unavailable for appointment confirmation");
+          // Send WhatsApp confirmation if customer has phone number
+          if (customer.phone && customer.countryCode) {
+            // Send WhatsApp confirmation asynchronously
+            WhatsAppService.sendAppointmentConfirmation(
+              customer.phone,
+              customer.countryCode,
+              appointmentData,
+              appointment.id
+            ).then((result) => {
+              if (result.success) {
+                console.log(`[APPOINTMENT] WhatsApp confirmation sent to ${customer.countryCode}${customer.phone}`);
+              } else {
+                console.error(`[APPOINTMENT] WhatsApp confirmation failed: ${result.error}`);
+              }
+            }).catch((error) => {
+              console.error(`[APPOINTMENT] WhatsApp confirmation error: ${error.message}`);
+            });
+          } else {
+            console.log("[APPOINTMENT] No phone number available for WhatsApp confirmation");
           }
         } else {
-          emailStatus = "missing_data";
-          console.error("Missing customer, service, or location data for email");
+          console.error("[APPOINTMENT] Missing customer, service, or location data for notifications");
         }
-      } catch (emailError: any) {
-        emailStatus = "error";
-        console.error("Failed to send appointment confirmation email:", emailError.message);
+      } catch (notificationError: any) {
+        console.error(`[APPOINTMENT] Notification setup failed: ${notificationError.message}`);
       }
       
-      // Include email status in response for better user feedback
-      const response: any = {
-        ...appointment,
-        emailNotification: {
-          status: emailStatus,
-          message: emailStatus === "success" 
-            ? "Confirmation email sent successfully"
-            : emailStatus === "failed"
-            ? "Appointment created but confirmation email could not be sent"
-            : emailStatus === "missing_data"
-            ? "Appointment created but email data incomplete"
-            : "Appointment created but email service encountered an error"
-        }
-      };
-      
-      res.status(201).json(response);
+      // Return appointment immediately without waiting for email
+      res.status(201).json(appointment);
     } catch (error) {
       // unified-error-handler
       handleApiError(error, "create appointment", res);
     }
-  });
+  }));
 
-  app.patch("/api/appointments/:id/status", requireAuth, asyncRoute("update appointment status", async (req, res) => {
+  app.patch("/api/appointments/:id/status", requireAuth, asyncRoute("update appointment status", async (req: any, res: any) => {
     const { id } = req.params;
     const { status } = req.body;
     
@@ -472,14 +755,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     // Atomic conflict checking is now handled in storage layer for "confirmed" status
     const updatedAppointment = await storage.updateAppointmentStatus(id, status);
     
-    // Send email notification for status updates with feedback
+    // Send notifications for status updates with feedback
     let statusEmailSent = false;
+    let statusWhatsAppSent = false;
     try {
       const service = await storage.getService(updatedAppointment!.serviceId);
       const location = await storage.getLocation(updatedAppointment!.locationId);
       
       if (customer && service && location) {
-        statusEmailSent = await EmailNotificationService.sendAppointmentStatusUpdate(customer.email, {
+        const statusData = {
           customerName: customer.name,
           serviceName: service.title,
           dateTime: new Date(updatedAppointment!.dateTime).toLocaleString('en-IN'),
@@ -487,32 +771,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
           carDetails: updatedAppointment!.carDetails,
           mechanicName: updatedAppointment!.mechanicName || undefined,
           price: updatedAppointment!.price || undefined,
-          status: status
-        });
+          status: status,
+          bookingId: updatedAppointment!.id
+        };
+
+        // Send email notification
+        statusEmailSent = await EmailNotificationService.sendAppointmentStatusUpdate(customer.email, statusData);
         
         if (!statusEmailSent) {
           console.error("Email service unavailable for status update notification");
         }
+
+        // Send WhatsApp status update if customer has phone number
+        if (customer.phone && customer.countryCode) {
+          try {
+            const whatsappResult = await WhatsAppService.sendStatusUpdate(
+              customer.phone,
+              customer.countryCode,
+              statusData,
+              updatedAppointment!.id
+            );
+            statusWhatsAppSent = whatsappResult.success;
+            
+            if (statusWhatsAppSent) {
+              console.log(`[STATUS] WhatsApp update sent to ${customer.countryCode}${customer.phone}`);
+            } else {
+              console.error(`[STATUS] WhatsApp update failed: ${whatsappResult.error}`);
+            }
+          } catch (whatsappError: any) {
+            console.error(`[STATUS] WhatsApp update error: ${whatsappError.message}`);
+            statusWhatsAppSent = false;
+          }
+        } else {
+          console.log("[STATUS] No phone number available for WhatsApp update");
+        }
       }
-    } catch (emailError: any) {
-      console.error("Failed to send status update email:", emailError.message);
+    } catch (notificationError: any) {
+      console.error("Failed to send status update notifications:", notificationError.message);
       statusEmailSent = false;
+      statusWhatsAppSent = false;
     }
     
     res.json({
       message: "Appointment status updated successfully",
       appointment: updatedAppointment,
-      emailNotification: {
-        sent: statusEmailSent,
-        message: statusEmailSent 
-          ? "Status update email sent successfully"
-          : "Status updated but notification email could not be sent"
+      notifications: {
+        email: {
+          sent: statusEmailSent,
+          message: statusEmailSent 
+            ? "Status update email sent successfully"
+            : "Status updated but notification email could not be sent"
+        },
+        whatsapp: {
+          sent: statusWhatsAppSent,
+          message: statusWhatsAppSent
+            ? "Status update WhatsApp message sent successfully"
+            : customer?.phone && customer?.countryCode
+              ? "Status updated but WhatsApp message could not be sent"
+              : "No phone number available for WhatsApp notification"
+        }
       }
     });
   }));
 
   // Reschedule appointment with full security and validation
-  app.patch("/api/appointments/:id/reschedule", requireAuth, async (req, res) => {
+  app.patch("/api/appointments/:id/reschedule", requireAuth, asyncRoute("reschedule appointment", async (req: any, res: any) => {
     try {
       const { id } = req.params;
       const user = req.user as any;
@@ -591,7 +914,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.status(500).json({ message: "Failed to reschedule appointment. Please try again." });
       }
     }
-  });
+  }));
 
   // Cars API
   app.get("/api/cars", async (req, res) => {
@@ -638,7 +961,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/cars", async (req, res) => {
+  app.post("/api/cars", requireAuth, async (req: any, res: any) => {
     try {
       const storage = await getStorage();
       const validatedData = insertCarSchema.parse(req.body);
@@ -744,7 +1067,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Contacts API
-  app.post("/api/contacts", async (req, res) => {
+  app.post("/api/contacts", requireAuth, async (req: any, res: any) => {
     try {
       const storage = await getStorage();
       const validatedData = insertContactSchema.parse(req.body);
@@ -760,7 +1083,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Locations API
-  app.get("/api/locations", async (req, res) => {
+  app.get("/api/locations", async (req: any, res: any) => {
     try {
       const storage = await getStorage();
       const locations = await storage.getAllLocations();
@@ -770,7 +1093,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/locations", async (req, res) => {
+  app.post("/api/locations", requireAdmin, async (req: any, res: any) => {
     try {
       const storage = await getStorage();
       const validatedData = insertLocationSchema.parse(req.body);

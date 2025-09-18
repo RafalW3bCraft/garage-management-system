@@ -3,17 +3,34 @@ import { pgTable, text, varchar, integer, decimal, timestamp, boolean } from "dr
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Users table - enhanced for email auth and Google OAuth
+// Users table - enhanced for mobile auth, profiles and OAuth
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: text("email").notNull().unique(),
+  email: text("email").unique(), // Optional for mobile-only registrations
   name: text("name").notNull(),
   password: text("password"), // nullable for OAuth users
   googleId: text("google_id").unique(), // for Google OAuth
-  provider: text("provider").notNull().default("email"), // "email" or "google"
+  // Mobile authentication fields
+  phone: text("phone").unique(), // For mobile OTP registration
+  phoneVerified: boolean("phone_verified").default(false),
+  countryCode: text("country_code").default("+91"), // Default to India
+  // Enhanced profile fields
+  registrationNumbers: text("registration_numbers").array(), // Vehicle registration numbers
+  dateOfBirth: timestamp("date_of_birth"),
+  profileImage: text("profile_image"), // URL to uploaded image
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  zipCode: text("zip_code"),
+  // Account settings
+  provider: text("provider").notNull().default("email"), // "email", "google", or "mobile"
+  role: text("role").notNull().default("customer"), // "customer" or "admin"
   emailVerified: boolean("email_verified").default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Ensure at least one identifier exists (email or phone)
+  checkIdentifier: sql`CONSTRAINT check_user_identifier CHECK (email IS NOT NULL OR phone IS NOT NULL)`
+}));
 
 // Customers table - people who book services
 export const customers = pgTable("customers", {
@@ -21,6 +38,7 @@ export const customers = pgTable("customers", {
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   phone: text("phone").notNull(),
+  countryCode: text("country_code").notNull().default("+91"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -104,6 +122,36 @@ export const contacts = pgTable("contacts", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// OTP verification tracking
+export const otpVerifications = pgTable("otp_verifications", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  phone: text("phone").notNull(),
+  countryCode: text("country_code").notNull(),
+  otpCodeHash: text("otp_code_hash").notNull(), // Hashed OTP for security
+  purpose: text("purpose").notNull(), // "registration", "login", "password_reset"
+  verified: boolean("verified").default(false),
+  attempts: integer("attempts").default(0),
+  maxAttempts: integer("max_attempts").default(3),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index for efficient lookups
+  phoneCountryIdx: sql`INDEX idx_phone_country ON otp_verifications(phone, country_code, expires_at)`
+}));
+
+// WhatsApp message tracking
+export const whatsappMessages = pgTable("whatsapp_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  phone: text("phone").notNull(),
+  countryCode: text("country_code"),
+  messageType: text("message_type").notNull(), // "appointment_confirmation", "booking_request", "status_update"
+  content: text("content").notNull(),
+  status: text("status").notNull().default("sent"), // sent, delivered, read, failed
+  appointmentId: varchar("appointment_id").references(() => appointments.id),
+  providerResponse: text("provider_response"), // Store API response for debugging
+  sentAt: timestamp("sent_at").defaultNow().notNull(),
+});
+
 // Insert schemas for validation
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -118,12 +166,10 @@ export const insertOAuthUserSchema = createInsertSchema(users).omit({
 });
 
 // Separate schemas for different auth flows
-// Client-side registration schema (includes confirmPassword for validation)
-export const registerSchema = insertUserSchema.pick({
-  email: true,
-  name: true,
-  password: true,
-}).extend({
+// Email registration schemas (email required)
+export const registerSchema = z.object({
+  email: z.string().email("Invalid email format"),
+  name: z.string().min(2, "Name must be at least 2 characters"),
   password: z.string().min(8, "Password must be at least 8 characters"),
   confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {
@@ -131,13 +177,12 @@ export const registerSchema = insertUserSchema.pick({
   path: ["confirmPassword"],
 });
 
-// Server-side registration schema (without confirmPassword as client strips it)
-export const serverRegisterSchema = insertUserSchema.pick({
-  email: true,
-  name: true,
-  password: true,
-}).extend({
+// Server-side email registration schema (without confirmPassword)
+export const serverRegisterSchema = z.object({
+  email: z.string().email("Invalid email format"),
+  name: z.string().min(2, "Name must be at least 2 characters"),
   password: z.string().min(8, "Password must be at least 8 characters"),
+  provider: z.literal("email").default("email"),
 });
 
 export const loginSchema = z.object({
@@ -157,6 +202,11 @@ export const insertServiceSchema = createInsertSchema(services).omit({
 export const insertAppointmentSchema = createInsertSchema(appointments).omit({
   id: true,
   createdAt: true,
+}).extend({
+  // Handle ISO string to Date conversion from frontend
+  dateTime: z.coerce.date(),
+  // Handle optional notes properly (convert empty strings to undefined)
+  notes: z.string().trim().optional().transform(v => (v === "" ? undefined : v)).optional(),
 });
 
 export const insertCarSchema = createInsertSchema(cars).omit({
@@ -179,6 +229,18 @@ export const insertBidSchema = createInsertSchema(bids).omit({
   bidTime: true,
 });
 
+export const insertOtpVerificationSchema = createInsertSchema(otpVerifications).omit({
+  id: true,
+  createdAt: true,
+  verified: true,
+  attempts: true,
+});
+
+export const insertWhatsAppMessageSchema = createInsertSchema(whatsappMessages).omit({
+  id: true,
+  sentAt: true,
+});
+
 // Place bid schema with validation
 export const placeBidSchema = z.object({
   carId: z.string().uuid({ message: "Car ID must be a valid UUID" }),
@@ -197,6 +259,60 @@ export const rescheduleAppointmentSchema = z.object({
     }),
   locationId: z.string()
     .uuid({ message: "Location ID must be a valid UUID" })
+});
+
+// Mobile registration schemas
+export const sendOtpSchema = z.object({
+  phone: z.string()
+    .min(10, "Phone number must be at least 10 digits")
+    .max(15, "Phone number cannot exceed 15 digits")
+    .regex(/^\d+$/, "Phone number must contain only digits"),
+  countryCode: z.string()
+    .regex(/^\+\d{1,4}$/, "Invalid country code format"),
+  purpose: z.enum(["registration", "login", "password_reset"], {
+    errorMap: () => ({ message: "Purpose must be registration, login, or password_reset" })
+  })
+});
+
+export const verifyOtpSchema = z.object({
+  phone: z.string()
+    .min(10, "Phone number must be at least 10 digits")
+    .max(15, "Phone number cannot exceed 15 digits")
+    .regex(/^\d+$/, "Phone number must contain only digits"),
+  countryCode: z.string()
+    .regex(/^\+\d{1,4}$/, "Invalid country code format"),
+  otpCode: z.string()
+    .length(6, "OTP must be exactly 6 digits")
+    .regex(/^\d{6}$/, "OTP must contain only numbers")
+});
+
+export const mobileRegisterSchema = z.object({
+  phone: z.string()
+    .min(10, "Phone number must be at least 10 digits")
+    .max(15, "Phone number cannot exceed 15 digits")
+    .regex(/^\d+$/, "Phone number must contain only digits"),
+  countryCode: z.string()
+    .regex(/^\+\d{1,4}$/, "Invalid country code format"),
+  name: z.string().min(2, "Name must be at least 2 characters"),
+  email: z.string().email("Invalid email format").optional(),
+  dateOfBirth: z.string().datetime().optional(),
+  registrationNumbers: z.array(z.string()).optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zipCode: z.string().optional(),
+});
+
+export const updateProfileSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters").optional(),
+  email: z.string().email("Invalid email format").optional(),
+  dateOfBirth: z.string().datetime().optional(),
+  registrationNumbers: z.array(z.string()).optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zipCode: z.string().optional(),
+  profileImage: z.string().url("Invalid image URL").optional(),
 });
 
 // Types
@@ -223,3 +339,22 @@ export type InsertLocation = z.infer<typeof insertLocationSchema>;
 
 export type Bid = typeof bids.$inferSelect;
 export type InsertBid = z.infer<typeof insertBidSchema>;
+
+export type OtpVerification = typeof otpVerifications.$inferSelect;
+export type InsertOtpVerification = z.infer<typeof insertOtpVerificationSchema>;
+
+export type WhatsAppMessage = typeof whatsappMessages.$inferSelect;
+export type InsertWhatsAppMessage = z.infer<typeof insertWhatsAppMessageSchema>;
+
+// Enhanced appointment type with resolved names for frontend display
+export type AppointmentWithDetails = Appointment & {
+  serviceName: string;
+  locationName: string;
+  customerName: string;
+};
+
+// Mobile registration and OTP types
+export type SendOtpRequest = z.infer<typeof sendOtpSchema>;
+export type VerifyOtpRequest = z.infer<typeof verifyOtpSchema>;
+export type MobileRegisterRequest = z.infer<typeof mobileRegisterSchema>;
+export type UpdateProfileRequest = z.infer<typeof updateProfileSchema>;

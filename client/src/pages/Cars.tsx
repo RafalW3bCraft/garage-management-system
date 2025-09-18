@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { CarCard } from "@/components/CarCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -331,11 +332,15 @@ export default function Cars() {
             List your car with us and reach thousands of potential buyers
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Button size="lg" data-testid="button-sell-car">
-              List Your Car
+            <Button size="lg" data-testid="button-sell-car" asChild>
+              <Link href="/contact">
+                List Your Car
+              </Link>
             </Button>
-            <Button size="lg" variant="outline" data-testid="button-auction-car">
-              Start an Auction
+            <Button size="lg" variant="outline" data-testid="button-auction-car" asChild>
+              <Link href="/contact">
+                Start an Auction
+              </Link>
             </Button>
           </div>
         </div>

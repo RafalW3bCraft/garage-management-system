@@ -1,17 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { format } from "date-fns";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequestJson, apiRequestVoid } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -31,9 +32,9 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
-import { CalendarIcon, Clock, MapPin } from "lucide-react";
+import { CalendarIcon, Clock, MapPin, Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Service, Location } from "@shared/schema";
+import type { Service, Location, Customer, Appointment } from "@shared/schema";
 
 const bookingSchema = z.object({
   carDetails: z.string().min(5, "Please provide car details (make, model, year, registration)"),
@@ -53,12 +54,18 @@ interface BookingDialogProps {
 export function BookingDialog({ children, service }: BookingDialogProps) {
   const [open, setOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>();
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
+  const [timeSlotAvailability, setTimeSlotAvailability] = useState<Record<string, boolean>>({});
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Fetch available locations
-  const { data: locations = [] } = useQuery<Location[]>({
+  // Fetch available locations with loading state
+  const { 
+    data: locations = [], 
+    isLoading: locationsLoading,
+    error: locationsError 
+  } = useQuery<Location[]>({
     queryKey: ["/api/locations"],
     enabled: open,
   });
@@ -80,26 +87,95 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
     "16:00", "16:30", "17:00", "17:30", "18:00"
   ];
 
+  // Real-time availability checking when date/location changes
+  useEffect(() => {
+    const checkTimeSlotAvailability = async () => {
+      const selectedLocation = form.watch("locationId");
+      const currentDate = selectedDate;
+      
+      if (!currentDate || !selectedLocation) {
+        setTimeSlotAvailability({});
+        return;
+      }
+
+      setCheckingAvailability(true);
+      
+      try {
+        // Check availability for all time slots
+        const availabilityChecks = await Promise.all(
+          timeSlots.map(async (timeSlot) => {
+            const [hours, minutes] = timeSlot.split(':').map(Number);
+            const checkDateTime = new Date(currentDate);
+            checkDateTime.setHours(hours, minutes, 0, 0);
+
+            try {
+              const result = await apiRequestJson<{ hasConflict: boolean }>("POST", "/api/appointments/check-conflict", {
+                locationId: selectedLocation,
+                dateTime: checkDateTime.toISOString()
+              });
+              
+              return { timeSlot, available: !result.hasConflict };
+            } catch (error) {
+              console.warn(`Failed to check availability for ${timeSlot}:`, error);
+              return { timeSlot, available: true }; // Assume available if check fails
+            }
+          })
+        );
+
+        const availability = availabilityChecks.reduce((acc, { timeSlot, available }) => {
+          acc[timeSlot] = available;
+          return acc;
+        }, {} as Record<string, boolean>);
+
+        setTimeSlotAvailability(availability);
+      } catch (error) {
+        console.error("Failed to check time slot availability:", error);
+        // Reset availability on error
+        setTimeSlotAvailability({});
+      } finally {
+        setCheckingAvailability(false);
+      }
+    };
+
+    // Debounce the availability check
+    const timeoutId = setTimeout(checkTimeSlotAvailability, 300);
+    return () => clearTimeout(timeoutId);
+  }, [selectedDate, form.watch("locationId")]);
+
   const createAppointmentMutation = useMutation({
     mutationFn: async (data: BookingData) => {
       if (!user) throw new Error("User not authenticated");
+      
+      // Ensure customer exists for authenticated user (secure endpoint)
+      const customer = await apiRequestJson<Customer>("POST", "/api/customers/ensure-own", {});
       
       // Combine date and time
       const [hours, minutes] = data.timeSlot.split(':').map(Number);
       const appointmentDateTime = new Date(data.dateTime);
       appointmentDateTime.setHours(hours, minutes, 0, 0);
 
+      // Check for conflicts before creating appointment
+      const conflictCheck = await apiRequestJson<{ hasConflict: boolean }>("POST", "/api/appointments/check-conflict", {
+        locationId: data.locationId,
+        dateTime: appointmentDateTime.toISOString()
+      });
+
+      if (conflictCheck.hasConflict) {
+        throw new Error("This time slot is no longer available. Please choose a different time.");
+      }
+
       const appointmentData = {
+        customerId: customer.id,
         serviceId: service.id,
         locationId: data.locationId,
         carDetails: data.carDetails,
         dateTime: appointmentDateTime.toISOString(),
         estimatedDuration: service.duration,
         price: service.price,
-        notes: data.notes || null,
+        notes: data.notes || undefined,
       };
 
-      return apiRequest("POST", "/api/appointments", appointmentData);
+      return apiRequestJson<Appointment>("POST", "/api/appointments", appointmentData);
     },
     onSuccess: () => {
       toast({
@@ -120,9 +196,27 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
       setSelectedDate(undefined);
     },
     onError: (error: any) => {
+      console.error("Booking error:", error);
+      
+      let errorMessage = "Failed to book appointment. Please try again.";
+      
+      if (error.message) {
+        if (error.message.includes("time slot")) {
+          errorMessage = error.message;
+        } else if (error.message.includes("conflict")) {
+          errorMessage = "This time slot is no longer available. Please choose a different time.";
+        } else if (error.message.includes("authentication")) {
+          errorMessage = "Please log in to book an appointment.";
+        } else if (error.message.includes("validation")) {
+          errorMessage = "Please check all required fields and try again.";
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      
       toast({
         title: "Booking Failed",
-        description: error.message || "Failed to book appointment. Please try again.",
+        description: errorMessage,
         variant: "destructive",
       });
     },
@@ -204,9 +298,11 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
                           field.onChange(date);
                           setSelectedDate(date);
                         }}
-                        disabled={(date) =>
-                          date < new Date() || date < new Date("1900-01-01")
-                        }
+                        disabled={(date) => {
+                          const today = new Date();
+                          today.setHours(0, 0, 0, 0);
+                          return date < today;
+                        }}
                         initialFocus
                       />
                     </PopoverContent>
@@ -216,59 +312,108 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               )}
             />
 
-            {/* Time Slot */}
+            {/* Time Slot with Availability Indicators */}
             <FormField
               control={form.control}
               name="timeSlot"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Time Slot</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                      <SelectTrigger data-testid="select-time-slot">
-                        <SelectValue placeholder="Select a time" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {timeSlots.map((time) => (
-                        <SelectItem key={time} value={time}>
-                          <div className="flex items-center gap-2">
-                            <Clock className="h-4 w-4" />
-                            {time}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <FormLabel className="flex items-center">
+                    Time Slot
+                    {checkingAvailability && (
+                      <Loader2 className="inline w-4 h-4 ml-2 animate-spin text-muted-foreground" />
+                    )}
+                  </FormLabel>
+                  {checkingAvailability ? (
+                    <Skeleton className="h-10 w-full" data-testid="skeleton-time-slots" />
+                  ) : (
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-time-slot">
+                          <SelectValue placeholder="Select a time" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {timeSlots.map((time) => {
+                          const isAvailable = timeSlotAvailability[time] !== false;
+                          const hasAvailabilityInfo = time in timeSlotAvailability;
+                          
+                          return (
+                            <SelectItem 
+                              key={time} 
+                              value={time}
+                              disabled={hasAvailabilityInfo && !isAvailable}
+                              className={cn(
+                                "flex items-center justify-between",
+                                !isAvailable && hasAvailabilityInfo && "opacity-50"
+                              )}
+                            >
+                              <div className="flex items-center gap-2 flex-1">
+                                <Clock className="h-4 w-4" />
+                                {time}
+                              </div>
+                              {hasAvailabilityInfo && (
+                                isAvailable ? (
+                                  <CheckCircle2 className="w-4 h-4 text-green-600" />
+                                ) : (
+                                  <XCircle className="w-4 h-4 text-red-600" />
+                                )
+                              )}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {selectedDate && form.watch("locationId") && !checkingAvailability && (
+                    <FormDescription className="text-xs flex items-center gap-3">
+                      <span className="flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3 text-green-600" />
+                        Available
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <XCircle className="w-3 h-3 text-red-600" />
+                        Unavailable
+                      </span>
+                    </FormDescription>
+                  )}
                   <FormMessage />
                 </FormItem>
               )}
             />
 
-            {/* Location */}
+            {/* Location with Loading State */}
             <FormField
               control={form.control}
               name="locationId"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Service Location</FormLabel>
-                  <Select onValueChange={field.onChange} defaultValue={field.value}>
-                    <FormControl>
-                      <SelectTrigger data-testid="select-location">
-                        <SelectValue placeholder="Select a location" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {locations.map((location) => (
-                        <SelectItem key={location.id} value={location.id}>
-                          <div className="flex items-center gap-2">
-                            <MapPin className="h-4 w-4" />
-                            {location.name} - {location.address}
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {locationsLoading ? (
+                    <Skeleton className="h-10 w-full" data-testid="skeleton-locations" />
+                  ) : locationsError ? (
+                    <div className="text-sm text-destructive p-2 border border-destructive/50 rounded-md">
+                      Failed to load locations. Please refresh and try again.
+                    </div>
+                  ) : (
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-location">
+                          <SelectValue placeholder="Select a location" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {locations.map((location) => (
+                          <SelectItem key={location.id} value={location.id}>
+                            <div className="flex items-center gap-2">
+                              <MapPin className="h-4 w-4" />
+                              {location.name} - {location.address}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                   <FormMessage />
                 </FormItem>
               )}

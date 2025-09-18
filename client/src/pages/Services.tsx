@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { ServiceCard } from "@/components/ServiceCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -252,11 +253,15 @@ export default function Services() {
             Can't find what you're looking for? Contact us for custom service packages
           </p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Button size="lg" data-testid="button-contact-custom">
-              Contact Us
+            <Button size="lg" data-testid="button-contact-custom" asChild>
+              <Link href="/contact">
+                Contact Us
+              </Link>
             </Button>
-            <Button size="lg" variant="outline" data-testid="button-call-custom">
-              Call: +91-98765-43210
+            <Button size="lg" variant="outline" data-testid="button-call-custom" asChild>
+              <a href="tel:+919876543210">
+                Call: +91-98765-43210
+              </a>
             </Button>
           </div>
         </div>

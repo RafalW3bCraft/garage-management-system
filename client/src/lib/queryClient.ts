@@ -2,8 +2,30 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    // Try to parse JSON error response for standardized {message} format
+    let errorMessage = res.statusText;
+    
+    try {
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        const errorBody = await res.json();
+        if (errorBody && typeof errorBody.message === 'string') {
+          errorMessage = errorBody.message;
+        } else {
+          errorMessage = JSON.stringify(errorBody);
+        }
+      } else {
+        const text = await res.text();
+        if (text) errorMessage = text;
+      }
+    } catch {
+      // Fallback to status text if JSON parsing fails
+      errorMessage = res.statusText || `HTTP ${res.status}`;
+    }
+    
+    const error = new Error(errorMessage);
+    (error as any).status = res.status;
+    throw error;
   }
 }
 
@@ -21,6 +43,34 @@ export async function apiRequest(
 
   await throwIfResNotOk(res);
   return res;
+}
+
+// Type-safe API request functions to eliminate double assertions
+export async function apiRequestJson<T>(
+  method: string,
+  url: string,
+  data?: unknown | undefined,
+): Promise<T> {
+  const res = await apiRequest(method, url, data);
+  
+  // Handle empty responses (204 No Content)
+  if (res.status === 204 || res.headers.get('content-length') === '0') {
+    return undefined as T;
+  }
+  
+  try {
+    return await res.json() as T;
+  } catch (error) {
+    throw new Error(`Failed to parse JSON response from ${method} ${url}`);
+  }
+}
+
+export async function apiRequestVoid(
+  method: string,
+  url: string,
+  data?: unknown | undefined,
+): Promise<void> {
+  await apiRequest(method, url, data);
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";

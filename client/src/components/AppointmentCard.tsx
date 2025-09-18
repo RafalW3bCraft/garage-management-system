@@ -1,11 +1,13 @@
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, Car, MapPin, User } from "lucide-react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { RescheduleDialog } from "@/components/RescheduleDialog";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { Calendar, Clock, MapPin, User, Car, IndianRupee, X, CheckCircle, AlertCircle } from "lucide-react";
+import { RescheduleDialog } from "./RescheduleDialog";
 
 interface AppointmentCardProps {
   id: string;
@@ -20,6 +22,28 @@ interface AppointmentCardProps {
   price?: number;
 }
 
+const getStatusColor = (status: string) => {
+  switch (status) {
+    case 'confirmed': return 'bg-blue-100 text-blue-800 border-blue-200';
+    case 'pending': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+    case 'in-progress': return 'bg-purple-100 text-purple-800 border-purple-200';
+    case 'completed': return 'bg-green-100 text-green-800 border-green-200';
+    case 'cancelled': return 'bg-red-100 text-red-800 border-red-200';
+    default: return 'bg-gray-100 text-gray-800 border-gray-200';
+  }
+};
+
+const getStatusIcon = (status: string) => {
+  switch (status) {
+    case 'confirmed': return <CheckCircle className="h-4 w-4" />;
+    case 'pending': return <Clock className="h-4 w-4" />;
+    case 'in-progress': return <AlertCircle className="h-4 w-4" />;
+    case 'completed': return <CheckCircle className="h-4 w-4" />;
+    case 'cancelled': return <X className="h-4 w-4" />;
+    default: return <Clock className="h-4 w-4" />;
+  }
+};
+
 export function AppointmentCard({
   id,
   serviceType,
@@ -32,183 +56,128 @@ export function AppointmentCard({
   locationId,
   price
 }: AppointmentCardProps) {
+  const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const updateStatusMutation = useMutation({
-    mutationFn: async (newStatus: string) => {
-      return apiRequest("PATCH", `/api/appointments/${id}/status`, { status: newStatus });
-    },
-    onSuccess: (data, newStatus) => {
+  const handleStatusUpdate = async (newStatus: string) => {
+    setIsLoading(true);
+    try {
+      await apiRequest("PATCH", `/api/appointments/${id}/status`, { status: newStatus });
+
       toast({
-        title: "Appointment Updated",
+        title: "Success",
         description: `Appointment ${newStatus} successfully.`,
       });
-      // Invalidate appointment queries to refresh the list
+
+      // Refresh appointments
       queryClient.invalidateQueries({ 
         predicate: (query) => 
           typeof query.queryKey?.[0] === 'string' && 
           (query.queryKey[0] as string).startsWith('/api/appointments')
       });
-    },
-    onError: () => {
+    } catch (error: any) {
       toast({
         title: "Error",
-        description: "Failed to update appointment. Please try again.",
+        description: error.message || `Failed to ${newStatus} appointment.`,
         variant: "destructive",
       });
-    },
-  });
-  
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "pending": return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200";
-      case "confirmed": return "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200";
-      case "in-progress": return "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200";
-      case "completed": return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200";
-      case "cancelled": return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200";
-      default: return "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200";
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const getStatusActions = () => {
-    switch (status) {
-      case "pending":
-        return (
-          <div className="flex gap-2">
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={() => updateStatusMutation.mutate("cancelled")}
-              disabled={updateStatusMutation.isPending}
-              data-testid={`button-cancel-${id}`}
-            >
-              {updateStatusMutation.isPending ? "Cancelling..." : "Cancel"}
-            </Button>
-            <Button 
-              size="sm"
-              onClick={() => updateStatusMutation.mutate("confirmed")}
-              disabled={updateStatusMutation.isPending}
-              data-testid={`button-confirm-${id}`}
-            >
-              {updateStatusMutation.isPending ? "Confirming..." : "Confirm"}
-            </Button>
-          </div>
-        );
-      case "confirmed":
-        return (
-          <div className="flex gap-2">
-            <RescheduleDialog 
-              appointmentId={id}
-              currentDateTime={dateTime}
-              currentLocationId={locationId}
-            >
-              <Button 
-                variant="outline" 
-                size="sm"
-                data-testid={`button-reschedule-${id}`}
-              >
-                Reschedule
-              </Button>
-            </RescheduleDialog>
-            <Button 
-              size="sm"
-              onClick={() => {
-                toast({
-                  title: "Appointment Details",
-                  description: `${serviceType} for ${carDetails} on ${dateTime}`,
-                });
-              }}
-              data-testid={`button-details-${id}`}
-            >
-              View Details
-            </Button>
-          </div>
-        );
-      case "completed":
-        return (
-          <Button 
-            size="sm"
-            onClick={() => {
-              toast({
-                title: "Leave Feedback",
-                description: "Feedback system coming soon. We value your input!",
-              });
-            }}
-            data-testid={`button-feedback-${id}`}
-          >
-            Leave Feedback
-          </Button>
-        );
-      default:
-        return (
-          <Button 
-            variant="outline" 
-            size="sm"
-            onClick={() => {
-              toast({
-                title: "Appointment Details",
-                description: `${serviceType} for ${carDetails} scheduled for ${dateTime}`,
-              });
-            }}
-            data-testid={`button-view-${id}`}
-          >
-            View
-          </Button>
-        );
-    }
-  };
+  const canCancel = status === 'pending' || status === 'confirmed';
+  const canReschedule = status === 'confirmed';
+  const isPast = new Date(dateTime) < new Date();
 
   return (
-    <Card className="hover-elevate">
-      <CardHeader>
-        <div className="flex justify-between items-start">
-          <div>
-            <CardTitle className="text-lg">{serviceType}</CardTitle>
-            <CardDescription className="flex items-center gap-1 mt-1">
-              <Car className="h-4 w-4" />
-              {carDetails}
-            </CardDescription>
-          </div>
-          <Badge className={getStatusColor(status)}>
+    <Card className="relative overflow-hidden">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-lg">{serviceType}</CardTitle>
+          <Badge className={`${getStatusColor(status)} flex items-center gap-1`}>
+            {getStatusIcon(status)}
             {status.charAt(0).toUpperCase() + status.slice(1)}
           </Badge>
         </div>
+        <CardDescription className="flex items-center gap-1">
+          <Car className="h-4 w-4" />
+          {carDetails}
+        </CardDescription>
       </CardHeader>
 
-      <CardContent>
-        <div className="space-y-3">
-          <div className="flex items-center gap-2 text-sm">
+      <CardContent className="space-y-3">
+        <div className="grid grid-cols-1 gap-2 text-sm">
+          <div className="flex items-center gap-2">
             <Calendar className="h-4 w-4 text-muted-foreground" />
             <span>{dateTime}</span>
           </div>
-          
-          <div className="flex items-center gap-2 text-sm">
+
+          <div className="flex items-center gap-2">
             <Clock className="h-4 w-4 text-muted-foreground" />
-            <span>Duration: {estimatedDuration}</span>
+            <span>{estimatedDuration}</span>
           </div>
-          
-          <div className="flex items-center gap-2 text-sm">
-            <User className="h-4 w-4 text-muted-foreground" />
-            <span>Mechanic: {mechanicName}</span>
-          </div>
-          
-          <div className="flex items-center gap-2 text-sm">
+
+          <div className="flex items-center gap-2">
             <MapPin className="h-4 w-4 text-muted-foreground" />
             <span>{location}</span>
           </div>
 
+          <div className="flex items-center gap-2">
+            <User className="h-4 w-4 text-muted-foreground" />
+            <span>{mechanicName}</span>
+          </div>
+
           {price && (
-            <div className="text-lg font-semibold text-accent">
-              ₹{price.toLocaleString('en-IN')}
+            <div className="flex items-center gap-2">
+              <IndianRupee className="h-4 w-4 text-muted-foreground" />
+              <span>₹{price.toLocaleString('en-IN')}</span>
             </div>
           )}
         </div>
-      </CardContent>
 
-      <CardFooter>
-        {getStatusActions()}
-      </CardFooter>
+        {/* Action Buttons */}
+        {!isPast && (status === 'pending' || status === 'confirmed') && (
+          <div className="flex gap-2 pt-2 border-t">
+            {canReschedule && (
+              <RescheduleDialog appointmentId={id} locationId={locationId}>
+                <Button variant="outline" size="sm" disabled={isLoading}>
+                  Reschedule
+                </Button>
+              </RescheduleDialog>
+            )}
+
+            {canCancel && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" size="sm" disabled={isLoading}>
+                    <X className="h-4 w-4 mr-1" />
+                    Cancel
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Cancel Appointment</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Are you sure you want to cancel this appointment? This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Keep Appointment</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => handleStatusUpdate('cancelled')}
+                      className="bg-red-600 hover:bg-red-700"
+                    >
+                      Cancel Appointment
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+          </div>
+        )}
+      </CardContent>
     </Card>
   );
 }
