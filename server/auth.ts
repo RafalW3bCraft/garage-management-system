@@ -28,16 +28,12 @@ passport.deserializeUser(async (id: string, done) => {
     }
     done(null, user);
   } catch (error: any) {
+    // Log detailed error for debugging (server-side only)
     console.error(`Session deserialization error for user ${id}:`, error.message);
     
-    // Handle specific error types
-    if (error.code && error.code.startsWith('2')) {
-      // Database connection/constraint errors
-      return done(new Error("Database connection issue. Please try logging in again."), null);
-    }
-    
-    // Generic session error - force re-login
-    done(new Error("Session validation failed. Please log in again."), null);
+    // Always return a generic session error to prevent information disclosure
+    // Don't reveal database structure, error codes, or internal system details
+    done(new Error("Your session has expired. Please log in again."), null);
   }
 });
 

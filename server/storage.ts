@@ -43,22 +43,30 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
   linkGoogleAccount(userId: string, googleId: string): Promise<User | undefined>;
+  // Admin user management methods
+  getUserCount(): Promise<number>;
+  getAllUsers(offset?: number, limit?: number): Promise<User[]>;
 
   // Customers
   getCustomer(id: string): Promise<Customer | undefined>;
   getCustomerByEmail(email: string): Promise<Customer | undefined>;
+  getCustomerByUserId(userId: string): Promise<Customer | undefined>;
   createCustomer(customer: InsertCustomer): Promise<Customer>;
+  updateCustomer(id: string, updates: Partial<InsertCustomer>): Promise<Customer | undefined>;
   
   // Services
   getAllServices(): Promise<Service[]>;
   getService(id: string): Promise<Service | undefined>;
   getServicesByCategory(category: string): Promise<Service[]>;
   createService(service: InsertService): Promise<Service>;
+  updateService(id: string, updates: Partial<Service>): Promise<Service | undefined>;
+  deleteService(id: string): Promise<void>;
   
   // Appointments
   getAllAppointments(): Promise<AppointmentWithDetails[]>;
   getAppointment(id: string): Promise<Appointment | undefined>;
   getAppointmentsByCustomer(customerId: string): Promise<AppointmentWithDetails[]>;
+  getAppointmentsByService(serviceId: string): Promise<Appointment[]>;
   createAppointment(appointment: InsertAppointment): Promise<Appointment>;
   updateAppointmentStatus(id: string, status: string): Promise<Appointment | undefined>;
   rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined>;
@@ -178,6 +186,21 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  // Admin user management methods
+  async getUserCount(): Promise<number> {
+    const db = await getDb();
+    const result = await db.select({ count: sql<number>`cast(count(*) as integer)` }).from(users);
+    return result[0].count;
+  }
+
+  async getAllUsers(offset: number = 0, limit: number = 100): Promise<User[]> {
+    const db = await getDb();
+    return await db.select().from(users)
+      .orderBy(desc(users.createdAt))
+      .offset(offset)
+      .limit(limit);
+  }
+
   // Customers
   async getCustomer(id: string): Promise<Customer | undefined> {
     const db = await getDb();
@@ -191,9 +214,21 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
+  async getCustomerByUserId(userId: string): Promise<Customer | undefined> {
+    const db = await getDb();
+    const result = await db.select().from(customers).where(eq(customers.userId, userId)).limit(1);
+    return result[0];
+  }
+
   async createCustomer(customer: InsertCustomer): Promise<Customer> {
     const db = await getDb();
     const result = await db.insert(customers).values(customer).returning();
+    return result[0];
+  }
+
+  async updateCustomer(id: string, updates: Partial<InsertCustomer>): Promise<Customer | undefined> {
+    const db = await getDb();
+    const result = await db.update(customers).set(updates).where(eq(customers.id, id)).returning();
     return result[0];
   }
 
@@ -218,6 +253,17 @@ export class DatabaseStorage implements IStorage {
     const db = await getDb();
     const result = await db.insert(services).values(service).returning();
     return result[0];
+  }
+
+  async updateService(id: string, updates: Partial<Service>): Promise<Service | undefined> {
+    const db = await getDb();
+    const result = await db.update(services).set(updates).where(eq(services.id, id)).returning();
+    return result[0];
+  }
+
+  async deleteService(id: string): Promise<void> {
+    const db = await getDb();
+    await db.delete(services).where(eq(services.id, id));
   }
 
   // Appointments
@@ -291,6 +337,12 @@ export class DatabaseStorage implements IStorage {
       .where(eq(appointments.customerId, customerId))
       .orderBy(desc(appointments.dateTime));
     
+    return result;
+  }
+
+  async getAppointmentsByService(serviceId: string): Promise<Appointment[]> {
+    const db = await getDb();
+    const result = await db.select().from(appointments).where(eq(appointments.serviceId, serviceId));
     return result;
   }
 
@@ -681,7 +733,10 @@ export class MemStorage implements IStorage {
         category: "maintenance",
         features: ["Engine oil replacement", "Oil filter change", "Free inspection", "Digital report"],
         popular: false,
-        icon: "droplets"
+        icon: "droplets",
+        providerName: "Rajesh Kumar",
+        providerPhone: "9876543210",
+        providerCountryCode: "+91"
       },
       {
         id: "svc-2",
@@ -692,7 +747,10 @@ export class MemStorage implements IStorage {
         category: "maintenance",
         features: ["Full inspection", "Oil change", "Brake check", "AC service", "Washing"],
         popular: true,
-        icon: "car"
+        icon: "car",
+        providerName: "Amit Sharma",
+        providerPhone: "9876543211",
+        providerCountryCode: "+91"
       }
     ];
 
@@ -924,6 +982,16 @@ export class MemStorage implements IStorage {
     return updatedUser;
   }
 
+  // Admin user management methods
+  async getUserCount(): Promise<number> {
+    return this.users.size;
+  }
+
+  async getAllUsers(offset: number = 0, limit: number = 100): Promise<User[]> {
+    const allUsers = Array.from(this.users.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return allUsers.slice(offset, offset + limit);
+  }
+
   // Customers
   async getCustomer(id: string): Promise<Customer | undefined> {
     return this.customers.get(id);
@@ -933,11 +1001,36 @@ export class MemStorage implements IStorage {
     return Array.from(this.customers.values()).find(customer => customer.email === email);
   }
 
+  async getCustomerByUserId(userId: string): Promise<Customer | undefined> {
+    return Array.from(this.customers.values()).find(customer => customer.userId === userId);
+  }
+
   async createCustomer(customer: InsertCustomer): Promise<Customer> {
     const id = randomUUID();
-    const newCustomer: Customer = { ...customer, id, createdAt: new Date() };
+    const newCustomer: Customer = { 
+      ...customer, 
+      id, 
+      userId: customer.userId || null,
+      countryCode: customer.countryCode || "+91",
+      createdAt: new Date() 
+    };
     this.customers.set(id, newCustomer);
     return newCustomer;
+  }
+
+  async updateCustomer(id: string, updates: Partial<InsertCustomer>): Promise<Customer | undefined> {
+    const existingCustomer = this.customers.get(id);
+    if (!existingCustomer) {
+      return undefined;
+    }
+    
+    const updatedCustomer: Customer = {
+      ...existingCustomer,
+      ...updates
+    };
+    
+    this.customers.set(id, updatedCustomer);
+    return updatedCustomer;
   }
 
   // Services
@@ -957,9 +1050,30 @@ export class MemStorage implements IStorage {
 
   async createService(service: InsertService): Promise<Service> {
     const id = randomUUID();
-    const newService: Service = { ...service, id, popular: service.popular ?? false, icon: service.icon ?? null };
+    const newService: Service = { 
+      ...service, 
+      id, 
+      popular: service.popular ?? false, 
+      icon: service.icon ?? null,
+      providerName: service.providerName ?? null,
+      providerPhone: service.providerPhone ?? null,
+      providerCountryCode: service.providerCountryCode ?? null
+    };
     this.services.set(id, newService);
     return newService;
+  }
+
+  async updateService(id: string, updates: Partial<Service>): Promise<Service | undefined> {
+    const service = this.services.get(id);
+    if (!service) return undefined;
+    
+    const updatedService = { ...service, ...updates };
+    this.services.set(id, updatedService);
+    return updatedService;
+  }
+
+  async deleteService(id: string): Promise<void> {
+    this.services.delete(id);
   }
 
   // Appointments
@@ -1004,6 +1118,11 @@ export class MemStorage implements IStorage {
         customerName: customer?.name || `Unknown Customer (${apt.customerId})`
       };
     });
+  }
+
+  async getAppointmentsByService(serviceId: string): Promise<Appointment[]> {
+    return Array.from(this.appointments.values())
+      .filter(apt => apt.serviceId === serviceId);
   }
 
   async createAppointment(appointment: InsertAppointment): Promise<Appointment> {

@@ -40,8 +40,12 @@ export default function AdminDashboard() {
     queryKey: ["/api/cars"],
   });
 
-  const isLoading = appointmentsLoading || servicesLoading || locationsLoading || carsLoading;
-  const hasErrors = appointmentsError || servicesError || locationsError || carsError;
+  const { data: userCountData = { count: 0 }, isLoading: userCountLoading, isError: userCountError } = useQuery<{ count: number }>({
+    queryKey: ["/api/admin/users/count"],
+  });
+
+  const isLoading = appointmentsLoading || servicesLoading || locationsLoading || carsLoading || userCountLoading;
+  const hasErrors = appointmentsError || servicesError || locationsError || carsError || userCountError;
 
   // Calculate statistics
   const stats = {
@@ -93,7 +97,7 @@ export default function AdminDashboard() {
       description: "Manage customer accounts and permissions",
       icon: Users,
       href: "/admin/users",
-      count: 0, // Will add user count when API is available
+      count: userCountData.count,
       color: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300",
     },
   ];

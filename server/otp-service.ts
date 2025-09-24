@@ -1,46 +1,13 @@
 import crypto from 'crypto';
 import { getStorage } from './storage';
 
-// Country codes for phone number validation and formatting (India as main land + international markets)
+// Country codes for phone number validation and formatting (India primary + Universal format)
 export const SUPPORTED_COUNTRIES = [
-  // Primary market - India as main land
+  // Primary market - India 
   { code: '+91', name: 'India', flag: '🇮🇳' },
   
-  // Major English-speaking markets
-  { code: '+1', name: 'US/Canada', flag: '🇺🇸' },
-  { code: '+44', name: 'United Kingdom', flag: '🇬🇧' },
-  { code: '+61', name: 'Australia', flag: '🇦🇺' },
-  { code: '+64', name: 'New Zealand', flag: '🇳🇿' },
-  
-  // Gulf & Middle East (major Indian diaspora)
-  { code: '+971', name: 'UAE', flag: '🇦🇪' },
-  { code: '+966', name: 'Saudi Arabia', flag: '🇸🇦' },
-  { code: '+965', name: 'Kuwait', flag: '🇰🇼' },
-  { code: '+973', name: 'Bahrain', flag: '🇧🇭' },
-  { code: '+974', name: 'Qatar', flag: '🇶🇦' },
-  { code: '+968', name: 'Oman', flag: '🇴🇲' },
-  
-  // South & Southeast Asia
-  { code: '+65', name: 'Singapore', flag: '🇸🇬' },
-  { code: '+60', name: 'Malaysia', flag: '🇲🇾' },
-  { code: '+66', name: 'Thailand', flag: '🇹🇭' },
-  { code: '+62', name: 'Indonesia', flag: '🇮🇩' },
-  { code: '+63', name: 'Philippines', flag: '🇵🇭' },
-  { code: '+84', name: 'Vietnam', flag: '🇻🇳' },
-  
-  // Europe
-  { code: '+49', name: 'Germany', flag: '🇩🇪' },
-  { code: '+33', name: 'France', flag: '🇫🇷' },
-  { code: '+39', name: 'Italy', flag: '🇮🇹' },
-  { code: '+34', name: 'Spain', flag: '🇪🇸' },
-  { code: '+31', name: 'Netherlands', flag: '🇳🇱' },
-  
-  // Asia Pacific & Other Major Markets
-  { code: '+86', name: 'China', flag: '🇨🇳' },
-  { code: '+81', name: 'Japan', flag: '🇯🇵' },
-  { code: '+82', name: 'South Korea', flag: '🇰🇷' },
-  { code: '+55', name: 'Brazil', flag: '🇧🇷' },
-  { code: '+7', name: 'Russia', flag: '🇷🇺' },
+  // Universal format for all other countries
+  { code: 'UNIVERSAL', name: 'Other Countries', flag: '🌍' },
 ] as const;
 
 export interface OtpSendResult {
@@ -337,20 +304,23 @@ export class OTPService {
    * Validate phone number format
    */
   static validatePhoneNumber(phone: string, countryCode: string): { valid: boolean; message?: string } {
-    // Check if country code is supported
-    const supportedCountry = SUPPORTED_COUNTRIES.find(c => c.code === countryCode);
-    if (!supportedCountry) {
-      return { valid: false, message: 'Unsupported country code' };
+    // For India - strict 10-digit validation
+    if (countryCode === '+91') {
+      if (!/^[6-9]\d{9}$/.test(phone)) {
+        return { valid: false, message: 'Enter valid 10-digit Indian mobile number starting with 6-9' };
+      }
     }
-
-    // Basic phone number validation
-    if (!/^\d{7,15}$/.test(phone)) {
-      return { valid: false, message: 'Phone number must be 7-15 digits' };
-    }
-
-    // India-specific validation
-    if (countryCode === '+91' && !/^[6-9]\d{9}$/.test(phone)) {
-      return { valid: false, message: 'Invalid Indian mobile number format' };
+    // For Universal format - basic international validation
+    else {
+      // Validate that countryCode is a proper international format
+      if (!/^\+\d{1,4}$/.test(countryCode)) {
+        return { valid: false, message: 'Enter valid country code (e.g., +1, +44, +86)' };
+      }
+      
+      // Basic phone number validation for international
+      if (!/^\d{7,15}$/.test(phone)) {
+        return { valid: false, message: 'Enter valid phone number (7-15 digits)' };
+      }
     }
 
     return { valid: true };

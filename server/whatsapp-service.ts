@@ -42,6 +42,18 @@ export interface BidNotificationData {
   bidId: string;
 }
 
+export interface ServiceProviderBookingData {
+  providerName: string;
+  customerName: string;
+  serviceName: string;
+  dateTime: string;
+  location: string;
+  carDetails: string;
+  bookingId: string;
+  customerPhone?: string;
+  price?: number;
+}
+
 export class WhatsAppService {
   private static readonly TWILIO_PHONE = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
   
@@ -202,6 +214,32 @@ Need help? Just reply to this message!
   }
 
   /**
+   * Generate service provider booking notification message
+   */
+  private static generateServiceProviderBookingMessage(data: ServiceProviderBookingData): string {
+    const priceText = data.price ? `\n💰 *Service Cost:* ₹${data.price.toLocaleString()}` : '';
+    const customerPhoneText = data.customerPhone ? `\n📱 *Customer Phone:* ${data.customerPhone}` : '';
+    
+    return `🔔 *New Service Booking Request!*
+
+Hi ${data.providerName}!
+
+You have a new service booking request:
+
+📋 *Booking Details:*
+🆔 Booking ID: ${data.bookingId}
+👤 Customer: ${data.customerName}
+🔧 Service: ${data.serviceName}
+📅 Date & Time: ${data.dateTime}
+📍 Location: ${data.location}
+🚗 Vehicle: ${data.carDetails}${customerPhoneText}${priceText}
+
+Please prepare for this service appointment. Contact the customer if you need any additional information.
+
+*Ronak Motor Garage* - Service Excellence Team`;
+  }
+
+  /**
    * Send WhatsApp message
    */
   private static async sendMessage(
@@ -341,6 +379,21 @@ Need help? Just reply to this message!
     const message = this.generateWelcomeMessage(customerName);
     
     return this.sendMessage(whatsappNumber, message, 'welcome_message');
+  }
+
+  /**
+   * Send booking notification to service provider
+   */
+  static async sendServiceProviderBookingNotification(
+    phone: string,
+    countryCode: string,
+    data: ServiceProviderBookingData,
+    appointmentId?: string
+  ): Promise<WhatsAppSendResult> {
+    const whatsappNumber = this.formatWhatsAppNumber(phone, countryCode);
+    const message = this.generateServiceProviderBookingMessage(data);
+    
+    return this.sendMessage(whatsappNumber, message, 'booking_request', appointmentId);
   }
 
   /**

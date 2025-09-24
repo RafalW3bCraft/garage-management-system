@@ -32,54 +32,20 @@ import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Smartphone, ArrowLeft } from "lucide-react";
 
-// Country codes with popular countries first (India as main land + international markets)
-const COUNTRY_CODES = [
-  // Primary market - India as main land
-  { code: "+91", country: "India", flag: "🇮🇳" },
-  
-  // Major English-speaking markets
-  { code: "+1", country: "US/Canada", flag: "🇺🇸" },
-  { code: "+44", country: "United Kingdom", flag: "🇬🇧" },
-  { code: "+61", country: "Australia", flag: "🇦🇺" },
-  { code: "+64", country: "New Zealand", flag: "🇳🇿" },
-  
-  // Gulf & Middle East (major Indian diaspora)
-  { code: "+971", country: "UAE", flag: "🇦🇪" },
-  { code: "+966", country: "Saudi Arabia", flag: "🇸🇦" },
-  { code: "+965", country: "Kuwait", flag: "🇰🇼" },
-  { code: "+973", country: "Bahrain", flag: "🇧🇭" },
-  { code: "+974", country: "Qatar", flag: "🇶🇦" },
-  { code: "+968", country: "Oman", flag: "🇴🇲" },
-  
-  // South & Southeast Asia
-  { code: "+65", country: "Singapore", flag: "🇸🇬" },
-  { code: "+60", country: "Malaysia", flag: "🇲🇾" },
-  { code: "+66", country: "Thailand", flag: "🇹🇭" },
-  { code: "+62", country: "Indonesia", flag: "🇮🇩" },
-  { code: "+63", country: "Philippines", flag: "🇵🇭" },
-  { code: "+84", country: "Vietnam", flag: "🇻🇳" },
-  
-  // Europe
-  { code: "+49", country: "Germany", flag: "🇩🇪" },
-  { code: "+33", country: "France", flag: "🇫🇷" },
-  { code: "+39", country: "Italy", flag: "🇮🇹" },
-  { code: "+34", country: "Spain", flag: "🇪🇸" },
-  { code: "+31", country: "Netherlands", flag: "🇳🇱" },
-  
-  // Asia Pacific & Other Major Markets
-  { code: "+86", country: "China", flag: "🇨🇳" },
-  { code: "+81", country: "Japan", flag: "🇯🇵" },
-  { code: "+82", country: "South Korea", flag: "🇰🇷" },
-  { code: "+55", country: "Brazil", flag: "🇧🇷" },
-  { code: "+7", country: "Russia", flag: "🇷🇺" },
-];
+// Simplified country support: India primary + Universal format
+const COUNTRY_OPTIONS = [
+  { value: "+91", label: "India", flag: "🇮🇳" },
+  { value: "UNIVERSAL", label: "Other Countries", flag: "🌍" },
+] as const;
 
 const phoneSchema = z.object({
   phone: z
     .string()
-    .min(10, "Phone number must be at least 10 digits")
+    .min(7, "Phone number must be at least 7 digits")
+    .max(15, "Phone number cannot exceed 15 digits")
     .regex(/^[0-9]+$/, "Phone number must contain only digits"),
-  countryCode: z.string().min(1, "Please select a country code"),
+  countryCode: z.string().min(1, "Please select a country"),
+  customCountryCode: z.string().optional(),
   name: z.string().min(2, "Name must be at least 2 characters"),
   // Enhanced profile fields
   dateOfBirth: z.string().optional().refine((date) => {
@@ -96,6 +62,15 @@ const phoneSchema = z.object({
     return numbers.every(n => /^[A-Z0-9\-\s]{6,20}$/i.test(n));
   }, { message: "Enter valid vehicle registration numbers (e.g., MH12AB1234)" }),
   profileImage: z.string().url().optional().or(z.literal("")),
+}).refine((data) => {
+  // If universal is selected, custom country code is required
+  if (data.countryCode === 'UNIVERSAL') {
+    return data.customCountryCode && /^\+\d{1,4}$/.test(data.customCountryCode);
+  }
+  return true;
+}, {
+  message: "Enter valid country code (e.g., +1, +44, +86)",
+  path: ["customCountryCode"],
 });
 
 const otpSchema = z.object({
@@ -129,6 +104,7 @@ export function MobileRegistration({
     defaultValues: {
       phone: "",
       countryCode: "+91", // Default to India
+      customCountryCode: "",
       name: "",
       dateOfBirth: "",
       registrationNumbers: "",
@@ -142,6 +118,9 @@ export function MobileRegistration({
       otp: "",
     },
   });
+
+  // Watch the country code selection to show/hide custom input
+  const selectedCountryCode = phoneForm.watch("countryCode");
 
   // Send OTP mutation
   const sendOtpMutation = useMutation({
@@ -410,11 +389,12 @@ export function MobileRegistration({
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            {COUNTRY_CODES.map((country) => (
-                              <SelectItem key={country.code} value={country.code}>
+                            {COUNTRY_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
                                 <span className="flex items-center gap-2">
-                                  <span>{country.flag}</span>
-                                  <span>{country.code}</span>
+                                  <span>{option.flag}</span>
+                                  <span>{option.label}</span>
+                                  {option.value !== 'UNIVERSAL' && <span className="text-muted-foreground">({option.value})</span>}
                                 </span>
                               </SelectItem>
                             ))}
@@ -444,6 +424,28 @@ export function MobileRegistration({
                     )}
                   />
                 </div>
+
+                {/* Custom Country Code Input - Only show when Universal is selected */}
+                {selectedCountryCode === 'UNIVERSAL' && (
+                  <FormField
+                    control={phoneForm.control}
+                    name="customCountryCode"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Enter Country Code</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="text"
+                            placeholder="e.g., +1, +44, +86"
+                            data-testid="input-custom-country-code"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                )}
 
                 <Button
                   type="submit"

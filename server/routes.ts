@@ -126,13 +126,15 @@ function withStorage<T extends any[]>(
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Session middleware
+  // Note: SESSION_SECRET is validated at startup - no fallback needed
   app.use(session({
-    secret: process.env.SESSION_SECRET || "your-secret-key-change-in-production",
+    secret: process.env.SESSION_SECRET!,
     resave: false,
     saveUninitialized: false,
     cookie: {
       secure: process.env.NODE_ENV === "production",
       httpOnly: true,
+      sameSite: process.env.NODE_ENV === "production" ? "strict" : "lax",
       maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
   }));
@@ -140,6 +142,57 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Passport middleware
   app.use(passport.initialize());
   app.use(passport.session());
+  
+  // CSRF Protection Middleware for state-changing requests
+  const csrfProtection = (req: any, res: any, next: any) => {
+    // Only protect state-changing methods
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      return next();
+    }
+    
+    // Skip CSRF only for Google OAuth routes (they use state parameter protection)
+    const skipRoutes = [
+      '/api/auth/google',
+      '/api/auth/google/callback'
+    ];
+    
+    if (skipRoutes.some(route => req.path.startsWith(route))) {
+      return next();
+    }
+    
+    // Additional Origin/Referer validation for critical auth routes  
+    // Note: req.path is relative to mount point, so use '/auth/login' not '/api/auth/login'
+    if (['/auth/login', '/auth/register'].includes(req.path)) {
+      const origin = req.headers.origin;
+      const referer = req.headers.referer;
+      const expectedOrigin = `${req.protocol}://${req.get('host')}`;
+      
+      if (!origin && !referer) {
+        return res.status(403).json({ message: "CSRF protection: Missing origin/referer header" });
+      }
+      
+      if (origin && origin !== expectedOrigin) {
+        return res.status(403).json({ message: "CSRF protection: Invalid origin" });
+      }
+      
+      if (referer && !referer.startsWith(expectedOrigin)) {
+        return res.status(403).json({ message: "CSRF protection: Invalid referer" });
+      }
+    }
+    
+    // Require custom header for API calls (SPA CSRF protection)
+    const customHeader = req.headers['x-csrf-protection'];
+    if (!customHeader || customHeader !== 'ronak-garage') {
+      return res.status(403).json({ 
+        message: "CSRF protection: Missing or invalid security header" 
+      });
+    }
+    
+    next();
+  };
+  
+  // Apply CSRF protection to all API routes
+  app.use('/api', csrfProtection);
 
   // Authentication Routes
   app.post("/api/auth/register", async (req, res) => {
@@ -163,18 +216,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         emailVerified: false
       });
 
-      // Log the user in immediately after registration
-      req.login(user, (err) => {
+      // Session fixation mitigation: regenerate session before auto-login after registration
+      req.session.regenerate((err) => {
         if (err) {
-          console.error("Login after registration failed:", err);
-          return res.status(500).json({ message: "Registration successful but failed to log in. Please try logging in manually." });
+          console.error("Session regeneration failed during registration:", err);
+          return res.status(500).json({ message: "Registration successful but session setup failed. Please log in manually." });
         }
         
-        // Don't return password in response
-        const { password, ...userResponse } = user;
-        res.status(201).json({ 
-          message: "Account created and logged in successfully",
-          user: userResponse
+        // Log the user in immediately after registration
+        req.login(user, (err) => {
+          if (err) {
+            console.error("Login after registration failed:", err);
+            return res.status(500).json({ message: "Registration successful but failed to log in. Please try logging in manually." });
+          }
+          
+          // Don't return password in response
+          const { password, ...userResponse } = user;
+          res.status(201).json({ 
+            message: "Account created and logged in successfully",
+            user: userResponse
+          });
         });
       });
     } catch (error) {
@@ -199,27 +260,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
-      // Login user via passport
-      req.login(user, (err) => {
+      // Session fixation mitigation: regenerate session before login
+      req.session.regenerate((err) => {
         if (err) {
-          console.error("Passport login error:", err.message);
-          
-          // More specific login session errors
-          if (err.message?.includes('session')) {
-            return res.status(500).json({ message: "Session creation failed. Please try again." });
-          }
-          
-          if (err.message?.includes('serialize')) {
-            return res.status(500).json({ message: "Login processing error. Please clear your cookies and try again." });
-          }
-          
-          return res.status(500).json({ message: "Login failed. Please try again later." });
+          console.error("Session regeneration failed:", err);
+          return res.status(500).json({ message: "Session setup failed. Please try again." });
         }
         
-        const { password, ...userResponse } = user;
-        res.json({ 
-          message: "Login successful",
-          user: userResponse
+        // Login user via passport after session regeneration
+        req.login(user, (err) => {
+          if (err) {
+            console.error("Passport login error:", err.message);
+            
+            // More specific login session errors
+            if (err.message?.includes('session')) {
+              return res.status(500).json({ message: "Session creation failed. Please try again." });
+            }
+            
+            if (err.message?.includes('serialize')) {
+              return res.status(500).json({ message: "Login processing error. Please clear your cookies and try again." });
+            }
+            
+            return res.status(500).json({ message: "Login failed. Please try again later." });
+          }
+          
+          const { password, ...userResponse } = user;
+          res.json({ 
+            message: "Login successful",
+            user: userResponse
+          });
         });
       });
     } catch (error) {
@@ -375,13 +444,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
         user = await storage.updateUser(user.id, updateData);
       }
       
-      req.login(user!, async (err: any) => {
-        if (err) {
-          console.error("Login after mobile registration failed:", err);
-          return res.status(500).json({ 
-            message: "Registration completed but login failed. Please try logging in." 
-          });
+      // Session fixation mitigation: regenerate session before mobile login (existing user)
+      req.session.regenerate((sessionErr: any) => {
+        if (sessionErr) {
+          console.error("Session regeneration failed for mobile user:", sessionErr);
+          return res.status(500).json({ message: "Profile updated but session setup failed. Please log in manually." });
         }
+        
+        req.login(user!, async (err: any) => {
+          if (err) {
+            console.error("Login after mobile registration failed:", err);
+            return res.status(500).json({ 
+              message: "Registration completed but login failed. Please try logging in." 
+            });
+          }
         
         // Send welcome WhatsApp message for new registrations
         try {
@@ -402,10 +478,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error(`[REGISTRATION] Welcome message error: ${welcomeError.message}`);
         }
         
-        const { password, ...userResponse } = user!;
-        res.json({ 
-          message: "Profile updated and logged in successfully",
-          user: userResponse
+          const { password, ...userResponse } = user!;
+          res.json({ 
+            message: "Profile updated and logged in successfully",
+            user: userResponse
+          });
         });
       });
     } else {
@@ -430,13 +507,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const newUser = await storage.createUser(userData);
 
-      req.login(newUser, async (err: any) => {
-        if (err) {
-          console.error("Login after mobile registration failed:", err);
-          return res.status(500).json({ 
-            message: "Account created but login failed. Please try logging in." 
-          });
+      // Session fixation mitigation: regenerate session before mobile login (new user)
+      req.session.regenerate((sessionErr: any) => {
+        if (sessionErr) {
+          console.error("Session regeneration failed for new mobile user:", sessionErr);
+          return res.status(500).json({ message: "Account created but session setup failed. Please log in manually." });
         }
+        
+        req.login(newUser, async (err: any) => {
+          if (err) {
+            console.error("Login after mobile registration failed:", err);
+            return res.status(500).json({ 
+              message: "Account created but login failed. Please try logging in." 
+            });
+          }
         
         // Send welcome WhatsApp message for new registrations
         try {
@@ -457,10 +541,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.error(`[REGISTRATION] Welcome message error: ${welcomeError.message}`);
         }
         
-        const { password, ...userResponse } = newUser;
-        res.status(201).json({ 
-          message: "Account created and logged in successfully",
-          user: userResponse
+          const { password, ...userResponse } = newUser;
+          res.status(201).json({ 
+            message: "Account created and logged in successfully",
+            user: userResponse
+          });
         });
       });
     }
@@ -628,6 +713,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
     next();
   };
 
+  // Admin user management API
+  app.get("/api/admin/users/count", requireAdmin, asyncRoute("get user count", async (req: any, res: any) => {
+    const storage = await getStorage();
+    const count = await storage.getUserCount();
+    res.json({ count });
+  }));
+
+  app.get("/api/admin/users", requireAdmin, asyncRoute("get all users", async (req: any, res: any) => {
+    const storage = await getStorage();
+    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = parseInt(req.query.limit as string) || 100;
+    
+    const users = await storage.getAllUsers(offset, limit);
+    // Remove passwords from response for security
+    const safeUsers = users.map(({ password, ...user }) => user);
+    
+    res.json({ 
+      users: safeUsers,
+      offset,
+      limit,
+      hasMore: users.length === limit
+    });
+  }));
+
   // Services API
   app.get("/api/services", asyncRoute("fetch services", async (req: any, res: any) => {
     const storage = await getStorage();
@@ -666,11 +775,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Update service (admin only)
+  app.put("/api/services/:id", requireAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const storage = await getStorage();
+      
+      // Check if service exists
+      const existingService = await storage.getService(id);
+      if (!existingService) {
+        return res.status(404).json({ message: "Service not found" });
+      }
+      
+      // Validate update data (allow partial updates)
+      const validatedData = insertServiceSchema.partial().parse(req.body);
+      const updatedService = await storage.updateService(id, validatedData);
+      
+      if (!updatedService) {
+        return res.status(500).json({ message: "Failed to update service" });
+      }
+      
+      res.json(updatedService);
+    } catch (error) {
+      // unified-error-handler
+      handleApiError(error, "update service", res);
+    }
+  });
+
+  // Delete service (admin only)
+  app.delete("/api/services/:id", requireAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const storage = await getStorage();
+      
+      // Check if service exists
+      const existingService = await storage.getService(id);
+      if (!existingService) {
+        return res.status(404).json({ message: "Service not found" });
+      }
+      
+      // Check if service is used in any appointments
+      const appointments = await storage.getAppointmentsByService(id);
+      if (appointments && appointments.length > 0) {
+        return res.status(400).json({ 
+          message: "Cannot delete service with existing appointments. Please cancel or complete all appointments first." 
+        });
+      }
+      
+      await storage.deleteService(id);
+      res.status(204).send();
+    } catch (error) {
+      // unified-error-handler
+      handleApiError(error, "delete service", res);
+    }
+  });
+
   // Customers API
   app.post("/api/customers", requireAuth, async (req: any, res: any) => {
     try {
       const storage = await getStorage();
-      const validatedData = insertCustomerSchema.parse(req.body);
+      const user = req.user as any;
+      
+      // Security: Always enforce userId to authenticated user, prevent mass-assignment
+      const requestData = { ...req.body, userId: user.id };
+      const validatedData = insertCustomerSchema.parse(requestData);
       const customer = await storage.createCustomer(validatedData);
       res.status(201).json(customer);
     } catch (error) {
@@ -686,15 +854,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = req.user as any;
       const storage = await getStorage();
       
-      // First try to find existing customer for the authenticated user's email
-      let customer = await storage.getCustomerByEmail(user.email);
+      // First try to find existing customer by userId (preferred method)
+      let customer = await storage.getCustomerByUserId(user.id);
+      
+      // Fall back to finding by email for backward compatibility
+      if (!customer) {
+        customer = await storage.getCustomerByEmail(user.email);
+        
+        // If found by email but userId is missing, backfill the relationship
+        if (customer && !customer.userId) {
+          try {
+            const updatedCustomer = await storage.updateCustomer(customer.id, { userId: user.id });
+            customer = updatedCustomer || customer; // Use updated version if successful
+          } catch (error) {
+            // If update fails (e.g., due to unique constraint), continue with existing customer
+            console.warn("Failed to backfill userId for customer", customer.id, error);
+          }
+        }
+      }
       
       if (!customer) {
-        // Customer doesn't exist, create one for the authenticated user
+        // Customer doesn't exist, create one linked to the authenticated user
         const customerData = {
+          userId: user.id, // Link to user account
           name: user.name || "User",
           email: user.email,
-          phone: "Not provided" // Default value, can be updated later
+          phone: user.phone || "Not provided", // Use user's phone if available
+          countryCode: user.countryCode || "+91"
         };
         
         const validatedData = insertCustomerSchema.parse(customerData);
@@ -706,6 +892,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       handleApiError(error, "ensure customer", res);
     }
   });
+
+  // Customer by User endpoint - needed for frontend appointment queries
+  app.get("/api/customer/by-user/:userId", requireAuth, asyncRoute("get customer by user ID", async (req: any, res: any) => {
+    const { userId } = req.params;
+    const user = req.user as any;
+    
+    // Authorization: user can only access their own customer record
+    if (user.id !== userId) {
+      return res.status(403).json({ message: "Unauthorized: You can only access your own customer information" });
+    }
+    
+    const storage = await getStorage();
+    const customer = await storage.getCustomerByUserId(userId);
+    
+    // Return customer data or null if not found (don't return 404, just null)
+    res.json(customer || null);
+  }));
 
   // Admin Routes - must be defined before other appointment routes
   app.get("/api/admin/appointments", requireAdmin, asyncRoute("fetch all appointments for admin", async (req: any, res: any) => {
@@ -763,8 +966,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(404).json({ message: "Customer not found" });
     }
     
-    // Ownership validation: user can only access their own appointments
-    if (customer.email !== user.email) {
+    // Ownership validation: user can only access their own appointments  
+    // Use direct user ID relationship instead of fragile email comparison
+    if (customer.userId !== user.id) {
       return res.status(403).json({ 
         message: "Unauthorized: You can only access your own appointments" 
       });
@@ -777,8 +981,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/appointments", requireAuth, asyncRoute("create appointment", async (req: any, res: any) => {
     try {
       const storage = await getStorage();
+      const user = req.user as any;
       const validatedData = insertAppointmentSchema.parse(req.body);
-      const appointment = await storage.createAppointment(validatedData);
+      
+      // Ensure customer record exists for the authenticated user
+      let customer = await storage.getCustomerByUserId(user.id);
+      if (!customer) {
+        // Customer doesn't exist, create one linked to the authenticated user
+        const customerData = {
+          userId: user.id, // Link to user account
+          name: user.name || "User",
+          email: user.email || `user-${user.id}@example.com`, // Fallback email if none
+          phone: user.phone || "Not provided", // Use user's phone if available
+          countryCode: user.countryCode || "+91"
+        };
+        
+        const validatedCustomerData = insertCustomerSchema.parse(customerData);
+        customer = await storage.createCustomer(validatedCustomerData);
+      }
+      
+      // Ensure the appointment uses the correct customer ID
+      const appointmentWithCustomer = {
+        ...validatedData,
+        customerId: customer.id
+      };
+      
+      const appointment = await storage.createAppointment(appointmentWithCustomer);
       
       // Send appointment confirmation notifications asynchronously (non-blocking)
       try {
@@ -822,6 +1050,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
           } else {
             console.log("[APPOINTMENT] No phone number available for WhatsApp confirmation");
           }
+
+          // Send WhatsApp notification to service provider if contact info is available
+          if (service.providerPhone && service.providerCountryCode) {
+            const serviceProviderData = {
+              providerName: service.providerName || service.title,
+              customerName: customer.name,
+              serviceName: service.title,
+              dateTime: new Date(appointment.dateTime).toLocaleString('en-IN'),
+              location: location.name,
+              carDetails: appointment.carDetails,
+              bookingId: appointment.id,
+              customerPhone: customer.phone ? `${customer.countryCode}${customer.phone}` : undefined,
+              price: appointment.price || undefined
+            };
+
+            // Send WhatsApp notification to service provider asynchronously
+            WhatsAppService.sendServiceProviderBookingNotification(
+              service.providerPhone,
+              service.providerCountryCode,
+              serviceProviderData,
+              appointment.id
+            ).then((result) => {
+              if (result.success) {
+                console.log(`[APPOINTMENT] Service provider notification sent to ${service.providerCountryCode}${service.providerPhone}`);
+              } else {
+                console.error(`[APPOINTMENT] Service provider notification failed: ${result.error}`);
+              }
+            }).catch((error) => {
+              console.error(`[APPOINTMENT] Service provider notification error: ${error.message}`);
+            });
+          } else {
+            console.log("[APPOINTMENT] No service provider contact information available for WhatsApp notification");
+          }
         } else {
           console.error("[APPOINTMENT] Missing customer, service, or location data for notifications");
         }
@@ -864,9 +1125,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Check ownership - user must own the appointment or be admin
-    // For now, checking if user's email matches customer email in appointment
+    // Use direct user ID relationship instead of fragile email comparison
     const customer = await storage.getCustomer(currentAppointment.customerId);
-    if (!customer || customer.email !== user.email) {
+    if (!customer || customer.userId !== user.id) {
       return res.status(403).json({ 
         message: "Unauthorized: You can only update your own appointments" 
       });
@@ -994,13 +1255,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Appointment not found" });
       }
       
-      // Authorization: Check if user owns the appointment (via customer email)
-      // For now, we'll check if user's email matches a customer's email
-      // In a full implementation, you'd have proper user-customer relationships
+      // Authorization: Check if user owns the appointment or has admin role
+      // Admin users can reschedule any appointment, regular users can only reschedule their own
       const customer = await storage.getCustomer(appointment.customerId);
-      if (!customer || customer.email !== user.email) {
-        // Only allow users to reschedule their own appointments
-        // TODO: Add admin role check here if needed
+      
+      // Check if user is admin
+      const isAdmin = user.role === 'admin';
+      
+      // Allow if user is admin OR if user owns the appointment (via user ID relationship)
+      if (!isAdmin && (!customer || customer.userId !== user.id)) {
         return res.status(403).json({ message: "You can only reschedule your own appointments" });
       }
       
@@ -1164,6 +1427,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Update car's current bid
       await storage.updateCarCurrentBid(carId, bidAmount);
+      
+      // Send bid confirmation WhatsApp message asynchronously (non-blocking)
+      setImmediate(async () => {
+        try {
+          const carDetails = `${car.make} ${car.model} ${car.year}`;
+          
+          // Find current bidder (new highest bidder) and send confirmation
+          const currentBidder = await storage.getCustomerByEmail(user.email);
+          
+          if (currentBidder && currentBidder.phone && currentBidder.countryCode) {
+            const result = await WhatsAppService.sendBidNotification(
+              currentBidder.phone,
+              currentBidder.countryCode,
+              {
+                customerName: currentBidder.name,
+                carDetails: carDetails,
+                bidAmount: bidAmount,
+                bidId: bid.id
+              }
+            );
+            
+            if (result.success) {
+              console.log(`[BID] WhatsApp confirmation sent to bidder ${currentBidder.countryCode}${currentBidder.phone}`);
+            } else {
+              console.error(`[BID] WhatsApp confirmation failed: ${result.error}`);
+            }
+          } else {
+            console.log("[BID] No phone number available for WhatsApp confirmation");
+          }
+          
+        } catch (notificationError: any) {
+          console.error(`[BID] WhatsApp notification failed: ${notificationError.message}`);
+        }
+      });
       
       res.status(201).json({
         message: "Bid placed successfully",

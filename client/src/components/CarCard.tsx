@@ -5,6 +5,7 @@ import { Calendar, MapPin, Fuel, Gauge, IndianRupee, Heart } from "lucide-react"
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { BidDialog } from "./BidDialog";
+import { ContactDialog } from "./ContactDialog";
 import type { Car } from "@shared/schema";
 
 interface CarCardProps {
@@ -41,6 +42,7 @@ export function CarCard({
   const { toast } = useToast();
   const [isFavorited, setIsFavorited] = useState(false);
   const [bidDialogOpen, setBidDialogOpen] = useState(false);
+  const [contactDialogOpen, setContactDialogOpen] = useState(false);
 
   // Load favorites from localStorage on mount
   useEffect(() => {
@@ -82,10 +84,7 @@ export function CarCard({
   };
 
   const handleContactSeller = () => {
-    toast({
-      title: "Contact Seller",
-      description: `Contact functionality coming soon for ${make} ${model}. You can call us at +91-9876543210.`,
-    });
+    setContactDialogOpen(true);
   };
 
   const getConditionColor = (condition: string) => {
@@ -208,6 +207,18 @@ export function CarCard({
           } as Car}
           open={bidDialogOpen}
           onOpenChange={setBidDialogOpen}
+        />
+      )}
+
+      {/* Contact Dialog for Non-Auction Cars */}
+      {!isAuction && (
+        <ContactDialog
+          carMake={make}
+          carModel={model}
+          carYear={year}
+          carPrice={price}
+          open={contactDialogOpen}
+          onOpenChange={setContactDialogOpen}
         />
       )}
     </Card>

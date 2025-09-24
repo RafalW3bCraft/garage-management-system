@@ -35,6 +35,7 @@ export const users = pgTable("users", {
 // Customers table - people who book services
 export const customers = pgTable("customers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id), // Link to user account (optional for legacy data)
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   phone: text("phone").notNull(),
@@ -64,6 +65,10 @@ export const services = pgTable("services", {
   features: text("features").array().notNull(),
   popular: boolean("popular").default(false),
   icon: text("icon"), // store icon name/identifier
+  // Service provider contact information for WhatsApp notifications
+  providerName: text("provider_name"), // Name of service provider/mechanic
+  providerPhone: text("provider_phone"), // Phone number for WhatsApp notifications
+  providerCountryCode: text("provider_country_code").default("+91"), // Country code for provider phone
 });
 
 // Appointments for services
@@ -307,6 +312,8 @@ export const mobileRegisterSchema = z.object({
 export const updateProfileSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").optional(),
   email: z.string().email("Invalid email format").optional(),
+  phone: z.string().optional(),
+  countryCode: z.enum(["+91", "Universal"]).optional(),
   dateOfBirth: z.string().datetime().optional(),
   registrationNumbers: z.array(z.string()).optional(),
   address: z.string().optional(),
