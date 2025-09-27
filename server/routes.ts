@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
+import express from "express";
 import { getStorage } from "./storage";
 import { 
   insertServiceSchema,
@@ -24,6 +25,8 @@ import { hashPassword, verifyPassword, passport } from "./auth";
 import { EmailNotificationService } from "./email-service";
 import { OTPService } from "./otp-service";
 import { WhatsAppService } from "./whatsapp-service";
+import { ImageService, profileUpload, carUpload, IMAGE_CONFIG } from "./image-service";
+import path from "path";
 
 // Centralized error handling types
 interface DatabaseError extends Error {
@@ -118,8 +121,12 @@ function withStorage<T extends any[]>(
       const storage = await getStorage();
       return await handler(storage, ...args);
     } catch (error) {
-      console.error('Storage error:', error);
-      throw error;
+      console.error('Storage connection error:', error);
+      // Don't throw - let the asyncRoute wrapper handle the error properly
+      return Promise.reject({
+        status: 500,
+        message: 'Database connection failed. Please try again later.'
+      });
     }
   };
 }
@@ -151,12 +158,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     // Skip CSRF only for Google OAuth routes (they use state parameter protection)
+    // Note: paths are relative to /api mount point
     const skipRoutes = [
-      '/api/auth/google',
-      '/api/auth/google/callback'
+      '/auth/google',
+      '/auth/google/callback'
     ];
     
     if (skipRoutes.some(route => req.path.startsWith(route))) {
+      console.log(`[CSRF] Skipping CSRF protection for OAuth route: ${req.path}`);
       return next();
     }
     
@@ -165,29 +174,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (['/auth/login', '/auth/register'].includes(req.path)) {
       const origin = req.headers.origin;
       const referer = req.headers.referer;
-      const expectedOrigin = `${req.protocol}://${req.get('host')}`;
+      // More robust protocol detection for development environments
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+      const host = req.get('host');
+      const expectedOrigin = `${protocol}://${host}`;
+      
+      console.log(`[CSRF] Auth route: ${req.path}`);
+      console.log(`[CSRF] Origin: ${origin}, Referer: ${referer}`);
+      console.log(`[CSRF] Expected origin: ${expectedOrigin}`);
       
       if (!origin && !referer) {
+        console.log(`[CSRF] REJECTED: Missing origin/referer for ${req.path}`);
         return res.status(403).json({ message: "CSRF protection: Missing origin/referer header" });
       }
       
       if (origin && origin !== expectedOrigin) {
+        console.log(`[CSRF] REJECTED: Invalid origin ${origin} (expected ${expectedOrigin}) for ${req.path}`);
         return res.status(403).json({ message: "CSRF protection: Invalid origin" });
       }
       
       if (referer && !referer.startsWith(expectedOrigin)) {
+        console.log(`[CSRF] REJECTED: Invalid referer ${referer} (expected to start with ${expectedOrigin}) for ${req.path}`);
         return res.status(403).json({ message: "CSRF protection: Invalid referer" });
       }
+      
+      console.log(`[CSRF] PASSED: Auth route ${req.path} passed origin/referer validation`);
+      return next();
     }
     
     // Require custom header for API calls (SPA CSRF protection)
+    // Check for the header with case-insensitive lookup
     const customHeader = req.headers['x-csrf-protection'];
     if (!customHeader || customHeader !== 'ronak-garage') {
+      console.log(`[CSRF] REJECTED: Missing/invalid security header for ${req.path}. Got: "${customHeader}"`);
+      console.log(`[CSRF] Available headers:`, Object.keys(req.headers).filter(h => h.toLowerCase().includes('csrf')));
       return res.status(403).json({ 
         message: "CSRF protection: Missing or invalid security header" 
       });
     }
     
+    console.log(`[CSRF] PASSED: API route ${req.path} passed security header validation`);
     next();
   };
   
@@ -343,16 +369,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Mobile Registration Routes
   app.post("/api/auth/mobile/send-otp", asyncRoute("send mobile OTP", async (req: any, res: any) => {
-    const { phone, countryCode } = req.body;
+    // Validate request data using sendOtpSchema
+    const validationResult = sendOtpSchema.safeParse(req.body);
     
-    // Basic validation
-    if (!phone || !countryCode) {
-      return res.status(400).json({ 
-        message: "Phone number and country code are required" 
+    if (!validationResult.success) {
+      return res.status(400).json({
+        message: "Validation failed",
+        errors: fromZodError(validationResult.error).toString()
       });
     }
 
-    const result = await OTPService.sendOTP(phone, countryCode, "registration");
+    const { phone, countryCode, purpose } = validationResult.data;
+    const result = await OTPService.sendOTP(phone, countryCode, purpose);
     
     if (result.success) {
       res.json({
@@ -369,16 +397,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   app.post("/api/auth/mobile/verify-otp", asyncRoute("verify mobile OTP", async (req: any, res: any) => {
-    const { phone, countryCode, otpCode } = req.body;
+    // Validate request data using the updated schema with purpose
+    const validationResult = verifyOtpSchema.safeParse(req.body);
     
-    // Basic validation
-    if (!phone || !countryCode || !otpCode) {
-      return res.status(400).json({ 
-        message: "Phone number, country code, and OTP are required" 
+    if (!validationResult.success) {
+      return res.status(400).json({
+        message: "Validation failed",
+        errors: fromZodError(validationResult.error).toString()
       });
     }
 
-    const result = await OTPService.verifyOTP(phone, countryCode, otpCode, "registration");
+    const { phone, countryCode, otpCode, purpose } = validationResult.data;
+    const storage = await getStorage();
+
+    // Verify OTP with the correct purpose
+    const result = await OTPService.verifyOTP(phone, countryCode, otpCode, purpose);
     
     if (!result.success) {
       return res.status(400).json({
@@ -389,11 +422,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
 
-    // OTP verified successfully - just return success
-    res.json({ 
-      message: "OTP verified successfully. Please complete registration.",
-      verified: true
-    });
+    // OTP verified successfully - handle different purposes
+    if (purpose === "login") {
+      // For login: find existing user and establish session
+      const user = await storage.getUserByPhone(phone, countryCode);
+      
+      if (!user) {
+        return res.status(404).json({ 
+          message: "No account found with this phone number. Please register first." 
+        });
+      }
+
+      // Session fixation mitigation: regenerate session before mobile login
+      req.session.regenerate((sessionErr: any) => {
+        if (sessionErr) {
+          console.error("Session regeneration failed for mobile login:", sessionErr);
+          return res.status(500).json({ 
+            message: "OTP verified but session setup failed. Please try again." 
+          });
+        }
+        
+        // Log the user in via passport after session regeneration
+        req.login(user, (loginErr: any) => {
+          if (loginErr) {
+            console.error("Login after mobile OTP verification failed:", loginErr);
+            
+            // More specific login session errors
+            if (loginErr.message?.includes('session')) {
+              return res.status(500).json({ 
+                message: "Session creation failed. Please try again." 
+              });
+            }
+            
+            if (loginErr.message?.includes('serialize')) {
+              return res.status(500).json({ 
+                message: "Login processing error. Please clear your cookies and try again." 
+              });
+            }
+            
+            return res.status(500).json({ 
+              message: "Login failed. Please try again later." 
+            });
+          }
+          
+          const { password, ...userResponse } = user;
+          res.json({ 
+            message: "Login successful",
+            user: userResponse
+          });
+        });
+      });
+    } else {
+      // For registration and password_reset: just verify OTP
+      res.json({ 
+        message: "OTP verified successfully. Please complete registration.",
+        verified: true
+      });
+    }
   }));
 
   // Complete mobile registration with profile data
@@ -1539,6 +1624,262 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
   });
+
+  // Image Upload Routes
+  
+  // Upload profile image
+  app.post("/api/upload/profile", requireAuth, profileUpload.single('profileImage'), asyncRoute("upload profile image", async (req: any, res: any) => {
+    const storage = await getStorage();
+    const user = req.user;
+    
+    if (!req.file) {
+      return res.status(400).json({ message: "No image file provided" });
+    }
+
+    const inputPath = req.file.path;
+    const filename = `profile-${user.id}-${Date.now()}.jpg`;
+    const outputPath = path.join('public/uploads/profiles', filename);
+    const thumbnailPath = path.join('public/uploads/thumbs', `thumb-${filename}`);
+
+    try {
+      // Validate the uploaded image
+      const isValid = await ImageService.validateImage(inputPath);
+      if (!isValid) {
+        await ImageService.deleteImage(inputPath);
+        return res.status(400).json({ message: "Invalid image file. Please upload a valid image." });
+      }
+
+      // Process the image
+      await ImageService.processProfileImage(inputPath, outputPath);
+      await ImageService.createThumbnail(outputPath, thumbnailPath);
+
+      // Update user profile with image URL
+      const imageUrl = ImageService.generateImageUrl(filename, 'profiles');
+      await storage.updateUser(user.id, { profileImage: imageUrl });
+
+      // Clean up original uploaded file
+      await ImageService.deleteImage(inputPath);
+
+      res.json({ 
+        message: "Profile image uploaded successfully",
+        imageUrl: imageUrl
+      });
+    } catch (error) {
+      // Clean up files on error
+      await ImageService.deleteImage(inputPath);
+      await ImageService.deleteImage(outputPath);
+      await ImageService.deleteImage(thumbnailPath);
+      // Don't throw - let asyncRoute handle error properly
+      console.error('Profile image upload error:', error);
+      return res.status(500).json({
+        message: 'Profile image upload failed. Please try again later.'
+      });
+    }
+  }));
+
+  // Upload car image
+  app.post("/api/upload/car", requireAuth, carUpload.single('carImage'), asyncRoute("upload car image", async (req: any, res: any) => {
+    if (!req.file) {
+      return res.status(400).json({ message: "No image file provided" });
+    }
+
+    const inputPath = req.file.path;
+    const filename = `car-${Date.now()}-${Math.round(Math.random() * 1E9)}.jpg`;
+    const outputPath = path.join('public/uploads/cars', filename);
+    const thumbnailPath = path.join('public/uploads/thumbs', `thumb-${filename}`);
+
+    try {
+      // Validate the uploaded image
+      const isValid = await ImageService.validateImage(inputPath);
+      if (!isValid) {
+        await ImageService.deleteImage(inputPath);
+        return res.status(400).json({ message: "Invalid image file. Please upload a valid image." });
+      }
+
+      // Process the image
+      await ImageService.processCarImage(inputPath, outputPath);
+      await ImageService.createThumbnail(outputPath, thumbnailPath);
+
+      // Clean up original uploaded file
+      await ImageService.deleteImage(inputPath);
+
+      const imageUrl = ImageService.generateImageUrl(filename, 'cars');
+      
+      res.json({ 
+        message: "Car image uploaded successfully",
+        imageUrl: imageUrl,
+        filename: filename
+      });
+    } catch (error) {
+      // Clean up files on error
+      await ImageService.deleteImage(inputPath);
+      await ImageService.deleteImage(outputPath);
+      await ImageService.deleteImage(thumbnailPath);
+      // Don't throw - let asyncRoute handle error properly
+      console.error('Car image upload error:', error);
+      return res.status(500).json({
+        message: 'Car image upload failed. Please try again later.'
+      });
+    }
+  }));
+
+  // Serve uploaded images
+  app.use('/uploads', express.static(path.join(process.cwd(), 'public/uploads')));
+
+  // Delete image (admin only)
+  app.delete("/api/upload/:type/:filename", requireAdmin, asyncRoute("delete image", async (req: any, res: any) => {
+    const { type, filename } = req.params;
+    
+    if (!['profiles', 'cars'].includes(type)) {
+      return res.status(400).json({ message: "Invalid image type" });
+    }
+
+    const imagePath = path.join('public/uploads', type, filename);
+    const thumbnailPath = path.join('public/uploads/thumbs', `thumb-${filename}`);
+
+    try {
+      await ImageService.deleteImage(imagePath);
+      await ImageService.deleteImage(thumbnailPath);
+      
+      res.json({ message: "Image deleted successfully" });
+    } catch (error) {
+      console.warn("Error deleting image:", error);
+      res.json({ message: "Image deletion completed (some files may not have existed)" });
+    }
+  }));
+
+  // New CRUD endpoints
+
+  // Delete appointment (auth + ownership or admin)
+  app.delete("/api/appointments/:id", requireAuth, asyncRoute("delete appointment", async (req: any, res: any) => {
+    const { id } = req.params;
+    const user = req.user as any;
+    const storage = await getStorage();
+
+    // Check if appointment exists
+    const appointment = await storage.getAppointment(id);
+    if (!appointment) {
+      return res.status(404).json({ message: "Appointment not found" });
+    }
+
+    // Check ownership (user can delete their own appointments, or admin can delete any)
+    if (user.role !== "admin") {
+      const customer = await storage.getCustomer(appointment.customerId);
+      if (!customer || customer.userId !== user.id) {
+        return res.status(403).json({ 
+          message: "Unauthorized: You can only delete your own appointments" 
+        });
+      }
+    }
+
+    const success = await storage.deleteAppointment(id);
+    if (!success) {
+      return res.status(500).json({ message: "Failed to delete appointment" });
+    }
+
+    res.status(204).send();
+  }));
+
+  // Update car (admin only since no ownership model)
+  app.put("/api/cars/:id", requireAdmin, asyncRoute("update car", async (req: any, res: any) => {
+    const { id } = req.params;
+    const storage = await getStorage();
+
+    // Check if car exists
+    const existingCar = await storage.getCar(id);
+    if (!existingCar) {
+      return res.status(404).json({ message: "Car not found" });
+    }
+
+    // Validate update data (insertCarSchema already excludes id and createdAt)
+    const validatedData = insertCarSchema.partial().parse(req.body);
+    const updatedCar = await storage.updateCar(id, validatedData);
+
+    if (!updatedCar) {
+      return res.status(500).json({ message: "Failed to update car" });
+    }
+
+    res.json(updatedCar);
+  }));
+
+  // Delete car (admin only since no ownership model)
+  app.delete("/api/cars/:id", requireAdmin, asyncRoute("delete car", async (req: any, res: any) => {
+    const { id } = req.params;
+    const storage = await getStorage();
+
+    // Check if car exists
+    const existingCar = await storage.getCar(id);
+    if (!existingCar) {
+      return res.status(404).json({ message: "Car not found" });
+    }
+
+    // Check if car has active bids (prevent deletion of cars with bids)
+    const bids = await storage.getBidsForCar(id);
+    if (bids && bids.length > 0) {
+      return res.status(400).json({ 
+        message: "Cannot delete car with existing bids. Please resolve all bids first." 
+      });
+    }
+
+    const success = await storage.deleteCar(id);
+    if (!success) {
+      return res.status(500).json({ message: "Failed to delete car" });
+    }
+
+    res.status(204).send();
+  }));
+
+  // Get customer by ID (auth + ownership or admin)
+  app.get("/api/customers/:id", requireAuth, asyncRoute("get customer by ID", async (req: any, res: any) => {
+    const { id } = req.params;
+    const user = req.user as any;
+    const storage = await getStorage();
+
+    const customer = await storage.getCustomer(id);
+    if (!customer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // Check ownership (user can access their own customer record, or admin can access any)
+    if (user.role !== "admin" && customer.userId !== user.id) {
+      return res.status(403).json({ 
+        message: "Unauthorized: You can only access your own customer information" 
+      });
+    }
+
+    res.json(customer);
+  }));
+
+  // Update customer (auth + ownership)
+  app.put("/api/customers/:id", requireAuth, asyncRoute("update customer", async (req: any, res: any) => {
+    const { id } = req.params;
+    const user = req.user as any;
+    const storage = await getStorage();
+
+    // Check if customer exists
+    const existingCustomer = await storage.getCustomer(id);
+    if (!existingCustomer) {
+      return res.status(404).json({ message: "Customer not found" });
+    }
+
+    // Check ownership (user can only update their own customer record)
+    if (existingCustomer.userId !== user.id) {
+      return res.status(403).json({ 
+        message: "Unauthorized: You can only update your own customer information" 
+      });
+    }
+
+    // Validate update data with field whitelisting (prevent userId changes, id/createdAt already excluded by schema)
+    const validatedData = insertCustomerSchema.omit({ userId: true }).partial().parse(req.body);
+
+    const updatedCustomer = await storage.updateCustomer(id, validatedData);
+
+    if (!updatedCustomer) {
+      return res.status(500).json({ message: "Failed to update customer" });
+    }
+
+    res.json(updatedCustomer);
+  }));
 
   // Test endpoint to verify database connection
   app.get("/api/health", async (req, res) => {

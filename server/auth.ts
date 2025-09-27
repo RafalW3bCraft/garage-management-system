@@ -39,10 +39,49 @@ passport.deserializeUser(async (id: string, done) => {
 
 // Google OAuth Strategy - only configure if credentials are available
 if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+  // Construct callback URL dynamically for different environments
+  const port = process.env.PORT || "5000";
+  
+  // Check if we're running in Replit by looking for Replit-specific environment variables
+  const isReplit = !!(process.env.REPL_SLUG || process.env.REPL_OWNER || process.env.REPLIT_DB_URL);
+  const isProduction = process.env.NODE_ENV === "production";
+  
+  let baseUrl: string;
+  
+  if (isReplit) {
+    // In Replit, use the Replit domain (new format is typically .replit.dev)
+    // First try the new format, fall back to old format if REPL_SLUG/REPL_OWNER are available
+    if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
+      baseUrl = `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.replit.dev`;
+    } else {
+      // If running in Replit but don't have REPL_SLUG/REPL_OWNER, 
+      // try to construct from other available info or use a generic approach
+      const replUrl = process.env.REPLIT_URL || process.env.REPL_URL;
+      if (replUrl) {
+        baseUrl = replUrl;
+      } else {
+        // As fallback, try to detect from hostname or use current domain
+        baseUrl = `https://localhost:${port}`; // This will need to be manually configured
+        console.warn("Running in Replit but cannot determine domain. Please check REPL_SLUG and REPL_OWNER environment variables.");
+      }
+    }
+  } else if (isProduction) {
+    // Traditional production deployment (not Replit)
+    baseUrl = process.env.PRODUCTION_URL || `https://localhost:${port}`;
+  } else {
+    // Local development
+    baseUrl = `http://localhost:${port}`;
+  }
+  
+  const callbackURL = `${baseUrl}/api/auth/google/callback`;
+  
+  console.log(`Environment detection: isReplit=${isReplit}, isProduction=${isProduction}`);
+  console.log(`Google OAuth callback URL configured: ${callbackURL}`);
+  
   passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    callbackURL: "/api/auth/google/callback"
+    callbackURL: callbackURL
   }, async (accessToken, refreshToken, profile, done) => {
   try {
     const storage = await getStorage();

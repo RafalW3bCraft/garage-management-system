@@ -117,7 +117,7 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               return { timeSlot, available: !result.hasConflict };
             } catch (error) {
               console.warn(`Failed to check availability for ${timeSlot}:`, error);
-              return { timeSlot, available: true }; // Assume available if check fails
+              return { timeSlot, available: false }; // Mark unavailable if check fails for safety
             }
           })
         );
@@ -130,7 +130,13 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
         setTimeSlotAvailability(availability);
       } catch (error) {
         console.error("Failed to check time slot availability:", error);
-        // Reset availability on error
+        // Show user-friendly error message
+        toast({
+          title: "Availability Check Failed",
+          description: "Unable to verify time slot availability. Please refresh and try again.",
+          variant: "destructive",
+        });
+        // Reset availability on error - slots will appear without availability indicators
         setTimeSlotAvailability({});
       } finally {
         setCheckingAvailability(false);

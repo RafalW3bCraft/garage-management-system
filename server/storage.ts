@@ -71,6 +71,7 @@ export interface IStorage {
   updateAppointmentStatus(id: string, status: string): Promise<Appointment | undefined>;
   rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined>;
   checkAppointmentConflict(locationId: string, dateTime: Date, excludeAppointmentId?: string): Promise<boolean>;
+  deleteAppointment(id: string): Promise<boolean>;
   
   // Cars
   getAllCars(): Promise<Car[]>;
@@ -78,6 +79,8 @@ export interface IStorage {
   getCarsForSale(): Promise<Car[]>;
   getAuctionCars(): Promise<Car[]>;
   createCar(car: InsertCar): Promise<Car>;
+  updateCar(id: string, updates: Partial<Car>): Promise<Car | undefined>;
+  deleteCar(id: string): Promise<boolean>;
   
   // Contacts
   createContact(contact: InsertContact): Promise<Contact>;
@@ -487,6 +490,12 @@ export class DatabaseStorage implements IStorage {
     return conflictingAppointments.length > 0;
   }
 
+  async deleteAppointment(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.delete(appointments).where(eq(appointments.id, id)).returning();
+    return result.length > 0;
+  }
+
   // Cars
   async getAllCars(): Promise<Car[]> {
     const db = await getDb();
@@ -517,6 +526,21 @@ export class DatabaseStorage implements IStorage {
     const db = await getDb();
     const result = await db.insert(cars).values(car).returning();
     return result[0];
+  }
+
+  async updateCar(id: string, updates: Partial<Car>): Promise<Car | undefined> {
+    const db = await getDb();
+    const result = await db.update(cars)
+      .set(updates)
+      .where(eq(cars.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteCar(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.delete(cars).where(eq(cars.id, id)).returning();
+    return result.length > 0;
   }
 
   // Contacts
@@ -1176,6 +1200,10 @@ export class MemStorage implements IStorage {
     return conflictingAppointments.length > 0;
   }
 
+  async deleteAppointment(id: string): Promise<boolean> {
+    return this.appointments.delete(id);
+  }
+
   // Cars
   async getAllCars(): Promise<Car[]> {
     return Array.from(this.cars.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
@@ -1202,6 +1230,19 @@ export class MemStorage implements IStorage {
     const newCar: Car = { ...car, id, createdAt: new Date(), description: car.description ?? null, isAuction: car.isAuction ?? false, currentBid: car.currentBid ?? null, auctionEndTime: car.auctionEndTime ?? null };
     this.cars.set(id, newCar);
     return newCar;
+  }
+
+  async updateCar(id: string, updates: Partial<Car>): Promise<Car | undefined> {
+    const car = this.cars.get(id);
+    if (!car) return undefined;
+    
+    const updatedCar = { ...car, ...updates };
+    this.cars.set(id, updatedCar);
+    return updatedCar;
+  }
+
+  async deleteCar(id: string): Promise<boolean> {
+    return this.cars.delete(id);
   }
 
   // Contacts

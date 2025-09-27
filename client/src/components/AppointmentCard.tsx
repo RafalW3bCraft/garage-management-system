@@ -141,7 +141,11 @@ export function AppointmentCard({
         {!isPast && (status === 'pending' || status === 'confirmed') && (
           <div className="flex gap-2 pt-2 border-t">
             {canReschedule && (
-              <RescheduleDialog appointmentId={id} locationId={locationId}>
+              <RescheduleDialog 
+                appointmentId={id} 
+                currentDateTime={dateTime} 
+                currentLocationId={locationId}
+              >
                 <Button variant="outline" size="sm" disabled={isLoading}>
                   Reschedule
                 </Button>
