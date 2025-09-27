@@ -42,8 +42,12 @@ export class OTPService {
         throw new Error('OTP_SECRET must be set to a secure value in production');
       }
       
-      if (!process.env.MESSAGECENTRAL_API_KEY) {
-        throw new Error('MESSAGECENTRAL_API_KEY (auth token) must be set in production');
+      if (!process.env.MESSAGECENTRAL_AUTH_TOKEN) {
+        throw new Error('MESSAGECENTRAL_AUTH_TOKEN must be set in production');
+      }
+      
+      if (!process.env.MESSAGECENTRAL_CUSTOMER_ID) {
+        throw new Error('MESSAGECENTRAL_CUSTOMER_ID must be set in production');
       }
     }
   }
@@ -80,23 +84,22 @@ export class OTPService {
    */
   private static async sendSMS(phone: string, countryCode: string, otpCode: string): Promise<boolean> {
     const isProduction = process.env.NODE_ENV === 'production';
-    const hasAuthToken = !!process.env.MESSAGECENTRAL_API_KEY;
+    const authToken = process.env.MESSAGECENTRAL_AUTH_TOKEN;
+    const customerId = process.env.MESSAGECENTRAL_CUSTOMER_ID;
     
-    // Development fallback if auth token missing
-    if (!hasAuthToken) {
+    // Development fallback if credentials missing
+    if (!authToken || !customerId) {
       if (isProduction) {
-        console.error('[OTP] MessageCentral auth token missing in production');
+        console.error('[OTP] MessageCentral credentials missing in production');
         return false;
       }
       
-      console.log(`[OTP] Development mode - MessageCentral auth token missing, using fallback`);
+      console.log(`[OTP] Development mode - MessageCentral credentials missing, using fallback`);
       console.log(`[OTP] OTP sent to ${countryCode}${phone} (code masked for security)`);
       return true;
     }
 
     try {
-      // MessageCentral v3 API configuration
-      const customerId = 'C-AB812F808D0A430'; // Your customer ID
       const message = `Your Ronak Motor Garage verification code is: ${otpCode}. Valid for ${this.OTP_EXPIRY_MINUTES} minutes. Do not share this code.`;
       
       // Build v3 API URL with parameters
@@ -113,7 +116,7 @@ export class OTPService {
       const response = await fetch(apiUrl.toString(), {
         method: 'POST',
         headers: {
-          'authToken': process.env.MESSAGECENTRAL_API_KEY!,
+          'authToken': authToken,
           'Content-Type': 'application/json',
         },
       });

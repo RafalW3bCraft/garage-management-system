@@ -27,15 +27,16 @@ Your application is **fully functional** with the following services:
 
 **Required variables:**
 ```bash
-MESSAGECENTRAL_API_KEY="your_messagecentral_api_key"
+MESSAGECENTRAL_AUTH_TOKEN="your_messagecentral_auth_token"
+MESSAGECENTRAL_CUSTOMER_ID="your_customer_id"
 OTP_SECRET="your_secure_32_character_secret_minimum"
 ```
 
-**How to get MessageCentral API key:**
+**How to get MessageCentral credentials:**
 1. Sign up at [MessageCentral](https://cpaas.messagecentral.com/)
 2. Go to your dashboard
-3. Navigate to API section
-4. Copy your API key
+3. Get your Auth Token (JWT token for API authentication)
+4. Get your Customer ID (starts with C-)
 
 **Generate OTP Secret:**
 ```bash

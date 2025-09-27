@@ -822,6 +822,107 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   }));
 
+  app.patch("/api/admin/users/:id", requireAdmin, asyncRoute("update user role", async (req: any, res: any) => {
+    const { id } = req.params;
+    const { role } = req.body;
+    const storage = await getStorage();
+    
+    // Validate role value
+    if (!role || !["customer", "admin"].includes(role)) {
+      return res.status(400).json({ 
+        message: "Invalid role. Role must be either 'customer' or 'admin'" 
+      });
+    }
+    
+    // Check if user exists
+    const existingUser = await storage.getUser(id);
+    if (!existingUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Prevent self-demotion (admin removing their own admin role)
+    const currentUser = req.user as any;
+    if (currentUser.id === id && role === "customer") {
+      return res.status(400).json({ 
+        message: "You cannot remove your own admin privileges" 
+      });
+    }
+    
+    // Update user role
+    const updatedUser = await storage.updateUser(id, { role });
+    if (!updatedUser) {
+      return res.status(500).json({ message: "Failed to update user role" });
+    }
+    
+    // Return updated user without password
+    const { password, ...safeUser } = updatedUser;
+    res.json({ 
+      message: `User role updated to ${role} successfully`,
+      user: safeUser
+    });
+  }));
+
+  // Admin consolidated statistics endpoint
+  app.get("/api/admin/stats", requireAdmin, asyncRoute("get admin dashboard statistics", async (req: any, res: any) => {
+    const storage = await getStorage();
+    
+    try {
+      // Fetch all data needed for admin dashboard in parallel
+      const [
+        appointments,
+        services, 
+        locations,
+        cars,
+        userCount
+      ] = await Promise.all([
+        storage.getAllAppointments(),
+        storage.getAllServices(),
+        storage.getAllLocations(),
+        storage.getAllCars(),
+        storage.getUserCount()
+      ]);
+
+      // Calculate statistics
+      const stats = {
+        // User statistics
+        totalUsers: userCount,
+        
+        // Appointment statistics  
+        totalAppointments: appointments.length,
+        pendingAppointments: appointments.filter(a => a.status === "pending").length,
+        confirmedAppointments: appointments.filter(a => a.status === "confirmed").length,
+        completedAppointments: appointments.filter(a => a.status === "completed").length,
+        cancelledAppointments: appointments.filter(a => a.status === "cancelled").length,
+        
+        // Service statistics
+        totalServices: services.length,
+        popularServices: services.filter(s => s.popular).length,
+        
+        // Location statistics
+        totalLocations: locations.length,
+        
+        // Car statistics
+        totalCars: cars.length,
+        activeCars: cars.filter(c => !c.isAuction).length,
+        auctionCars: cars.filter(c => c.isAuction).length,
+        activeAuctions: cars.filter(c => c.isAuction && c.auctionEndTime && new Date(c.auctionEndTime) > new Date()).length,
+        
+        // Recent activity counts (last 30 days)
+        recentAppointments: appointments.filter(a => 
+          new Date(a.createdAt) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+        ).length,
+      };
+
+      res.json(stats);
+    } catch (error) {
+      console.error("Failed to fetch admin statistics:", error);
+      res.status(500).json({ 
+        message: "Failed to fetch dashboard statistics",
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  }));
+
   // Services API
   app.get("/api/services", asyncRoute("fetch services", async (req: any, res: any) => {
     const storage = await getStorage();
@@ -1444,7 +1545,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/cars", requireAuth, async (req: any, res: any) => {
+  app.post("/api/cars", requireAdmin, async (req: any, res: any) => {
     try {
       const storage = await getStorage();
       const validatedData = insertCarSchema.parse(req.body);
@@ -1624,6 +1725,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
   });
+
+  app.put("/api/locations/:id", requireAdmin, asyncRoute("update location", async (req: any, res: any) => {
+    const { id } = req.params;
+    const storage = await getStorage();
+    
+    // Validate the update data
+    const validatedData = insertLocationSchema.parse(req.body);
+    
+    // Check if location exists
+    const existingLocation = await storage.getLocation(id);
+    if (!existingLocation) {
+      return res.status(404).json({ message: "Location not found" });
+    }
+    
+    const updatedLocation = await storage.updateLocation(id, validatedData);
+    res.json(updatedLocation);
+  }));
+
+  app.delete("/api/locations/:id", requireAdmin, asyncRoute("delete location", async (req: any, res: any) => {
+    const { id } = req.params;
+    const storage = await getStorage();
+    
+    // Check if location exists
+    const existingLocation = await storage.getLocation(id);
+    if (!existingLocation) {
+      return res.status(404).json({ message: "Location not found" });
+    }
+    
+    // Check if location has any appointments
+    const hasAppointments = await storage.hasLocationAppointments(id);
+    if (hasAppointments) {
+      return res.status(400).json({ 
+        message: "Cannot delete location with existing appointments. Please reassign or cancel appointments first." 
+      });
+    }
+    
+    await storage.deleteLocation(id);
+    res.json({ message: "Location deleted successfully" });
+  }));
 
   // Image Upload Routes
   
@@ -1813,11 +1953,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(404).json({ message: "Car not found" });
     }
 
-    // Check if car has active bids (prevent deletion of cars with bids)
-    const bids = await storage.getBidsForCar(id);
-    if (bids && bids.length > 0) {
-      return res.status(400).json({ 
-        message: "Cannot delete car with existing bids. Please resolve all bids first." 
+    // Check if car has active bids (prevent deletion of cars with active auctions)
+    const hasActiveBids = await storage.hasActiveBids(id);
+    if (hasActiveBids) {
+      return res.status(409).json({ 
+        message: "Cannot delete car with active auction bids. Please wait for the auction to end or cancel the auction first." 
       });
     }
 
