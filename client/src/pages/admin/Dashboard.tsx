@@ -3,12 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Users, Car, Calendar, Settings, MapPin, Wrench } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Users, Car, Calendar, Settings, MapPin, Wrench, AlertCircle } from "lucide-react";
 import { Link } from "wouter";
+import { useToast } from "@/hooks/use-toast";
+import { useEffect } from "react";
 import type { Appointment, Service, Location, Car as CarType } from "@shared/schema";
 
 export default function AdminDashboard() {
   const { user, isAuthenticated } = useAuth();
+  const { toast } = useToast();
 
   // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
@@ -23,40 +27,54 @@ export default function AdminDashboard() {
     );
   }
 
-  // Fetch admin statistics with loading/error states
-  const { data: appointments = [], isLoading: appointmentsLoading, isError: appointmentsError } = useQuery<Appointment[]>({
-    queryKey: ["/api/admin/appointments"],
+  // Fetch consolidated admin statistics
+  const { data: stats, isLoading, isError, error } = useQuery<{
+    totalUsers: number;
+    totalAppointments: number;
+    pendingAppointments: number;
+    confirmedAppointments: number;
+    completedAppointments: number;
+    cancelledAppointments: number;
+    totalServices: number;
+    popularServices: number;
+    totalLocations: number;
+    totalCars: number;
+    activeCars: number;
+    auctionCars: number;
+    activeAuctions: number;
+    recentAppointments: number;
+  }>({
+    queryKey: ["/api/admin/stats"],
   });
 
-  const { data: services = [], isLoading: servicesLoading, isError: servicesError } = useQuery<Service[]>({
-    queryKey: ["/api/services"],
-  });
+  // Error logging and user notification
+  useEffect(() => {
+    if (isError && error) {
+      console.error(`[Admin Dashboard] Failed to load statistics:`, error);
+      toast({
+        title: "Failed to load dashboard statistics",
+        description: error instanceof Error ? error.message : "Unable to fetch dashboard data",
+        variant: "destructive",
+      });
+    }
+  }, [isError, error, toast]);
 
-  const { data: locations = [], isLoading: locationsLoading, isError: locationsError } = useQuery<Location[]>({
-    queryKey: ["/api/locations"],
-  });
-
-  const { data: cars = [], isLoading: carsLoading, isError: carsError } = useQuery<CarType[]>({
-    queryKey: ["/api/cars"],
-  });
-
-  const { data: userCountData = { count: 0 }, isLoading: userCountLoading, isError: userCountError } = useQuery<{ count: number }>({
-    queryKey: ["/api/admin/users/count"],
-  });
-
-  const isLoading = appointmentsLoading || servicesLoading || locationsLoading || carsLoading || userCountLoading;
-  const hasErrors = appointmentsError || servicesError || locationsError || carsError || userCountError;
-
-  // Calculate statistics
-  const stats = {
-    totalAppointments: appointments.length,
-    pendingAppointments: appointments.filter(a => a.status === "pending").length,
-    confirmedAppointments: appointments.filter(a => a.status === "confirmed").length,
-    completedAppointments: appointments.filter(a => a.status === "completed").length,
-    totalServices: services.length,
-    totalLocations: locations.length,
-    totalCars: cars.length,
-    activeCars: cars.filter(c => !c.isAuction).length, // Non-auction cars are "available"
+  // Provide default values if data is not loaded yet
+  const dashboardStats = stats || {
+    totalUsers: 0,
+    totalAppointments: 0,
+    pendingAppointments: 0,
+    confirmedAppointments: 0,
+    completedAppointments: 0,
+    cancelledAppointments: 0,
+    totalServices: 0,
+    popularServices: 0,
+    totalLocations: 0,
+    totalCars: 0,
+    activeCars: 0,
+    auctionCars: 0,
+    activeAuctions: 0,
+    recentAppointments: 0,
   };
 
   const adminActions = [
@@ -65,7 +83,7 @@ export default function AdminDashboard() {
       description: "View and update appointment statuses",
       icon: Calendar,
       href: "/admin/appointments",
-      count: stats.totalAppointments,
+      count: dashboardStats.totalAppointments,
       color: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300",
     },
     {
@@ -73,7 +91,7 @@ export default function AdminDashboard() {
       description: "Add, edit, and organize service offerings",
       icon: Wrench,
       href: "/admin/services",
-      count: stats.totalServices,
+      count: dashboardStats.totalServices,
       color: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300",
     },
     {
@@ -81,7 +99,7 @@ export default function AdminDashboard() {
       description: "Service center locations and details",
       icon: MapPin,
       href: "/admin/locations",
-      count: stats.totalLocations,
+      count: dashboardStats.totalLocations,
       color: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300",
     },
     {
@@ -89,7 +107,7 @@ export default function AdminDashboard() {
       description: "Car inventory and auction management",
       icon: Car,
       href: "/admin/cars",
-      count: stats.totalCars,
+      count: dashboardStats.totalCars,
       color: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300",
     },
     {
@@ -97,7 +115,7 @@ export default function AdminDashboard() {
       description: "Manage customer accounts and permissions",
       icon: Users,
       href: "/admin/users",
-      count: userCountData.count,
+      count: dashboardStats.totalUsers,
       color: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300",
     },
   ];
@@ -127,23 +145,26 @@ export default function AdminDashboard() {
     );
   }
 
-  // Show error state
-  if (hasErrors) {
-    return (
-      <div className="container mx-auto px-4 py-8">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-destructive mb-4">Dashboard Error</h1>
-          <p className="text-muted-foreground mb-4">
-            Failed to load dashboard data. Please try refreshing the page.
-          </p>
-          <Button onClick={() => window.location.reload()}>Refresh Page</Button>
-        </div>
-      </div>
-    );
-  }
+  // Show error alert if statistics failed to load
+  const errorComponent = isError ? (
+    <Alert variant="destructive" className="mb-4">
+      <AlertCircle className="h-4 w-4" />
+      <AlertTitle>Dashboard Data Error</AlertTitle>
+      <AlertDescription>
+        Failed to load dashboard statistics. Please try refreshing the page.
+      </AlertDescription>
+    </Alert>
+  ) : null;
 
   return (
     <div className="container mx-auto px-4 py-8">
+      {/* Error Alert */}
+      {errorComponent && (
+        <div className="mb-6">
+          {errorComponent}
+        </div>
+      )}
+
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight mb-2" data-testid="heading-admin-dashboard">
@@ -162,13 +183,13 @@ export default function AdminDashboard() {
             <Calendar className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="stat-total-appointments">{stats.totalAppointments}</div>
+            <div className="text-2xl font-bold" data-testid="stat-total-appointments">{dashboardStats.totalAppointments}</div>
             <div className="flex gap-2 mt-2">
               <Badge variant="secondary" className="text-xs">
-                {stats.pendingAppointments} pending
+                {dashboardStats.pendingAppointments} pending
               </Badge>
               <Badge variant="outline" className="text-xs">
-                {stats.confirmedAppointments} confirmed
+                {dashboardStats.confirmedAppointments} confirmed
               </Badge>
             </div>
           </CardContent>
@@ -180,7 +201,7 @@ export default function AdminDashboard() {
             <Wrench className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="stat-total-services">{stats.totalServices}</div>
+            <div className="text-2xl font-bold" data-testid="stat-total-services">{dashboardStats.totalServices}</div>
             <p className="text-xs text-muted-foreground mt-1">
               Service offerings available
             </p>
@@ -193,7 +214,7 @@ export default function AdminDashboard() {
             <MapPin className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="stat-total-locations">{stats.totalLocations}</div>
+            <div className="text-2xl font-bold" data-testid="stat-total-locations">{dashboardStats.totalLocations}</div>
             <p className="text-xs text-muted-foreground mt-1">
               Branches operating
             </p>
@@ -206,9 +227,9 @@ export default function AdminDashboard() {
             <Car className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="stat-active-cars">{stats.activeCars}</div>
+            <div className="text-2xl font-bold" data-testid="stat-active-cars">{dashboardStats.activeCars}</div>
             <p className="text-xs text-muted-foreground mt-1">
-              {stats.totalCars} total inventory
+              {dashboardStats.totalCars} total inventory
             </p>
           </CardContent>
         </Card>

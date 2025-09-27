@@ -5,13 +5,14 @@ let mailService: MailService | null = null;
 
 function initializeMailService() {
   if (!process.env.SENDGRID_API_KEY) {
-    console.warn("SENDGRID_API_KEY environment variable not set - email notifications disabled");
+    console.warn("[EMAIL] SENDGRID_API_KEY environment variable not set - email notifications disabled");
     return false;
   }
 
   if (!mailService) {
     mailService = new MailService();
     mailService.setApiKey(process.env.SENDGRID_API_KEY);
+    console.log(`[EMAIL] Service initialized with sender: ${process.env.SENDGRID_FROM_EMAIL || 'noreply@ronakmotorgarage.com'}`);
   }
   return true;
 }
@@ -30,6 +31,24 @@ export async function sendEmail(params: EmailParams): Promise<boolean> {
     return false;
   }
 
+  // Validate email parameters
+  if (!params.to || !params.from || !params.subject) {
+    console.error(`[EMAIL] Invalid email parameters - to: ${!!params.to}, from: ${!!params.from}, subject: ${!!params.subject}`);
+    return false;
+  }
+
+  // Basic email format validation
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(params.to)) {
+    console.error(`[EMAIL] Invalid recipient email format: ${params.to}`);
+    return false;
+  }
+
+  if (!emailRegex.test(params.from)) {
+    console.error(`[EMAIL] Invalid sender email format: ${params.from}`);
+    return false;
+  }
+
   try {
     const emailData: any = {
       to: params.to,
@@ -44,18 +63,43 @@ export async function sendEmail(params: EmailParams): Promise<boolean> {
       emailData.html = params.html;
     }
 
+    console.log(`[EMAIL] Sending email to ${params.to} with subject: "${params.subject}"`);
+    
     // Add timeout to prevent hanging email operations
     const emailPromise = mailService.send(emailData);
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Email send timeout')), 15000) // 15 second timeout
+      setTimeout(() => reject(new Error('Email send timeout after 15 seconds')), 15000)
     );
 
-    await Promise.race([emailPromise, timeoutPromise]);
-    console.log(`[EMAIL] Successfully sent to ${params.to} - Subject: "${params.subject}"`);
+    const result = await Promise.race([emailPromise, timeoutPromise]);
+    
+    // Log success with more details
+    console.log(`[EMAIL] ✅ Successfully sent to ${params.to} - Subject: "${params.subject}" - From: ${params.from}`);
     return true;
   } catch (error: any) {
+    // Enhanced error logging with SendGrid response details
     const errorMsg = error?.message || 'Unknown error';
-    console.error(`[EMAIL] Failed to send to ${params.to} - Error: ${errorMsg}`);
+    const statusCode = error?.code || error?.response?.status || 'N/A';
+    const responseBody = error?.response?.body || null;
+    
+    console.error(`[EMAIL] ❌ Failed to send to ${params.to}`);
+    console.error(`[EMAIL] Error: ${errorMsg}`);
+    console.error(`[EMAIL] Status Code: ${statusCode}`);
+    
+    if (responseBody) {
+      // Log SendGrid specific error details (but safely to avoid PII leaks)
+      console.error(`[EMAIL] SendGrid Response: ${JSON.stringify(responseBody, null, 2)}`);
+    }
+    
+    // Log common SendGrid issues for debugging
+    if (statusCode === 401) {
+      console.error(`[EMAIL] 🔑 Authentication failed - check SENDGRID_API_KEY`);
+    } else if (statusCode === 403) {
+      console.error(`[EMAIL] 🚫 Forbidden - sender email may not be verified in SendGrid`);
+    } else if (statusCode === 400) {
+      console.error(`[EMAIL] 📝 Bad request - check email format and content`);
+    }
+    
     return false;
   }
 }
@@ -72,7 +116,7 @@ export interface AppointmentEmailData {
 }
 
 export class EmailNotificationService {
-  private static FROM_EMAIL = "noreply@ronakmotorgarage.com"; // Should be verified sender in SendGrid
+  private static FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@ronakmotorgarage.com"; // Use env var or fallback to default
 
   // Non-blocking email helper for appointment operations
   static async sendAppointmentConfirmationAsync(to: string, data: AppointmentEmailData): Promise<void> {

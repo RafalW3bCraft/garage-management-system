@@ -111,6 +111,34 @@ function validateEnvironment(): void {
     console.log("- WhatsApp Service: ⚠ Disabled (mock mode)");
   }
   
+  // Validate MessageCentral Configuration for SMS/OTP
+  const messageCentralToken = process.env.MESSAGECENTRAL_AUTH_TOKEN;
+  const messageCentralCustomerId = process.env.MESSAGECENTRAL_CUSTOMER_ID;
+  
+  if (messageCentralToken && messageCentralCustomerId) {
+    console.log("- MESSAGECENTRAL_AUTH_TOKEN: ✓ Available");
+    console.log("- MESSAGECENTRAL_CUSTOMER_ID: ✓ Available");
+    console.log("- SMS/OTP Service: ✓ Enabled");
+  } else if (messageCentralToken || messageCentralCustomerId) {
+    const missing = messageCentralToken ? "MESSAGECENTRAL_CUSTOMER_ID" : "MESSAGECENTRAL_AUTH_TOKEN";
+    if (isProduction) {
+      result.errors.push(`SMS/OTP service partially configured: ${missing} is missing. Either set both or remove both.`);
+      console.log(`- MESSAGECENTRAL_AUTH_TOKEN: ${messageCentralToken ? "✓" : "✗"} ${messageCentralToken ? "Available" : "Missing"}`);
+      console.log(`- MESSAGECENTRAL_CUSTOMER_ID: ${messageCentralCustomerId ? "✓" : "✗"} ${messageCentralCustomerId ? "Available" : "Missing"}`);
+      console.log("- SMS/OTP Service: ✗ PARTIALLY CONFIGURED (INVALID IN PRODUCTION)");
+    } else {
+      result.warnings.push(`SMS/OTP service partially configured: ${missing} is missing. OTP will use mock mode.`);
+      console.log(`- MESSAGECENTRAL_AUTH_TOKEN: ${messageCentralToken ? "✓" : "⚠"} ${messageCentralToken ? "Available" : "Missing"}`);
+      console.log(`- MESSAGECENTRAL_CUSTOMER_ID: ${messageCentralCustomerId ? "✓" : "⚠"} ${messageCentralCustomerId ? "Available" : "Missing"}`);
+      console.log("- SMS/OTP Service: ⚠ Mock mode (disabled)");
+    }
+  } else {
+    result.warnings.push("SMS/OTP service not configured - mobile registration will use mock mode");
+    console.log("- MESSAGECENTRAL_AUTH_TOKEN: ⚠ Missing (SMS/OTP disabled)");
+    console.log("- MESSAGECENTRAL_CUSTOMER_ID: ⚠ Missing (SMS/OTP disabled)");
+    console.log("- SMS/OTP Service: ⚠ Disabled (mock mode)");
+  }
+  
   // Validate Email Service Configuration (SendGrid)
   const sendgridKey = process.env.SENDGRID_API_KEY;
   const sendgridFrom = process.env.SENDGRID_FROM_EMAIL;

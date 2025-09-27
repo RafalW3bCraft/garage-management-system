@@ -90,12 +90,16 @@ export interface IStorage {
   getAllLocations(): Promise<Location[]>;
   getLocation(id: string): Promise<Location | undefined>;
   createLocation(location: InsertLocation): Promise<Location>;
+  updateLocation(id: string, updates: Partial<Location>): Promise<Location | undefined>;
+  deleteLocation(id: string): Promise<boolean>;
+  hasLocationAppointments(locationId: string): Promise<boolean>;
   
   // Bids
   placeBid(bid: InsertBid): Promise<Bid>;
   getBidsForCar(carId: string): Promise<Bid[]>;
   getHighestBidForCar(carId: string): Promise<Bid | undefined>;
   updateCarCurrentBid(carId: string, bidAmount: number): Promise<Car | undefined>;
+  hasActiveBids(carId: string): Promise<boolean>;
 
   // OTP Verification
   storeOTPVerification(otp: InsertOtpVerification): Promise<OtpVerification>;
@@ -573,6 +577,29 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
+  async updateLocation(id: string, updates: Partial<Location>): Promise<Location | undefined> {
+    const db = await getDb();
+    const result = await db.update(locations)
+      .set(updates)
+      .where(eq(locations.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteLocation(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.delete(locations).where(eq(locations.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async hasLocationAppointments(locationId: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.select({ count: sql<number>`count(*)` })
+      .from(appointments)
+      .where(eq(appointments.locationId, locationId));
+    return result[0]?.count > 0;
+  }
+
   // Bids
   async placeBid(bid: InsertBid): Promise<Bid> {
     const db = await getDb();
@@ -603,6 +630,30 @@ export class DatabaseStorage implements IStorage {
       .where(eq(cars.id, carId))
       .returning();
     return result[0];
+  }
+
+  async hasActiveBids(carId: string): Promise<boolean> {
+    const db = await getDb();
+    
+    // Get the car to check if it's an auction car and if auction is still active
+    const car = await db.select().from(cars).where(eq(cars.id, carId)).limit(1);
+    if (!car[0]) {
+      return false;
+    }
+    
+    // Only check for bids if car is in auction and auction hasn't ended
+    const now = new Date();
+    const isActiveAuction = car[0].isAuction && 
+                           car[0].auctionEndTime && 
+                           car[0].auctionEndTime > now;
+    
+    if (!isActiveAuction) {
+      return false;
+    }
+    
+    // Check if there are any bids for this active auction car
+    const bidRows = await db.select().from(bids).where(eq(bids.carId, carId)).limit(1);
+    return bidRows.length > 0;
   }
 
   // OTP Verification
@@ -1273,6 +1324,24 @@ export class MemStorage implements IStorage {
     return newLocation;
   }
 
+  async updateLocation(id: string, updates: Partial<Location>): Promise<Location | undefined> {
+    const existing = this.locations.get(id);
+    if (!existing) return undefined;
+    
+    const updated: Location = { ...existing, ...updates };
+    this.locations.set(id, updated);
+    return updated;
+  }
+
+  async deleteLocation(id: string): Promise<boolean> {
+    return this.locations.delete(id);
+  }
+
+  async hasLocationAppointments(locationId: string): Promise<boolean> {
+    const appointmentsList = Array.from(this.appointments.values());
+    return appointmentsList.some(appointment => appointment.locationId === locationId);
+  }
+
   // Bids
   private bids: Map<string, Bid> = new Map();
 
@@ -1308,6 +1377,28 @@ export class MemStorage implements IStorage {
       return updatedCar;
     }
     return undefined;
+  }
+
+  async hasActiveBids(carId: string): Promise<boolean> {
+    // Get the car to check if it's an auction car and if auction is still active
+    const car = this.cars.get(carId);
+    if (!car) {
+      return false;
+    }
+    
+    // Only check for bids if car is in auction and auction hasn't ended
+    const now = new Date();
+    const isActiveAuction = car.isAuction && 
+                           car.auctionEndTime && 
+                           car.auctionEndTime > now;
+    
+    if (!isActiveAuction) {
+      return false;
+    }
+    
+    // Check if there are any bids for this active auction car
+    const carBids = Array.from(this.bids.values()).filter(bid => bid.carId === carId);
+    return carBids.length > 0;
   }
 
   // OTP Verification

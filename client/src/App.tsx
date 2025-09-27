@@ -14,6 +14,10 @@ import Contact from "@/pages/Contact";
 import Profile from "@/pages/Profile";
 import AdminDashboard from "@/pages/admin/Dashboard";
 import AdminAppointments from "@/pages/admin/Appointments";
+import AdminServices from "@/pages/admin/Services";
+import AdminLocations from "@/pages/admin/Locations";
+import AdminCars from "@/pages/admin/Cars";
+import AdminUsers from "@/pages/admin/Users";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -31,6 +35,10 @@ function Router() {
           <Route path="/profile" component={Profile} />
           <Route path="/admin" component={AdminDashboard} />
           <Route path="/admin/appointments" component={AdminAppointments} />
+          <Route path="/admin/services" component={AdminServices} />
+          <Route path="/admin/locations" component={AdminLocations} />
+          <Route path="/admin/cars" component={AdminCars} />
+          <Route path="/admin/users" component={AdminUsers} />
           <Route component={NotFound} />
         </Switch>
       </main>
