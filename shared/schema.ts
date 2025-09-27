@@ -6,7 +6,7 @@ import { z } from "zod";
 // Users table - enhanced for mobile auth, profiles and OAuth
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: text("email").unique(), // Optional for mobile-only registrations
+  email: text("email").unique(), // Optional for mobile-only registrations - nullable
   name: text("name").notNull(),
   password: text("password"), // nullable for OAuth users
   googleId: text("google_id").unique(), // for Google OAuth
@@ -35,7 +35,7 @@ export const users = pgTable("users", {
 // Customers table - people who book services
 export const customers = pgTable("customers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").references(() => users.id), // Link to user account (optional for legacy data)
+  userId: varchar("user_id").references(() => users.id, { onDelete: 'set null', onUpdate: 'cascade' }), // Link to user account (optional for legacy data)
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   phone: text("phone").notNull(),
@@ -74,9 +74,9 @@ export const services = pgTable("services", {
 // Appointments for services
 export const appointments = pgTable("appointments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  customerId: varchar("customer_id").references(() => customers.id).notNull(),
-  serviceId: varchar("service_id").references(() => services.id).notNull(),
-  locationId: varchar("location_id").references(() => locations.id).notNull(),
+  customerId: varchar("customer_id").references(() => customers.id, { onDelete: 'restrict', onUpdate: 'cascade' }).notNull(),
+  serviceId: varchar("service_id").references(() => services.id, { onDelete: 'restrict', onUpdate: 'cascade' }).notNull(),
+  locationId: varchar("location_id").references(() => locations.id, { onDelete: 'restrict', onUpdate: 'cascade' }).notNull(),
   carDetails: text("car_details").notNull(),
   dateTime: timestamp("date_time").notNull(),
   status: text("status").notNull().default("pending"), // pending, confirmed, in-progress, completed, cancelled
@@ -109,7 +109,7 @@ export const cars = pgTable("cars", {
 // Car auction bids
 export const bids = pgTable("bids", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  carId: varchar("car_id").notNull().references(() => cars.id),
+  carId: varchar("car_id").notNull().references(() => cars.id, { onDelete: 'restrict', onUpdate: 'cascade' }),
   bidderEmail: text("bidder_email").notNull(), // Match email with customers/users
   bidAmount: integer("bid_amount").notNull(),
   bidTime: timestamp("bid_time").defaultNow().notNull(),
@@ -248,7 +248,7 @@ export const insertWhatsAppMessageSchema = createInsertSchema(whatsappMessages).
 
 // Place bid schema with validation
 export const placeBidSchema = z.object({
-  carId: z.string().uuid({ message: "Car ID must be a valid UUID" }),
+  carId: z.string().min(1, { message: "Car ID is required" }),
   bidAmount: z.number()
     .int({ message: "Bid amount must be a whole number" })
     .positive({ message: "Bid amount must be positive" })
@@ -288,7 +288,10 @@ export const verifyOtpSchema = z.object({
     .regex(/^\+\d{1,4}$/, "Invalid country code format"),
   otpCode: z.string()
     .length(6, "OTP must be exactly 6 digits")
-    .regex(/^\d{6}$/, "OTP must contain only numbers")
+    .regex(/^\d{6}$/, "OTP must contain only numbers"),
+  purpose: z.enum(["registration", "login", "password_reset"], {
+    errorMap: () => ({ message: "Purpose must be registration, login, or password_reset" })
+  })
 });
 
 export const mobileRegisterSchema = z.object({
