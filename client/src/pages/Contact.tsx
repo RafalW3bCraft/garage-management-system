@@ -1,10 +1,20 @@
-import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { 
   MapPin, 
   Phone, 
@@ -16,17 +26,59 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import type { Location, InsertContact } from "@shared/schema";
+import { useErrorHandler } from "@/lib/error-utils";
+import type { Location } from "@shared/schema";
 
+/**
+ * Zod schema for contact form validation
+ */
+const contactFormSchema = z.object({
+  name: z.string()
+    .min(2, "Name must be at least 2 characters")
+    .max(100, "Name cannot exceed 100 characters"),
+  email: z.string()
+    .email("Please enter a valid email address"),
+  phone: z.string()
+    .min(10, "Phone number must be at least 10 digits")
+    .max(15, "Phone number cannot exceed 15 digits")
+    .regex(/^[0-9+\-\s()]*$/, "Please enter a valid phone number"),
+  subject: z.string()
+    .min(5, "Subject must be at least 5 characters")
+    .max(200, "Subject cannot exceed 200 characters"),
+  message: z.string()
+    .min(10, "Message must be at least 10 characters")
+    .max(1000, "Message cannot exceed 1000 characters"),
+});
+
+type ContactFormData = z.infer<typeof contactFormSchema>;
+
+/**
+ * Contact page component providing a contact form, quick contact information,
+ * service locations display, and frequently asked questions section.
+ * 
+ * @returns {JSX.Element} The rendered contact page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/contact" component={Contact} />
+ * ```
+ */
 export default function Contact() {
-  const [formData, setFormData] = useState({
-    name: "",
-    email: "",
-    phone: "",
-    subject: "",
-    message: ""
-  });
   const { toast } = useToast();
+  const { handleMutationError } = useErrorHandler();
+
+  // Initialize form with react-hook-form and Zod validation
+  const form = useForm<ContactFormData>({
+    resolver: zodResolver(contactFormSchema),
+    mode: "onChange",
+    defaultValues: {
+      name: "",
+      email: "",
+      phone: "",
+      subject: "",
+      message: "",
+    },
+  });
 
   // Fetch locations from API
   const { data: locations, isLoading: locationsLoading, isError: locationsError, error: locationsErrorData, refetch: refetchLocations } = useQuery<Location[]>({
@@ -37,7 +89,7 @@ export default function Contact() {
 
   // Contact form mutation
   const contactMutation = useMutation({
-    mutationFn: async (data: InsertContact) => {
+    mutationFn: async (data: ContactFormData) => {
       const response = await apiRequest("POST", "/api/contacts", data);
       return response.json();
     },
@@ -47,35 +99,19 @@ export default function Contact() {
         description: "Thank you for contacting us. We'll get back to you soon.",
       });
       // Reset form
-      setFormData({
-        name: "",
-        email: "",
-        phone: "",
-        subject: "",
-        message: ""
-      });
+      form.reset();
     },
     onError: (error: Error) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to send message. Please try again.",
-        variant: "destructive",
+      handleMutationError(error, {
+        title: "Failed to Send Message",
+        defaultMessage: "Could not send your message. Please try again.",
       });
     },
   });
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
+  const onSubmit = (data: ContactFormData) => {
+    contactMutation.mutate(data);
   };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    contactMutation.mutate(formData);
-  };
-
 
   return (
     <div className="min-h-screen bg-background">
@@ -103,107 +139,128 @@ export default function Contact() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <form onSubmit={handleSubmit} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label htmlFor="name" className="text-sm font-medium mb-2 block">
-                        Full Name *
-                      </label>
-                      <Input
-                        id="name"
+                <Form {...form}>
+                  <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <FormField
+                        control={form.control}
                         name="name"
-                        type="text"
-                        placeholder="Your full name"
-                        value={formData.name}
-                        onChange={handleInputChange}
-                        required
-                        data-testid="input-name"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel htmlFor="name">Full Name *</FormLabel>
+                            <FormControl>
+                              <Input
+                                id="name"
+                                placeholder="Your full name"
+                                {...field}
+                                data-testid="input-name"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
                       />
-                    </div>
-                    <div>
-                      <label htmlFor="phone" className="text-sm font-medium mb-2 block">
-                        Phone Number *
-                      </label>
-                      <Input
-                        id="phone"
+
+                      <FormField
+                        control={form.control}
                         name="phone"
-                        type="tel"
-                        placeholder="+91-98765-43210"
-                        value={formData.phone}
-                        onChange={handleInputChange}
-                        required
-                        data-testid="input-phone"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel htmlFor="phone">Phone Number *</FormLabel>
+                            <FormControl>
+                              <Input
+                                id="phone"
+                                type="tel"
+                                placeholder="+91-98765-43210"
+                                {...field}
+                                data-testid="input-phone"
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
                       />
                     </div>
-                  </div>
 
-                  <div>
-                    <label htmlFor="email" className="text-sm font-medium mb-2 block">
-                      Email Address *
-                    </label>
-                    <Input
-                      id="email"
+                    <FormField
+                      control={form.control}
                       name="email"
-                      type="email"
-                      placeholder="your.email@example.com"
-                      value={formData.email}
-                      onChange={handleInputChange}
-                      required
-                      data-testid="input-email"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel htmlFor="email">Email Address *</FormLabel>
+                          <FormControl>
+                            <Input
+                              id="email"
+                              type="email"
+                              placeholder="your.email@example.com"
+                              {...field}
+                              data-testid="input-email"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
                     />
-                  </div>
 
-                  <div>
-                    <label htmlFor="subject" className="text-sm font-medium mb-2 block">
-                      Subject *
-                    </label>
-                    <Input
-                      id="subject"
+                    <FormField
+                      control={form.control}
                       name="subject"
-                      type="text"
-                      placeholder="What can we help you with?"
-                      value={formData.subject}
-                      onChange={handleInputChange}
-                      required
-                      data-testid="input-subject"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel htmlFor="subject">Subject *</FormLabel>
+                          <FormControl>
+                            <Input
+                              id="subject"
+                              placeholder="What can we help you with?"
+                              {...field}
+                              data-testid="input-subject"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
                     />
-                  </div>
 
-                  <div>
-                    <label htmlFor="message" className="text-sm font-medium mb-2 block">
-                      Message *
-                    </label>
-                    <Textarea
-                      id="message"
+                    <FormField
+                      control={form.control}
                       name="message"
-                      placeholder="Please describe your inquiry in detail..."
-                      rows={6}
-                      value={formData.message}
-                      onChange={handleInputChange}
-                      required
-                      data-testid="textarea-message"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel htmlFor="message">Message *</FormLabel>
+                          <FormControl>
+                            <Textarea
+                              id="message"
+                              placeholder="Please describe your inquiry in detail..."
+                              rows={6}
+                              {...field}
+                              data-testid="textarea-message"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
                     />
-                  </div>
 
-                  <Button 
-                    type="submit" 
-                    className="w-full" 
-                    disabled={contactMutation.isPending}
-                    data-testid="button-send-message"
-                  >
-                    {contactMutation.isPending ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Sending...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="mr-2 h-4 w-4" />
-                        Send Message
-                      </>
-                    )}
-                  </Button>
-                </form>
+                    <Button 
+                      type="submit" 
+                      className="w-full" 
+                      disabled={contactMutation.isPending}
+                      data-testid="button-send-message"
+                    >
+                      {contactMutation.isPending ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="mr-2 h-4 w-4" />
+                          Send Message
+                        </>
+                      )}
+                    </Button>
+                  </form>
+                </Form>
               </CardContent>
             </Card>
           </div>

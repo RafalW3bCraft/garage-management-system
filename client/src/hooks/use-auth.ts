@@ -1,27 +1,29 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
 import type { User } from "@shared/schema";
 
-interface LoginData {
-  email: string;
-  password: string;
-}
-
-interface RegisterData {
-  email: string;
-  name: string;
-  password: string;
-  confirmPassword: string;
-}
-
-interface AuthResponse {
-  message: string;
-  user: User;
-}
-
+/**
+ * Authentication hook providing user state, authentication status, and login methods.
+ * Queries current user information and available authentication providers.
+ * 
+ * @returns {object} Authentication state and methods
+ * @property {User | null | undefined} user - Current authenticated user or null
+ * @property {boolean} isLoading - Whether user data is being loaded
+ * @property {boolean} isAuthenticated - Whether a user is currently authenticated
+ * @property {string[]} providers - Available authentication providers (email, google, etc.)
+ * @property {boolean} isGoogleEnabled - Whether Google OAuth is enabled
+ * @property {() => void} googleLogin - Function to initiate Google OAuth flow
+ * 
+ * @example
+ * ```tsx
+ * const { user, isLoading, isAuthenticated, googleLogin } = useAuth();
+ * 
+ * if (isLoading) return <LoadingSpinner />;
+ * if (!isAuthenticated) return <LoginPrompt />;
+ * 
+ * return <UserProfile user={user} />;
+ * ```
+ */
 export function useAuth() {
-  const queryClient = useQueryClient();
-
   // Get current user
   const { data: user, isLoading } = useQuery<User | null>({
     queryKey: ["/api/auth/me"],
@@ -32,7 +34,7 @@ export function useAuth() {
         });
         if (response.ok) {
           const data = await response.json();
-          return data.user;
+          return data.data || null;
         }
         return null;
       } catch {
@@ -52,7 +54,7 @@ export function useAuth() {
         });
         if (response.ok) {
           const data = await response.json();
-          return data.providers;
+          return data.data?.providers || ["email"];
         }
         return ["email"]; // fallback to email only
       } catch {
@@ -62,49 +64,7 @@ export function useAuth() {
     staleTime: 5 * 60 * 1000, // 5 minutes - providers don't change often
   });
 
-  // Login mutation
-  const loginMutation = useMutation({
-    mutationFn: async (data: LoginData): Promise<AuthResponse> => {
-      const response = await apiRequest("POST", "/api/auth/login", data);
-      return response.json();
-    },
-    onSuccess: (data) => {
-      queryClient.setQueryData(["/api/auth/me"], data.user);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-    },
-  });
-
-  // Register mutation
-  const registerMutation = useMutation({
-    mutationFn: async (data: RegisterData): Promise<AuthResponse> => {
-      // Remove confirmPassword before sending to server
-      const { confirmPassword, ...sanitizedData } = data;
-      const response = await apiRequest("POST", "/api/auth/register", sanitizedData);
-      return response.json();
-    },
-    onSuccess: (data) => {
-      queryClient.setQueryData(["/api/auth/me"], data.user);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-    },
-  });
-
-  // Logout mutation
-  const logoutMutation = useMutation({
-    mutationFn: async () => {
-      const response = await apiRequest("POST", "/api/auth/logout");
-      return response.json();
-    },
-    onSuccess: () => {
-      queryClient.setQueryData(["/api/auth/me"], null);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-    },
-  });
-
-  // Helper functions
-  const login = (data: LoginData) => loginMutation.mutate(data);
-  const register = (data: RegisterData) => registerMutation.mutate(data);
-  const logout = () => logoutMutation.mutate();
-
+  // Google login redirect
   const googleLogin = () => {
     window.location.href = "/api/auth/google";
   };
@@ -115,12 +75,6 @@ export function useAuth() {
     isAuthenticated: !!user,
     providers: providers || ["email"],
     isGoogleEnabled: providers?.includes("google") || false,
-    login,
-    register,
-    logout,
     googleLogin,
-    loginMutation,
-    registerMutation,
-    logoutMutation,
   };
 }

@@ -55,6 +55,29 @@ TWILIO_AUTH_TOKEN="your_twilio_auth_token"
 TWILIO_WHATSAPP_FROM="whatsapp:+14155238886"  # Optional: uses default if not set
 ```
 
+**Optional configuration (Advanced):**
+```bash
+# Retry configuration
+WHATSAPP_MAX_RETRIES="3"                    # Maximum retry attempts (default: 3)
+WHATSAPP_RETRY_DELAY="1000"                 # Initial retry delay in ms (default: 1000)
+WHATSAPP_MAX_RETRY_DELAY="60000"           # Max retry delay in ms (default: 60000)
+WHATSAPP_BACKOFF_MULTIPLIER="2"            # Exponential backoff multiplier (default: 2)
+
+# Circuit breaker configuration
+WHATSAPP_CIRCUIT_THRESHOLD="5"              # Failures before opening circuit (default: 5)
+WHATSAPP_CIRCUIT_RECOVERY_MIN="5"          # Minutes before retry after circuit opens (default: 5)
+
+# Fallback configuration
+WHATSAPP_ENABLE_SMS_FALLBACK="true"        # Enable SMS fallback (default: true)
+WHATSAPP_ENABLE_EMAIL_FALLBACK="true"      # Enable email fallback (default: true)
+```
+
+**Circuit Breaker & Fallback Features:**
+- **Circuit Breaker**: Automatically detects sustained WhatsApp failures and prevents wasted retry attempts
+- **SMS Fallback**: If WhatsApp fails after retries, attempts to send via SMS (requires OTP service)
+- **Email Fallback**: If both WhatsApp and SMS fail, attempts to send via email (requires SendGrid)
+- **Simplified Retry**: Exponential backoff without database overhead during retries
+
 **How to get Twilio credentials:**
 1. Sign up at [Twilio](https://www.twilio.com/)
 2. Go to Console Dashboard

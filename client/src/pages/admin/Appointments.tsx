@@ -6,12 +6,26 @@ import { Badge } from "@/components/ui/badge";
 import { Calendar, Clock, User, MapPin, Wrench } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
-import type { Appointment } from "@shared/schema";
+import { useErrorHandler } from "@/lib/error-utils";
+import type { AppointmentWithDetails } from "@shared/schema";
 import { format } from "date-fns";
 
+/**
+ * Admin appointments management component for viewing and updating service appointments.
+ * Allows admins to change appointment status (pending, confirmed, in-progress, completed, cancelled).
+ * Displays detailed appointment information including customer, service, location, and timing.
+ * 
+ * @returns {JSX.Element} The rendered admin appointments page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/admin/appointments" component={AdminAppointments} />
+ * ```
+ */
 export default function AdminAppointments() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
+  const { handleMutationError } = useErrorHandler();
 
   // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
@@ -26,8 +40,8 @@ export default function AdminAppointments() {
     );
   }
 
-  // Fetch all appointments
-  const { data: appointments = [], isLoading, isError } = useQuery<Appointment[]>({
+  // Fetch all appointments with details
+  const { data: appointments = [], isLoading, isError, refetch } = useQuery<AppointmentWithDetails[]>({
     queryKey: ["/api/admin/appointments"],
   });
 
@@ -39,6 +53,12 @@ export default function AdminAppointments() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/appointments"] });
+    },
+    onError: (error: Error) => {
+      handleMutationError(error, {
+        title: "Update Failed",
+        defaultMessage: "Failed to update appointment status. Please try again.",
+      });
     },
   });
 
@@ -81,7 +101,7 @@ export default function AdminAppointments() {
       <div className="container mx-auto px-4 py-8 text-center">
         <h1 className="text-2xl font-bold text-destructive mb-4">Error Loading Appointments</h1>
         <p className="text-muted-foreground mb-4">Failed to load appointments. Please try again.</p>
-        <Button onClick={() => window.location.reload()}>Retry</Button>
+        <Button onClick={() => refetch()}>Retry</Button>
       </div>
     );
   }
@@ -135,11 +155,11 @@ export default function AdminAppointments() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                   <div className="flex items-center gap-2">
                     <User className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm">Customer: {appointment.customerId}</span>
+                    <span className="text-sm">Customer: {appointment.customerName}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Wrench className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm">Service: {appointment.serviceId}</span>
+                    <span className="text-sm">Service: {appointment.serviceName}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Calendar className="h-4 w-4 text-muted-foreground" />
@@ -155,7 +175,7 @@ export default function AdminAppointments() {
                   </div>
                   <div className="flex items-center gap-2">
                     <MapPin className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm">Location: {appointment.locationId}</span>
+                    <span className="text-sm">Location: {appointment.locationName}</span>
                   </div>
                 </div>
                 

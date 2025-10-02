@@ -18,6 +18,17 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import type { Service } from "@shared/schema";
 
+/**
+ * Home page component displaying the landing page with hero section, featured services,
+ * statistics, reasons to choose the service, customer testimonials, and call-to-action sections.
+ * 
+ * @returns {JSX.Element} The rendered home page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/" component={Home} />
+ * ```
+ */
 export default function Home() {
   // Fetch services from API
   const { data: services = [], isLoading: servicesLoading, error: servicesError } = useQuery<Service[]>({

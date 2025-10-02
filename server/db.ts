@@ -11,19 +11,34 @@ async function getDatabaseUrl(): Promise<string> {
     return databaseUrl;
   }
 
+  console.log("=== Database URL Debug ===");
+  console.log("DATABASE_URL:", process.env.DATABASE_URL ? "✓ exists" : "✗ missing");
+  console.log("NEON_DATABASE_URL:", process.env.NEON_DATABASE_URL ? "✓ exists" : "✗ missing"); 
+  console.log("POSTGRES_URL:", process.env.POSTGRES_URL ? "✓ exists" : "✗ missing");
+  console.log("POSTGRES_PRISMA_URL:", process.env.POSTGRES_PRISMA_URL ? "✓ exists" : "✗ missing");
+  console.log("Individual PostgreSQL vars:");
+  console.log("- PGHOST:", process.env.PGHOST ? "✓ exists" : "✗ missing");
+  console.log("- PGUSER:", process.env.PGUSER ? "✓ exists" : "✗ missing");
+  console.log("- PGPASSWORD:", process.env.PGPASSWORD ? "✓ exists" : "✗ missing");
+  console.log("- PGDATABASE:", process.env.PGDATABASE ? "✓ exists" : "✗ missing");
+  console.log("- PGPORT:", process.env.PGPORT ? "✓ exists" : "✗ missing");
+
   // Check for full connection string first
   let url = process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL;
 
   // If no full connection string, construct from PostgreSQL individual components
   if (!url && process.env.PGHOST && process.env.PGUSER && process.env.PGPASSWORD && process.env.PGDATABASE && process.env.PGPORT) {
     url = `postgresql://${process.env.PGUSER}:${process.env.PGPASSWORD}@${process.env.PGHOST}:${process.env.PGPORT}/${process.env.PGDATABASE}`;
+    console.log("Constructed URL from individual PostgreSQL vars");
   }
 
   if (url) {
+    console.log("Final database URL available:", url ? "✓ success" : "✗ failed");
     databaseUrl = url;
     return url;
   }
 
+  console.log("=== End Database URL Debug ===");
   throw new Error("No database connection available. Database credentials not found in environment.");
 }
 

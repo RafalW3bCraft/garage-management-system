@@ -14,8 +14,8 @@ export async function verifyPassword(password: string, hashedPassword: string): 
 }
 
 // Passport configuration
-passport.serializeUser((user: any, done) => {
-  done(null, user.id);
+passport.serializeUser((user: Express.User, done) => {
+  done(null, (user as any).id);
 });
 
 passport.deserializeUser(async (id: string, done) => {
@@ -27,9 +27,10 @@ passport.deserializeUser(async (id: string, done) => {
       return done(null, false); // Invalid session, force re-login
     }
     done(null, user);
-  } catch (error: any) {
+  } catch (error) {
     // Log detailed error for debugging (server-side only)
-    console.error(`Session deserialization error for user ${id}:`, error.message);
+    const err = error as Error;
+    console.error(`Session deserialization error for user ${id}:`, err.message);
     
     // Always return a generic session error to prevent information disclosure
     // Don't reveal database structure, error codes, or internal system details
@@ -105,14 +106,15 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
           
           console.log(`Successfully linked Google account for user ID: ${user.id}`);
           return done(null, updatedUser);
-        } catch (error: any) {
-          console.error("Error linking Google account:", error.message);
+        } catch (error) {
+          const err = error as Error;
+          console.error("Error linking Google account:", err.message);
           
           // Handle specific error cases with user-friendly messages
-          if (error.message.includes("already linked to another user")) {
+          if (err.message.includes("already linked to another user")) {
             return done(new Error("This Google account is already linked to another account"), undefined);
           }
-          if (error.message.includes("User already linked")) {
+          if (err.message.includes("User already linked")) {
             return done(new Error("Your account is already linked to Google"), undefined);
           }
           
@@ -138,19 +140,20 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
     }
     
     return done(null, user || undefined);
-  } catch (error: any) {
-    console.error("Google OAuth strategy error:", error.message);
+  } catch (error) {
+    const err = error as { message?: string; code?: string };
+    console.error("Google OAuth strategy error:", err.message);
     
     // Handle specific OAuth errors
-    if (error.message?.includes('validation')) {
+    if (err.message?.includes('validation')) {
       return done(new Error("Invalid Google account data. Please contact support."), undefined);
     }
     
-    if (error.code && error.code === '23505') {
+    if (err.code && err.code === '23505') {
       return done(new Error("Account creation failed due to existing data. Please try logging in instead."), undefined);
     }
     
-    if (error.code && error.code.startsWith('2')) {
+    if (err.code && err.code.startsWith('2')) {
       return done(new Error("Database connection issue. Please try again later."), undefined);
     }
     

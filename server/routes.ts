@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
 import express from "express";
@@ -18,7 +18,13 @@ import {
   mobileRegisterSchema,
   verifyOtpSchema,
   sendOtpSchema,
-  updateProfileSchema
+  updateProfileSchema,
+  updateContactSchema,
+  whatsappConfirmationSchema,
+  whatsappStatusUpdateSchema,
+  whatsappBidNotificationSchema,
+  whatsappWebhookSchema,
+  type User
 } from "@shared/schema";
 import { fromZodError } from "zod-validation-error";
 import { hashPassword, verifyPassword, passport } from "./auth";
@@ -26,7 +32,72 @@ import { EmailNotificationService } from "./email-service";
 import { OTPService } from "./otp-service";
 import { WhatsAppService } from "./whatsapp-service";
 import { ImageService, profileUpload, carUpload, IMAGE_CONFIG } from "./image-service";
+import { getPerformanceMetrics } from "./performance-monitor";
+import { 
+  sendSuccess, 
+  sendError, 
+  sendValidationError, 
+  sendNotFoundError, 
+  sendUnauthorizedError, 
+  sendForbiddenError, 
+  sendConflictError, 
+  sendRateLimitError,
+  sendDatabaseError,
+  sendResourceCreated,
+  sendResourceUpdated,
+  sendResourceDeleted,
+  sendPaginatedResponse,
+  createSuccessResponse,
+  createErrorResponse
+} from "./response-utils";
 import path from "path";
+import crypto from 'crypto';
+import memoizee from 'memoizee';
+
+// Extend Express Request to include user from Passport
+declare global {
+  namespace Express {
+    interface User {
+      id: string;
+      email?: string | null;
+      name: string;
+      role: string;
+      phone?: string | null;
+      countryCode?: string | null;
+      password?: string | null;
+      [key: string]: unknown;
+    }
+  }
+}
+
+// Extend session types for OAuth state parameter and tracking
+declare module 'express-session' {
+  interface SessionData {
+    oauthState?: string;
+    createdAt?: number;
+    lastIP?: string;
+    lastActivity?: number;
+  }
+}
+
+// Type for admin request context
+interface AdminContext {
+  action: string;
+  resource: string;
+  adminUserId: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+  timestamp: Date;
+}
+
+// Extend Express Request to include admin context
+declare global {
+  namespace Express {
+    interface Request {
+      adminContext?: AdminContext;
+    }
+  }
+}
 
 // Centralized error handling types
 interface DatabaseError extends Error {
@@ -35,75 +106,87 @@ interface DatabaseError extends Error {
   detail?: string;
 }
 
-// Enhanced error handler function with sanitized database errors
-function handleDatabaseError(error: DatabaseError, operation: string) {
-  console.error(`Database error during ${operation}:`, error);
-  
-  // Handle specific PostgreSQL error codes with user-friendly messages (no internal details)
-  switch (error.code) {
-    case '23505': // Unique constraint violation
-      return {
-        status: 409,
-        message: `This ${operation} conflicts with existing data. Please check for duplicates.`
-      };
-    case '23503': // Foreign key constraint violation  
-      return {
-        status: 400,
-        message: `Invalid reference in ${operation}. Referenced data does not exist.`
-      };
-    case '23502': // Not null constraint violation
-      return {
-        status: 400,
-        message: `Missing required field in ${operation}. All required fields must be provided.`
-      };
-    case '22001': // String data too long
-      return {
-        status: 400,
-        message: `Data too long for ${operation}. Please reduce the length of your input.`
-      };
-    default:
-      return {
-        status: 500,
-        message: `Database error occurred during ${operation}. Please try again later.`
-      };
-  }
+// Custom error type with status code
+interface AppError extends Error {
+  status?: number;
+  code?: string;
+  errors?: string[];
 }
 
-// Enhanced error response handler with consistent response shape
-function handleApiError(error: any, operation: string, res: any) {
+// Handler function type
+type AsyncRouteHandler = (req: Request, res: Response, next: NextFunction) => Promise<void> | void;
+
+// Cache statistics interface
+interface CacheStats {
+  services: {
+    bulk: number;
+    individual: number;
+    categories: number;
+  };
+  locations: {
+    bulk: number;
+    individual: number;
+  };
+  cars: {
+    bulk: number;
+    individual: number;
+  };
+  appointments: number;
+  users: number;
+  performance: {
+    totalEntries: number;
+    hits: number;
+    misses: number;
+    hitRate: string;
+    totalOperations: number;
+  };
+  timestamp: string;
+}
+
+// User update data type
+type UserUpdateData = Partial<Omit<User, 'id' | 'createdAt'>>;
+
+// Admin validation function type
+type AdminValidationFunction = (req: Request) => string | null;
+
+// Database error handling is now handled by the sendDatabaseError utility
+
+// Enhanced error response handler with consistent response shape using new utilities
+function handleApiError(error: unknown, operation: string, res: Response): void {
   // Handle Zod validation errors
   if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
-    const errorMessage = fromZodError(error).toString();
+    const errorMessage = fromZodError(error as Error).toString();
     console.error(`[VALIDATION ERROR] ${operation}:`, errorMessage);
-    return res.status(400).json({ 
-      message: "Validation failed",
-      errors: errorMessage
-    });
+    sendValidationError(res, "Validation failed", [errorMessage]);
+    return;
   }
   
-  // Handle database errors
-  if (error && (error.code || error.constraint)) {
-    const dbError = handleDatabaseError(error as DatabaseError, operation);
-    return res.status(dbError.status).json({ message: dbError.message });
+  // Handle database errors using the new utility
+  if (error && typeof error === "object" && ("code" in error || "constraint" in error)) {
+    sendDatabaseError(res, operation, error as DatabaseError);
+    return;
   }
   
   // Handle custom errors with status codes
-  if (error && error.status) {
-    return res.status(error.status).json({ 
-      message: error.message || `Failed to ${operation}` 
-    });
+  if (error && typeof error === "object" && "status" in error) {
+    const appError = error as AppError;
+    const message = appError.message || `Failed to ${operation}`;
+    const statusCode = appError.status || 500;
+    const code = appError.code || undefined;
+    const errors = appError.errors || undefined;
+    
+    sendError(res, message, statusCode, errors, code);
+    return;
   }
   
   // Generic server error
   console.error(`Unexpected error during ${operation}:`, error);
-  return res.status(500).json({ 
-    message: `Failed to ${operation}. Please try again later.` 
-  });
+  sendError(res, `Failed to ${operation}. Please try again later.`);
 }
 
 // Standardized async route wrapper for consistent error handling
-function asyncRoute(operation: string, handler: Function) {
-  return async (req: any, res: any, next: any) => {
+function asyncRoute(operation: string, handler: AsyncRouteHandler): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction) => {
     try {
       await handler(req, res, next);
     } catch (error) {
@@ -113,9 +196,9 @@ function asyncRoute(operation: string, handler: Function) {
 }
 
 // Helper wrapper to ensure storage is available for each route
-function withStorage<T extends any[]>(
-  handler: (storage: Awaited<ReturnType<typeof getStorage>>, ...args: T) => Promise<any>
-) {
+function withStorage<T extends unknown[], R>(
+  handler: (storage: Awaited<ReturnType<typeof getStorage>>, ...args: T) => Promise<R>
+): (...args: T) => Promise<R> {
   return async (...args: T) => {
     try {
       const storage = await getStorage();
@@ -128,6 +211,604 @@ function withStorage<T extends any[]>(
         message: 'Database connection failed. Please try again later.'
       });
     }
+  };
+}
+
+// Enhanced retry mechanism with exponential backoff and jitter
+async function withRetry<T>(
+  operation: () => Promise<T>,
+  operationName: string,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<{ success: boolean; data?: T; error?: Error; attempts: number }> {
+  let lastError: Error | undefined;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const startTime = Date.now();
+      const data = await operation();
+      const duration = Date.now() - startTime;
+      
+      console.log(`[RETRY_SUCCESS] ${operationName} succeeded on attempt ${attempt}/${maxRetries} (${duration}ms)`);
+      return { success: true, data, attempts: attempt };
+    } catch (error) {
+      const err = error as DatabaseError;
+      lastError = err;
+      const isLastAttempt = attempt === maxRetries;
+      
+      // Categorize errors to determine if retry is appropriate
+      const isRetryableError = !err.code || !['23505', '23503', '23502'].includes(err.code);
+      
+      if (isLastAttempt || !isRetryableError) {
+        console.error(`[RETRY_FAILED] ${operationName} failed on attempt ${attempt}/${maxRetries}:`, {
+          error: err.message,
+          code: err.code,
+          retryable: isRetryableError,
+          isLastAttempt
+        });
+        
+        if (!isRetryableError) {
+          console.log(`[RETRY_SKIP] ${operationName} - non-retryable error, skipping remaining attempts`);
+        }
+        break;
+      }
+      
+      // Calculate delay with exponential backoff and jitter
+      const exponentialDelay = baseDelay * Math.pow(2, attempt - 1);
+      const jitter = Math.random() * 0.1 * exponentialDelay; // 10% jitter
+      const delay = Math.min(exponentialDelay + jitter, 10000); // Cap at 10 seconds
+      
+      console.warn(`[RETRY_ATTEMPT] ${operationName} failed on attempt ${attempt}/${maxRetries}, retrying in ${Math.round(delay)}ms:`, {
+        error: err.message,
+        code: err.code
+      });
+      
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  return { success: false, error: lastError, attempts: maxRetries };
+}
+
+// Structured error logging for admin visibility
+interface AdminStatsError {
+  operation: string;
+  timestamp: string;
+  error: string;
+  code?: string;
+  attempts: number;
+  duration?: number;
+  context?: Record<string, unknown>;
+}
+
+function logAdminStatsError(error: AdminStatsError): void {
+  console.error('[ADMIN_STATS_ERROR]', JSON.stringify({
+    ...error,
+    severity: error.attempts > 1 ? 'HIGH' : 'MEDIUM',
+    category: error.code ? 'DATABASE' : 'SYSTEM'
+  }));
+}
+
+// Cache configuration for admin stats
+const CACHE_CONFIG = {
+  // Cache for 2 minutes for high-traffic stats
+  short: { maxAge: 2 * 60 * 1000, preFetch: 0.6 },
+  // Cache for 5 minutes for moderate-traffic stats  
+  medium: { maxAge: 5 * 60 * 1000, preFetch: 0.6 },
+  // Cache for 10 minutes for low-traffic stats
+  long: { maxAge: 10 * 60 * 1000, preFetch: 0.6 }
+};
+
+// Memoized data fetchers with retry logic
+const getCachedUserCount = memoizee(async () => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getUserCount();
+  }, 'getUserCount');
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: 'getUserCount',
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: result.error?.code,
+      attempts: result.attempts
+    });
+  }
+  
+  return result;
+}, CACHE_CONFIG.medium);
+
+const getCachedAppointments = memoizee(async () => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getAllAppointments();
+  }, 'getAllAppointments');
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: 'getAllAppointments',
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: result.error?.code,
+      attempts: result.attempts
+    });
+  }
+  
+  return result;
+}, CACHE_CONFIG.short);
+
+const getCachedServices = memoizee(async () => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getAllServices();
+  }, 'getAllServices');
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: 'getAllServices',
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: result.error?.code,
+      attempts: result.attempts
+    });
+  }
+  
+  return result;
+}, { ...CACHE_CONFIG.long, promise: true });
+
+const getCachedLocations = memoizee(async () => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getAllLocations();
+  }, 'getAllLocations');
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: 'getAllLocations',
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: result.error?.code,
+      attempts: result.attempts
+    });
+  }
+  
+  return result;
+}, { ...CACHE_CONFIG.long, promise: true });
+
+const getCachedCars = memoizee(async () => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getAllCars();
+  }, 'getAllCars');
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: 'getAllCars',
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: result.error?.code,
+      attempts: result.attempts
+    });
+  }
+  
+  return result;
+}, { ...CACHE_CONFIG.medium, promise: true });
+
+// Enhanced caching system for individual lookups and category-based queries
+
+// Parameterized caching for individual service lookups
+const getCachedService = memoizee(async (id: string) => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getService(id);
+  }, `getService(${id})`);
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: `getService(${id})`,
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: result.error?.code,
+      attempts: result.attempts,
+      context: { serviceId: id }
+    });
+  }
+  
+  return result;
+}, { ...CACHE_CONFIG.long, promise: true, primitive: true, max: 100 });
+
+// Parameterized caching for individual location lookups
+const getCachedLocation = memoizee(async (id: string) => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getLocation(id);
+  }, `getLocation(${id})`);
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: `getLocation(${id})`,
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: result.error?.code,
+      attempts: result.attempts,
+      context: { locationId: id }
+    });
+  }
+  
+  return result;
+}, { ...CACHE_CONFIG.long, promise: true, primitive: true, max: 100 });
+
+// Parameterized caching for individual car lookups
+const getCachedCar = memoizee(async (id: string) => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getCar(id);
+  }, `getCar(${id})`);
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: `getCar(${id})`,
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: result.error?.code,
+      attempts: result.attempts,
+      context: { carId: id }
+    });
+  }
+  
+  return result;
+}, { ...CACHE_CONFIG.long, promise: true, primitive: true, max: 100 });
+
+// Parameterized caching for category-based service queries
+const getCachedServicesByCategory = memoizee(async (category: string) => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getServicesByCategory(category);
+  }, `getServicesByCategory(${category})`);
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: `getServicesByCategory(${category})`,
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: result.error?.code,
+      attempts: result.attempts,
+      context: { category }
+    });
+  }
+  
+  return result;
+}, { ...CACHE_CONFIG.long, promise: true, primitive: true, max: 100 });
+
+// Centralized cache management system
+class CacheManager {
+  private static instance: CacheManager;
+  private cacheCounters: {
+    services: { bulk: number; individual: number; categories: number; };
+    locations: { bulk: number; individual: number; };
+    cars: { bulk: number; individual: number; };
+    appointments: number;
+    users: number;
+    hits: number;
+    misses: number;
+  };
+  
+  private constructor() {
+    // Initialize all counters to 0
+    this.cacheCounters = {
+      services: { bulk: 0, individual: 0, categories: 0 },
+      locations: { bulk: 0, individual: 0 },
+      cars: { bulk: 0, individual: 0 },
+      appointments: 0,
+      users: 0,
+      hits: 0,
+      misses: 0
+    };
+  }
+  
+  static getInstance(): CacheManager {
+    if (!CacheManager.instance) {
+      CacheManager.instance = new CacheManager();
+    }
+    return CacheManager.instance;
+  }
+  
+  // Methods to track cache operations
+  trackCacheHit(): void {
+    this.cacheCounters.hits++;
+  }
+  
+  trackCacheMiss(): void {
+    this.cacheCounters.misses++;
+  }
+  
+  // Methods to increment counters when items are cached
+  incrementServicesBulkCounter(): void {
+    this.cacheCounters.services.bulk++;
+  }
+  
+  incrementServicesIndividualCounter(): void {
+    this.cacheCounters.services.individual++;
+  }
+  
+  incrementServicesCategoriesCounter(): void {
+    this.cacheCounters.services.categories++;
+  }
+  
+  incrementLocationsBulkCounter(): void {
+    this.cacheCounters.locations.bulk++;
+  }
+  
+  incrementLocationsIndividualCounter(): void {
+    this.cacheCounters.locations.individual++;
+  }
+  
+  incrementCarsBulkCounter(): void {
+    this.cacheCounters.cars.bulk++;
+  }
+  
+  incrementCarsIndividualCounter(): void {
+    this.cacheCounters.cars.individual++;
+  }
+  
+  incrementAppointmentsCounter(): void {
+    this.cacheCounters.appointments++;
+  }
+  
+  incrementUsersCounter(): void {
+    this.cacheCounters.users++;
+  }
+  
+  // Enhanced invalidation for service-related caches with category transition support
+  invalidateServiceCaches(serviceId?: string, prevCategory?: string, nextCategory?: string): void {
+    const categories = [prevCategory, nextCategory].filter(Boolean);
+    console.log('[CACHE_INVALIDATION] Invalidating service caches', { 
+      serviceId, 
+      prevCategory, 
+      nextCategory, 
+      categoriesAffected: categories.length 
+    });
+    
+    try {
+      // Clear bulk services cache and reset counter
+      getCachedServices.clear();
+      this.cacheCounters.services.bulk = 0;
+      
+      // Clear individual service cache if ID provided
+      if (serviceId) {
+        getCachedService.delete(serviceId);
+        this.cacheCounters.services.individual = Math.max(0, this.cacheCounters.services.individual - 1);
+        console.log(`[CACHE_INVALIDATION] Cleared individual service cache for ID: ${serviceId}`);
+      }
+      
+      // Handle category-based invalidation
+      if (categories.length > 0) {
+        // Clear specific categories when we know them (handles both old and new categories)
+        categories.forEach(category => {
+          if (category) {
+            getCachedServicesByCategory.delete(category);
+            this.cacheCounters.services.categories = Math.max(0, this.cacheCounters.services.categories - 1);
+            console.log(`[CACHE_INVALIDATION] Cleared services by category cache for: ${category}`);
+          }
+        });
+        
+        console.log(`[CACHE_INVALIDATION] Cleared category caches for ${categories.length} categories: ${categories.join(', ')}`);
+      } else {
+        // Clear all category caches when we don't know the specific categories
+        getCachedServicesByCategory.clear();
+        this.cacheCounters.services.categories = 0;
+        console.log('[CACHE_INVALIDATION] Cleared all category caches (categories unknown)');
+      }
+      
+      console.log('[CACHE_INVALIDATION] Service caches invalidated successfully');
+    } catch (error) {
+      console.error('[CACHE_INVALIDATION] Error clearing service caches:', error);
+    }
+  }
+  
+  // Invalidate all location-related caches
+  invalidateLocationCaches(locationId?: string): void {
+    console.log('[CACHE_INVALIDATION] Invalidating location caches', { locationId });
+    
+    try {
+      // Clear bulk locations cache and reset counter
+      getCachedLocations.clear();
+      this.cacheCounters.locations.bulk = 0;
+      
+      // Clear individual location cache if ID provided
+      if (locationId) {
+        getCachedLocation.delete(locationId);
+        this.cacheCounters.locations.individual = Math.max(0, this.cacheCounters.locations.individual - 1);
+        console.log(`[CACHE_INVALIDATION] Cleared individual location cache for ID: ${locationId}`);
+      }
+      
+      console.log('[CACHE_INVALIDATION] Location caches invalidated successfully');
+    } catch (error) {
+      console.error('[CACHE_INVALIDATION] Error clearing location caches:', error);
+    }
+  }
+  
+  // Invalidate all car-related caches
+  invalidateCarCaches(carId?: string): void {
+    console.log('[CACHE_INVALIDATION] Invalidating car caches', { carId });
+    
+    try {
+      // Clear bulk cars cache and reset counter
+      getCachedCars.clear();
+      this.cacheCounters.cars.bulk = 0;
+      
+      // Clear individual car cache if ID provided
+      if (carId) {
+        getCachedCar.delete(carId);
+        this.cacheCounters.cars.individual = Math.max(0, this.cacheCounters.cars.individual - 1);
+        console.log(`[CACHE_INVALIDATION] Cleared individual car cache for ID: ${carId}`);
+      }
+      
+      console.log('[CACHE_INVALIDATION] Car caches invalidated successfully');
+    } catch (error) {
+      console.error('[CACHE_INVALIDATION] Error clearing car caches:', error);
+    }
+  }
+  
+  // Invalidate appointment-related caches
+  invalidateAppointmentCaches(): void {
+    console.log('[CACHE_INVALIDATION] Invalidating appointment caches');
+    
+    try {
+      getCachedAppointments.clear();
+      this.cacheCounters.appointments = 0;
+      console.log('[CACHE_INVALIDATION] Appointment caches invalidated successfully');
+    } catch (error) {
+      console.error('[CACHE_INVALIDATION] Error clearing appointment caches:', error);
+    }
+  }
+  
+  // Invalidate user-related caches
+  invalidateUserCaches(): void {
+    console.log('[CACHE_INVALIDATION] Invalidating user caches');
+    
+    try {
+      getCachedUserCount.clear();
+      this.cacheCounters.users = 0;
+      console.log('[CACHE_INVALIDATION] User caches invalidated successfully');
+    } catch (error) {
+      console.error('[CACHE_INVALIDATION] Error clearing user caches:', error);
+    }
+  }
+  
+  // Clear all caches (nuclear option)
+  clearAllCaches(): void {
+    console.log('[CACHE_INVALIDATION] Clearing ALL caches');
+    
+    try {
+      getCachedServices.clear();
+      getCachedService.clear();
+      getCachedServicesByCategory.clear();
+      getCachedLocations.clear();
+      getCachedLocation.clear();
+      getCachedCars.clear();
+      getCachedCar.clear();
+      getCachedAppointments.clear();
+      getCachedUserCount.clear();
+      
+      // Reset all counters
+      this.cacheCounters = {
+        services: { bulk: 0, individual: 0, categories: 0 },
+        locations: { bulk: 0, individual: 0 },
+        cars: { bulk: 0, individual: 0 },
+        appointments: 0,
+        users: 0,
+        hits: 0,
+        misses: 0
+      };
+      
+      console.log('[CACHE_INVALIDATION] All caches cleared successfully');
+    } catch (error) {
+      console.error('[CACHE_INVALIDATION] Error clearing all caches:', error);
+    }
+  }
+  
+  // Get cache statistics using explicit counters
+  getCacheStats(): CacheStats {
+    const totalEntries = 
+      this.cacheCounters.services.bulk + 
+      this.cacheCounters.services.individual + 
+      this.cacheCounters.services.categories + 
+      this.cacheCounters.locations.bulk + 
+      this.cacheCounters.locations.individual + 
+      this.cacheCounters.cars.bulk + 
+      this.cacheCounters.cars.individual + 
+      this.cacheCounters.appointments + 
+      this.cacheCounters.users;
+    
+    const totalOperations = this.cacheCounters.hits + this.cacheCounters.misses;
+    const hitRate = totalOperations > 0 ? (this.cacheCounters.hits / totalOperations * 100).toFixed(2) + '%' : '0%';
+    
+    return {
+      // Cache entry counts by type
+      services: {
+        bulk: this.cacheCounters.services.bulk,
+        individual: this.cacheCounters.services.individual,
+        categories: this.cacheCounters.services.categories
+      },
+      locations: {
+        bulk: this.cacheCounters.locations.bulk,
+        individual: this.cacheCounters.locations.individual
+      },
+      cars: {
+        bulk: this.cacheCounters.cars.bulk,
+        individual: this.cacheCounters.cars.individual
+      },
+      appointments: this.cacheCounters.appointments,
+      users: this.cacheCounters.users,
+      
+      // Performance metrics
+      performance: {
+        totalEntries,
+        hits: this.cacheCounters.hits,
+        misses: this.cacheCounters.misses,
+        hitRate,
+        totalOperations
+      },
+      
+      // Metadata
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+// Export singleton instance for use in routes
+const cacheManager = CacheManager.getInstance();
+
+// Standardized admin stats response structure
+interface AdminStatsResponse {
+  // Core metrics - always present with availability indicators
+  totalUsers: number | null;
+  totalUsersAvailable: boolean;
+  
+  totalAppointments: number | null;
+  appointmentsAvailable: boolean;
+  pendingAppointments: number | null;
+  confirmedAppointments: number | null;
+  completedAppointments: number | null;
+  cancelledAppointments: number | null;
+  recentAppointments: number | null;
+  
+  totalServices: number | null;
+  servicesAvailable: boolean;
+  popularServices: number | null;
+  
+  totalLocations: number | null;
+  locationsAvailable: boolean;
+  
+  totalCars: number | null;
+  carsAvailable: boolean;
+  activeCars: number | null;
+  auctionCars: number | null;
+  activeAuctions: number | null;
+  
+  // Metadata
+  lastUpdated: string;
+  cacheStatus: {
+    appointments: 'cached' | 'fresh' | 'fallback';
+    users: 'cached' | 'fresh' | 'fallback';
+    services: 'cached' | 'fresh' | 'fallback';
+    locations: 'cached' | 'fresh' | 'fallback';
+    cars: 'cached' | 'fresh' | 'fallback';
+  };
+  reliability: {
+    totalSources: number;
+    availableSources: number;
+    failedSources: string[];
+    successRate: number;
+  };
+  
+  // Only include warnings if there are actual issues that affect functionality
+  warnings?: {
+    message: string;
+    details: string[];
+    impact: 'low' | 'medium' | 'high';
   };
 }
 
@@ -151,7 +832,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.use(passport.session());
   
   // CSRF Protection Middleware for state-changing requests
-  const csrfProtection = (req: any, res: any, next: any) => {
+  const csrfProtection = (req: Request, res: Response, next: NextFunction) => {
     // Only protect state-changing methods
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
       return next();
@@ -165,6 +846,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ];
     
     if (skipRoutes.some(route => req.path.startsWith(route))) {
+      // Additional security validation for OAuth routes
+      const userAgent = req.headers['user-agent'];
+      const origin = req.headers.origin;
+      const referer = req.headers.referer;
+      
+      // Log OAuth route access for monitoring
+      console.log(`[CSRF] OAuth route accessed: ${req.path}`, {
+        userAgent: userAgent?.substring(0, 100), // Truncate for logging
+        origin,
+        referer,
+        ip: req.ip,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Basic validation for suspicious requests
+      if (!userAgent || userAgent.length < 10) {
+        console.warn(`[CSRF] Suspicious OAuth request - invalid/missing user agent for ${req.path}`);
+      }
+      
+      // For OAuth callback, validate that it comes from Google
+      if (req.path === '/auth/google/callback') {
+        // The referer should typically be from Google for legitimate OAuth flows
+        // But this is not enforced as it can be legitimately missing in some cases
+        if (referer && !referer.includes('google') && !referer.includes('accounts.google.com')) {
+          console.warn(`[CSRF] OAuth callback from unexpected referer: ${referer}`);
+        }
+      }
+      
       console.log(`[CSRF] Skipping CSRF protection for OAuth route: ${req.path}`);
       return next();
     }
@@ -185,17 +894,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (!origin && !referer) {
         console.log(`[CSRF] REJECTED: Missing origin/referer for ${req.path}`);
-        return res.status(403).json({ message: "CSRF protection: Missing origin/referer header" });
+        return sendForbiddenError(res, "CSRF protection: Missing origin/referer header");
       }
       
       if (origin && origin !== expectedOrigin) {
         console.log(`[CSRF] REJECTED: Invalid origin ${origin} (expected ${expectedOrigin}) for ${req.path}`);
-        return res.status(403).json({ message: "CSRF protection: Invalid origin" });
+        return sendForbiddenError(res, "CSRF protection: Invalid origin");
       }
       
       if (referer && !referer.startsWith(expectedOrigin)) {
         console.log(`[CSRF] REJECTED: Invalid referer ${referer} (expected to start with ${expectedOrigin}) for ${req.path}`);
-        return res.status(403).json({ message: "CSRF protection: Invalid referer" });
+        return sendForbiddenError(res, "CSRF protection: Invalid referer");
       }
       
       console.log(`[CSRF] PASSED: Auth route ${req.path} passed origin/referer validation`);
@@ -208,9 +917,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!customHeader || customHeader !== 'ronak-garage') {
       console.log(`[CSRF] REJECTED: Missing/invalid security header for ${req.path}. Got: "${customHeader}"`);
       console.log(`[CSRF] Available headers:`, Object.keys(req.headers).filter(h => h.toLowerCase().includes('csrf')));
-      return res.status(403).json({ 
-        message: "CSRF protection: Missing or invalid security header" 
-      });
+      return sendForbiddenError(res, "CSRF protection: Missing or invalid security header");
     }
     
     console.log(`[CSRF] PASSED: API route ${req.path} passed security header validation`);
@@ -229,7 +936,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Check if user already exists
       const existingUser = await storage.getUserByEmail(validatedData.email);
       if (existingUser) {
-        return res.status(409).json({ message: "User already exists with this email" });
+        return sendConflictError(res, "User already exists with this email");
       }
 
       // Hash password and create user
@@ -246,22 +953,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       req.session.regenerate((err) => {
         if (err) {
           console.error("Session regeneration failed during registration:", err);
-          return res.status(500).json({ message: "Registration successful but session setup failed. Please log in manually." });
+          return sendError(res, "Registration successful but session setup failed. Please log in manually.");
         }
         
         // Log the user in immediately after registration
         req.login(user, (err) => {
           if (err) {
             console.error("Login after registration failed:", err);
-            return res.status(500).json({ message: "Registration successful but failed to log in. Please try logging in manually." });
+            return sendError(res, "Registration successful but failed to log in. Please try logging in manually.");
           }
           
           // Don't return password in response
           const { password, ...userResponse } = user;
-          res.status(201).json({ 
-            message: "Account created and logged in successfully",
-            user: userResponse
-          });
+          return sendResourceCreated(res, userResponse, "Account created and logged in successfully");
         });
       });
     } catch (error) {
@@ -277,20 +981,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Find user by email
       const user = await storage.getUserByEmail(validatedData.email);
       if (!user || !user.password) {
-        return res.status(401).json({ message: "Invalid email or password" });
+        return sendUnauthorizedError(res, "Invalid email or password");
       }
 
       // Verify password
       const isValidPassword = await verifyPassword(validatedData.password, user.password);
       if (!isValidPassword) {
-        return res.status(401).json({ message: "Invalid email or password" });
+        return sendUnauthorizedError(res, "Invalid email or password");
       }
 
       // Session fixation mitigation: regenerate session before login
       req.session.regenerate((err) => {
         if (err) {
           console.error("Session regeneration failed:", err);
-          return res.status(500).json({ message: "Session setup failed. Please try again." });
+          return sendError(res, "Session setup failed. Please try again.");
         }
         
         // Login user via passport after session regeneration
@@ -300,21 +1004,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             // More specific login session errors
             if (err.message?.includes('session')) {
-              return res.status(500).json({ message: "Session creation failed. Please try again." });
+              return sendError(res, "Session creation failed. Please try again.");
             }
             
             if (err.message?.includes('serialize')) {
-              return res.status(500).json({ message: "Login processing error. Please clear your cookies and try again." });
+              return sendError(res, "Login processing error. Please clear your cookies and try again.");
             }
             
-            return res.status(500).json({ message: "Login failed. Please try again later." });
+            return sendError(res, "Login failed. Please try again later.");
           }
           
           const { password, ...userResponse } = user;
-          res.json({ 
-            message: "Login successful",
-            user: userResponse
-          });
+          return sendSuccess(res, userResponse, "Login successful");
         });
       });
     } catch (error) {
@@ -323,40 +1024,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/auth/logout", (req, res) => {
-    req.logout((err) => {
+  app.post("/api/auth/logout", asyncRoute("logout", async (req: Request, res: Response) => {
+    req.logout((err: Error | null) => {
       if (err) {
-        return res.status(500).json({ message: "Logout failed" });
+        throw { status: 500, message: "Logout failed" };
       }
-      res.json({ message: "Logout successful" });
+      return sendSuccess(res, null, "Logout successful");
     });
-  });
+  }));
 
   // Google OAuth routes
-  app.get("/api/auth/google", passport.authenticate("google", {
-    scope: ["profile", "email"]
+  app.get("/api/auth/google", asyncRoute("initiate Google OAuth", async (req: Request, res: Response, next: NextFunction) => {
+    // Generate CSRF-protected state parameter for OAuth flow
+    const state = crypto.randomBytes(32).toString('hex');
+    req.session.oauthState = state;
+    
+    passport.authenticate("google", {
+      scope: ["profile", "email"],
+      state: state
+    })(req, res, next);
   }));
 
   app.get("/api/auth/google/callback", 
+    (req, res, next) => {
+      // Validate state parameter to prevent CSRF attacks
+      const receivedState = req.query.state;
+      const storedState = req.session.oauthState;
+      
+      if (!receivedState || !storedState || receivedState !== storedState) {
+        console.error(`[OAuth] State parameter validation failed. Received: ${receivedState}, Stored: ${storedState}`);
+        return res.redirect("/login?error=oauth_security_failed");
+      }
+      
+      // Clear the state from session after validation
+      delete req.session.oauthState;
+      
+      console.log(`[OAuth] State parameter validation passed`);
+      next();
+    },
     passport.authenticate("google", { failureRedirect: "/login?error=oauth_failed" }),
     (req, res) => {
-      // Successful authentication, redirect to dashboard or home
-      res.redirect("/?login=success");
+      // Session fixation mitigation: regenerate session after successful OAuth authentication
+      req.session.regenerate((err) => {
+        if (err) {
+          console.error("Session regeneration failed after Google OAuth:", err);
+          return res.redirect("/login?error=session_failed");
+        }
+        
+        // Re-establish the user in the session after regeneration
+        if (req.user) {
+          req.login(req.user, (loginErr) => {
+            if (loginErr) {
+              console.error("Re-login after session regeneration failed:", loginErr);
+              return res.redirect("/login?error=session_failed");
+            }
+            
+            console.log(`[OAuth] Session regenerated successfully for user: ${(req.user as any).email}`);
+            // Successful authentication, redirect to dashboard or home
+            res.redirect("/?login=success");
+          });
+        } else {
+          console.error("No user found after OAuth authentication");
+          res.redirect("/login?error=oauth_failed");
+        }
+      });
     }
   );
 
   // Get current user
-  app.get("/api/auth/me", (req, res) => {
+  app.get("/api/auth/me", asyncRoute("get current user", async (req: Request, res: Response) => {
     if (req.user) {
       const { password, ...userResponse } = req.user as any;
-      res.json({ user: userResponse });
+      return sendSuccess(res, userResponse);
     } else {
-      res.status(401).json({ message: "Not authenticated" });
+      throw { status: 401, message: "Not authenticated" };
     }
-  });
+  }));
 
   // Get available auth providers
-  app.get("/api/auth/providers", (req, res) => {
+  app.get("/api/auth/providers", asyncRoute("get auth providers", async (req: Request, res: Response) => {
     const providers = ["email"]; // Email auth is always available
     
     // Check if Google OAuth is configured
@@ -364,47 +1110,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       providers.push("google");
     }
     
-    res.json({ providers });
-  });
+    return sendSuccess(res, { providers });
+  }));
 
   // Mobile Registration Routes
-  app.post("/api/auth/mobile/send-otp", asyncRoute("send mobile OTP", async (req: any, res: any) => {
+  app.post("/api/auth/mobile/send-otp", asyncRoute("send mobile OTP", async (req: Request, res: Response) => {
     // Validate request data using sendOtpSchema
     const validationResult = sendOtpSchema.safeParse(req.body);
     
     if (!validationResult.success) {
-      return res.status(400).json({
-        message: "Validation failed",
-        errors: fromZodError(validationResult.error).toString()
-      });
+      return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
     }
 
     const { phone, countryCode, purpose } = validationResult.data;
     const result = await OTPService.sendOTP(phone, countryCode, purpose);
     
     if (result.success) {
-      res.json({
-        message: "OTP sent successfully",
+      return sendSuccess(res, {
         expiresIn: result.expiresIn
-      });
+      }, "OTP sent successfully");
     } else {
-      res.status(400).json({
-        message: result.message,
+      return sendError(res, result.message, 400, undefined, "OTP_SEND_FAILED", {
         attempts: result.attempts,
         maxAttempts: result.maxAttempts
       });
     }
   }));
 
-  app.post("/api/auth/mobile/verify-otp", asyncRoute("verify mobile OTP", async (req: any, res: any) => {
+  app.post("/api/auth/mobile/verify-otp", asyncRoute("verify mobile OTP", async (req: Request, res: Response) => {
     // Validate request data using the updated schema with purpose
     const validationResult = verifyOtpSchema.safeParse(req.body);
     
     if (!validationResult.success) {
-      return res.status(400).json({
-        message: "Validation failed",
-        errors: fromZodError(validationResult.error).toString()
-      });
+      return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
     }
 
     const { phone, countryCode, otpCode, purpose } = validationResult.data;
@@ -414,8 +1152,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const result = await OTPService.verifyOTP(phone, countryCode, otpCode, purpose);
     
     if (!result.success) {
-      return res.status(400).json({
-        message: result.message,
+      return sendError(res, result.message, 400, undefined, "OTP_VERIFICATION_FAILED", {
         attempts: result.attempts,
         maxAttempts: result.maxAttempts,
         expired: result.expired
@@ -428,69 +1165,50 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUserByPhone(phone, countryCode);
       
       if (!user) {
-        return res.status(404).json({ 
-          message: "No account found with this phone number. Please register first." 
-        });
+        return sendNotFoundError(res, "Account");
       }
 
       // Session fixation mitigation: regenerate session before mobile login
-      req.session.regenerate((sessionErr: any) => {
+      req.session.regenerate((sessionErr: Error | null) => {
         if (sessionErr) {
           console.error("Session regeneration failed for mobile login:", sessionErr);
-          return res.status(500).json({ 
-            message: "OTP verified but session setup failed. Please try again." 
-          });
+          return sendError(res, "OTP verified but session setup failed. Please try again.", 500, undefined, "SESSION_SETUP_FAILED");
         }
         
         // Log the user in via passport after session regeneration
-        req.login(user, (loginErr: any) => {
+        req.login(user, (loginErr: Error | null) => {
           if (loginErr) {
             console.error("Login after mobile OTP verification failed:", loginErr);
             
             // More specific login session errors
             if (loginErr.message?.includes('session')) {
-              return res.status(500).json({ 
-                message: "Session creation failed. Please try again." 
-              });
+              return sendError(res, "Session creation failed. Please try again.", 500, undefined, "SESSION_CREATION_FAILED");
             }
             
             if (loginErr.message?.includes('serialize')) {
-              return res.status(500).json({ 
-                message: "Login processing error. Please clear your cookies and try again." 
-              });
+              return sendError(res, "Login processing error. Please clear your cookies and try again.", 500, undefined, "LOGIN_SERIALIZE_ERROR");
             }
             
-            return res.status(500).json({ 
-              message: "Login failed. Please try again later." 
-            });
+            return sendError(res, "Login failed. Please try again later.", 500, undefined, "LOGIN_FAILED");
           }
           
           const { password, ...userResponse } = user;
-          res.json({ 
-            message: "Login successful",
-            user: userResponse
-          });
+          return sendSuccess(res, { user: userResponse }, "Login successful");
         });
       });
     } else {
       // For registration and password_reset: just verify OTP
-      res.json({ 
-        message: "OTP verified successfully. Please complete registration.",
-        verified: true
-      });
+      return sendSuccess(res, { verified: true }, "OTP verified successfully. Please complete registration.");
     }
   }));
 
   // Complete mobile registration with profile data
-  app.post("/api/auth/mobile/register", asyncRoute("complete mobile registration", async (req: any, res: any) => {
+  app.post("/api/auth/mobile/register", asyncRoute("complete mobile registration", async (req: Request, res: Response) => {
     // Validate request data using schema
     const validationResult = mobileRegisterSchema.safeParse(req.body);
     
     if (!validationResult.success) {
-      return res.status(400).json({
-        message: "Validation failed",
-        errors: fromZodError(validationResult.error).toString()
-      });
+      return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
     }
 
     const {
@@ -516,7 +1234,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // User exists, just log them in and update profile if needed
       if (email || dateOfBirth || registrationNumbers || profileImage || address || city || state || zipCode) {
         // Update profile with new data
-        const updateData: any = {};
+        const updateData: UserUpdateData = {};
         if (email) updateData.email = email;
         if (dateOfBirth) updateData.dateOfBirth = new Date(dateOfBirth);
         if (registrationNumbers) updateData.registrationNumbers = registrationNumbers;
@@ -530,18 +1248,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Session fixation mitigation: regenerate session before mobile login (existing user)
-      req.session.regenerate((sessionErr: any) => {
+      req.session.regenerate((sessionErr: Error | null) => {
         if (sessionErr) {
           console.error("Session regeneration failed for mobile user:", sessionErr);
-          return res.status(500).json({ message: "Profile updated but session setup failed. Please log in manually." });
+          return sendError(res, "Profile updated but session setup failed. Please log in manually.", 500, undefined, "SESSION_SETUP_FAILED");
         }
         
-        req.login(user!, async (err: any) => {
+        req.login(user!, async (err: Error | null) => {
           if (err) {
             console.error("Login after mobile registration failed:", err);
-            return res.status(500).json({ 
-              message: "Registration completed but login failed. Please try logging in." 
-            });
+            return sendError(res, "Registration completed but login failed. Please try logging in.", 500, undefined, "LOGIN_FAILED");
           }
         
         // Send welcome WhatsApp message for new registrations
@@ -559,20 +1275,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
               console.error(`[REGISTRATION] Welcome WhatsApp failed: ${welcomeResult.error}`);
             }
           }
-        } catch (welcomeError: any) {
-          console.error(`[REGISTRATION] Welcome message error: ${welcomeError.message}`);
+        } catch (welcomeError) {
+          const err = welcomeError as Error;
+          console.error(`[REGISTRATION] Welcome message error: ${err.message}`);
         }
         
           const { password, ...userResponse } = user!;
-          res.json({ 
-            message: "Profile updated and logged in successfully",
-            user: userResponse
-          });
+          return sendSuccess(res, { user: userResponse }, "Profile updated and logged in successfully");
         });
       });
     } else {
       // Create new user with complete profile
-      const userData: any = {
+      const userData: UserUpdateData = {
         phone,
         countryCode,
         phoneVerified: true,
@@ -593,18 +1307,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const newUser = await storage.createUser(userData);
 
       // Session fixation mitigation: regenerate session before mobile login (new user)
-      req.session.regenerate((sessionErr: any) => {
+      req.session.regenerate((sessionErr: Error | null) => {
         if (sessionErr) {
           console.error("Session regeneration failed for new mobile user:", sessionErr);
-          return res.status(500).json({ message: "Account created but session setup failed. Please log in manually." });
+          return sendError(res, "Account created but session setup failed. Please log in manually.", 500, undefined, "SESSION_SETUP_FAILED");
         }
         
-        req.login(newUser, async (err: any) => {
+        req.login(newUser, async (err: Error | null) => {
           if (err) {
             console.error("Login after mobile registration failed:", err);
-            return res.status(500).json({ 
-              message: "Account created but login failed. Please try logging in." 
-            });
+            return sendError(res, "Account created but login failed. Please try logging in.", 500, undefined, "LOGIN_FAILED");
           }
         
         // Send welcome WhatsApp message for new registrations
@@ -622,46 +1334,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
               console.error(`[REGISTRATION] Welcome WhatsApp failed: ${welcomeResult.error}`);
             }
           }
-        } catch (welcomeError: any) {
-          console.error(`[REGISTRATION] Welcome message error: ${welcomeError.message}`);
+        } catch (welcomeError) {
+          const err = welcomeError as Error;
+          console.error(`[REGISTRATION] Welcome message error: ${err.message}`);
         }
         
           const { password, ...userResponse } = newUser;
-          res.status(201).json({ 
-            message: "Account created and logged in successfully",
-            user: userResponse
-          });
+          return sendResourceCreated(res, { user: userResponse }, "Account created and logged in successfully");
         });
       });
     }
   }));
 
   // Authentication middleware for protected routes
-  const requireAuth = (req: any, res: any, next: any) => {
+  const requireAuth = (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ message: "Authentication required" });
     }
     next();
   };
 
+  // Performance Metrics Endpoint (protected - requires authentication)
+  app.get("/api/metrics", requireAuth, asyncRoute("get performance metrics", async (req, res) => {
+    const metrics = getPerformanceMetrics();
+    sendSuccess(res, {
+      ...metrics,
+      monitoringUptimeMs: Date.now() - metrics.monitoringSince,
+      timestamp: new Date().toISOString()
+    });
+  }));
+
   // Get user profile
-  app.get("/api/profile", requireAuth, asyncRoute("get user profile", async (req: any, res: any) => {
+  app.get("/api/profile", requireAuth, asyncRoute("get user profile", async (req: Request, res: Response) => {
     const { password, ...userProfile } = req.user;
     res.json({ user: userProfile });
   }));
 
   // Update user profile
-  app.patch("/api/profile", requireAuth, asyncRoute("update user profile", async (req: any, res: any) => {
+  app.patch("/api/profile", requireAuth, asyncRoute("update user profile", async (req: Request, res: Response) => {
     const validationResult = updateProfileSchema.safeParse(req.body);
     
     if (!validationResult.success) {
-      return res.status(400).json({
-        message: "Validation failed",
-        errors: fromZodError(validationResult.error).toString()
-      });
+      return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
     }
 
-    const updateData: any = { ...validationResult.data };
+    const updateData: UserUpdateData = { ...validationResult.data };
     const storage = await getStorage();
     
     // Convert dateOfBirth to Date if provided
@@ -672,56 +1389,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const updatedUser = await storage.updateUser(req.user.id, updateData);
     const { password, ...userResponse } = updatedUser!;
     
-    res.json({ 
-      message: "Profile updated successfully",
-      user: userResponse 
-    });
+    return sendResourceUpdated(res, { user: userResponse }, "Profile updated successfully");
   }));
 
   // WhatsApp Messaging Routes
-  app.post("/api/whatsapp/send-confirmation", requireAuth, asyncRoute("send WhatsApp confirmation", async (req: any, res: any) => {
-    const { phone, countryCode, appointmentData, appointmentId } = req.body;
+  app.post("/api/whatsapp/send-confirmation", requireAuth, asyncRoute("send WhatsApp confirmation", async (req: Request, res: Response) => {
+    // Validate request data using Zod schema
+    const validationResult = whatsappConfirmationSchema.safeParse(req.body);
     
-    // Validate required fields
-    if (!phone || !countryCode || !appointmentData) {
-      return res.status(400).json({ 
-        message: "Phone number, country code, and appointment data are required" 
-      });
+    if (!validationResult.success) {
+      throw {
+        name: "ZodError",
+        errors: validationResult.error.errors
+      };
     }
 
-    // Validate phone number format
+    const { phone, countryCode, appointmentData, appointmentId } = validationResult.data;
+
+    // Additional phone number format validation
     const validation = WhatsAppService.validateWhatsAppNumber(phone, countryCode);
     if (!validation.valid) {
-      return res.status(400).json({ message: validation.message });
+      throw { status: 400, message: validation.message };
     }
+
+    // Transform appointmentData to match AppointmentConfirmationData interface
+    const transformedAppointmentData = {
+      customerName: appointmentData.customerName,
+      serviceName: appointmentData.serviceName,
+      dateTime: appointmentData.dateTime,
+      location: appointmentData.locationName, // locationName -> location
+      carDetails: 'Vehicle details not provided', // carDetails not in schema, use default
+      bookingId: appointmentId || 'TEMP-' + Date.now().toString(), // Use appointmentId or generate temp ID
+      mechanicName: appointmentData.mechanicName,
+      price: appointmentData.price
+    };
 
     const result = await WhatsAppService.sendAppointmentConfirmation(
       phone, 
       countryCode, 
-      appointmentData,
+      transformedAppointmentData,
       appointmentId
     );
     
     if (result.success) {
-      res.json({
-        message: "WhatsApp confirmation sent successfully",
-        messageSid: result.messageSid
-      });
+      return sendSuccess(res, { messageSid: result.messageSid }, "WhatsApp confirmation sent successfully");
     } else {
-      res.status(500).json({
-        message: result.message,
-        error: result.error
-      });
+      throw { status: 500, message: result.message, error: result.error };
     }
   }));
 
-  app.post("/api/whatsapp/send-status-update", requireAuth, asyncRoute("send WhatsApp status update", async (req: any, res: any) => {
+  app.post("/api/whatsapp/send-status-update", requireAuth, asyncRoute("send WhatsApp status update", async (req: Request, res: Response) => {
     const { phone, countryCode, statusData, appointmentId } = req.body;
     
     if (!phone || !countryCode || !statusData) {
-      return res.status(400).json({ 
-        message: "Phone number, country code, and status data are required" 
-      });
+      return sendValidationError(res, "Phone number, country code, and status data are required");
     }
 
     const result = await WhatsAppService.sendStatusUpdate(
@@ -732,25 +1453,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     );
     
     if (result.success) {
-      res.json({
-        message: "WhatsApp status update sent successfully",
-        messageSid: result.messageSid
-      });
+      return sendSuccess(res, { messageSid: result.messageSid }, "WhatsApp status update sent successfully");
     } else {
-      res.status(500).json({
-        message: result.message,
-        error: result.error
-      });
+      return sendError(res, result.message, 500, undefined, "WHATSAPP_SEND_FAILED");
     }
   }));
 
-  app.post("/api/whatsapp/send-bid-notification", requireAuth, asyncRoute("send WhatsApp bid notification", async (req: any, res: any) => {
+  app.post("/api/whatsapp/send-bid-notification", requireAuth, asyncRoute("send WhatsApp bid notification", async (req: Request, res: Response) => {
     const { phone, countryCode, bidData } = req.body;
     
     if (!phone || !countryCode || !bidData) {
-      return res.status(400).json({ 
-        message: "Phone number, country code, and bid data are required" 
-      });
+      return sendValidationError(res, "Phone number, country code, and bid data are required");
     }
 
     const result = await WhatsAppService.sendBidNotification(
@@ -760,52 +1473,207 @@ export async function registerRoutes(app: Express): Promise<Server> {
     );
     
     if (result.success) {
-      res.json({
-        message: "WhatsApp bid notification sent successfully",
-        messageSid: result.messageSid
-      });
+      return sendSuccess(res, { messageSid: result.messageSid }, "WhatsApp bid notification sent successfully");
     } else {
-      res.status(500).json({
-        message: result.message,
-        error: result.error
-      });
+      return sendError(res, result.message, 500, undefined, "WHATSAPP_SEND_FAILED");
     }
   }));
 
-  app.get("/api/whatsapp/history/:phone", requireAuth, asyncRoute("get WhatsApp message history", async (req: any, res: any) => {
+  app.get("/api/whatsapp/history/:phone", requireAuth, asyncRoute("get WhatsApp message history", async (req: Request, res: Response) => {
     const { phone } = req.params;
     const limit = parseInt(req.query.limit as string) || 20;
     
     if (!phone) {
-      return res.status(400).json({ message: "Phone number is required" });
+      return sendValidationError(res, "Phone number is required");
     }
 
     const history = await WhatsAppService.getMessageHistory(phone, limit);
-    res.json({ 
-      messages: history,
-      count: history.length 
-    });
+    return sendSuccess(res, { messages: history, count: history.length });
   }));
 
-  // Admin authorization middleware
-  const requireAdmin = (req: any, res: any, next: any) => {
-    if (!req.user) {
-      return res.status(401).json({ message: "Authentication required" });
+  // Enhanced admin authorization middleware with security features
+  const ADMIN_RATE_LIMIT = 100; // requests per minute
+  const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute in milliseconds
+  
+  // Prevent duplicate cleanup intervals during hot reloads
+  let cleanupIntervalId: NodeJS.Timeout | null = null;
+  
+  function startRateLimitCleanup() {
+    // Clear any existing interval to prevent duplicates
+    if (cleanupIntervalId) {
+      clearInterval(cleanupIntervalId);
+      console.log('[RATE_LIMIT_CLEANUP] Cleared existing cleanup interval');
     }
-    if (req.user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
+    
+    // Setup new cleanup interval (runs every 10 minutes)
+    cleanupIntervalId = setInterval(async () => {
+      try {
+        const storage = await getStorage();
+        const cleanedCount = await storage.cleanupExpiredRateLimits();
+        if (cleanedCount > 0) {
+          console.log(`[RATE_LIMIT_CLEANUP] Cleaned up ${cleanedCount} expired rate limit entries`);
+        }
+      } catch (error) {
+        console.error('[RATE_LIMIT_CLEANUP] Failed to cleanup expired rate limits:', error);
+      }
+    }, 10 * 60 * 1000);
+    
+    console.log('[RATE_LIMIT_CLEANUP] Started cleanup interval (runs every 10 minutes)');
+  }
+  
+  // Start the cleanup process
+  startRateLimitCleanup();
+
+  const createEnhancedAdminMiddleware = (options: {
+    action: string;
+    resource: string;
+    validateInput?: AdminValidationFunction;
+    rateLimit?: number;
+  }) => {
+    return async (req: Request, res: Response, next: NextFunction) => {
+      const { action, resource, validateInput, rateLimit = ADMIN_RATE_LIMIT } = options;
+      
+      // 1. Authentication check
+      if (!req.user) {
+        return res.status(401).json({ 
+          message: "Authentication required",
+          code: "AUTH_REQUIRED" 
+        });
+      }
+      
+      // 2. Authorization check
+      if (req.user.role !== "admin") {
+        return res.status(403).json({ 
+          message: "Admin access required",
+          code: "INSUFFICIENT_PRIVILEGES" 
+        });
+      }
+
+      // 3. Atomic persistent rate limiting per admin user
+      const userId = req.user.id;
+      
+      try {
+        const storage = await getStorage();
+        // Use atomic rate limit check and increment
+        const rateResult = await storage.checkAndIncrementRateLimit(userId, RATE_LIMIT_WINDOW);
+        
+        // Check if the rate limit is exceeded within the current window
+        if (rateResult.withinWindow && rateResult.count > rateLimit) {
+          const now = Date.now();
+          return res.status(429).json({ 
+            message: "Rate limit exceeded. Please try again later.",
+            code: "RATE_LIMIT_EXCEEDED",
+            retryAfter: Math.ceil((rateResult.resetTime - now) / 1000)
+          });
+        }
+        
+        // Request is within rate limit - continue processing
+        // No additional operations needed as the atomic check already incremented the counter
+        
+      } catch (error) {
+        console.error('[RATE_LIMIT] Storage error, allowing request:', error);
+        // On storage error, allow the request to continue rather than blocking it
+      }
+
+      // 4. Input validation
+      if (validateInput) {
+        const validationError = validateInput(req);
+        if (validationError) {
+          return res.status(400).json({ 
+            message: validationError,
+            code: "VALIDATION_ERROR" 
+          });
+        }
+      }
+
+      // 5. Session security - check for session activity and detect potential hijacking
+      if (req.session) {
+        // Check if session has proper timestamp (set during login)
+        if (!req.session.createdAt) {
+          return res.status(401).json({ 
+            message: "Invalid session. Please login again.",
+            code: "INVALID_SESSION" 
+          });
+        }
+        
+        const now = Date.now();
+        const sessionAge = now - req.session.createdAt;
+        const MAX_SESSION_AGE = 8 * 60 * 60 * 1000; // 8 hours for admin sessions
+        
+        if (sessionAge > MAX_SESSION_AGE) {
+          return res.status(401).json({ 
+            message: "Admin session expired. Please login again.",
+            code: "SESSION_EXPIRED" 
+          });
+        }
+        
+        // Check for suspicious activity patterns - IP change detection
+        const currentIP = req.ip || req.connection.remoteAddress;
+        if (req.session.lastIP && req.session.lastIP !== currentIP) {
+          console.warn(`[SECURITY] Admin session IP change detected: ${req.session.lastIP} -> ${currentIP} for user ${userId}`);
+          // For high security, could force re-authentication here
+          // return res.status(401).json({ message: "Session security violation detected", code: "IP_CHANGE_DETECTED" });
+        }
+        
+        // Update session tracking
+        req.session.lastIP = currentIP;
+        req.session.lastActivity = Date.now();
+      }
+
+      // 6. Store request context for audit logging
+      req.adminContext = {
+        action,
+        resource,
+        adminUserId: userId,
+        ipAddress: req.ip || req.connection.remoteAddress || null,
+        userAgent: req.get('User-Agent') || null,
+        timestamp: new Date()
+      };
+
+      next();
+    };
+  };
+
+  // Legacy middleware for backward compatibility
+  const requireAdmin = createEnhancedAdminMiddleware({
+    action: "access",
+    resource: "admin_area"
+  });
+
+  // Helper function to log admin actions
+  const logAdminAction = async (req: Request, res: Response, additionalData?: Record<string, unknown>) => {
+    if (!req.adminContext) return;
+    
+    try {
+      const storage = await getStorage();
+      const { action, resource, adminUserId, ipAddress, userAgent } = req.adminContext;
+      
+      const auditLog = {
+        adminUserId,
+        action,
+        resource,
+        resourceId: req.params.id || additionalData?.resourceId || null,
+        oldValue: additionalData?.oldValue ? JSON.stringify(additionalData.oldValue) : null,
+        newValue: additionalData?.newValue ? JSON.stringify(additionalData.newValue) : null,
+        ipAddress,
+        userAgent,
+        additionalInfo: additionalData?.additionalInfo || null
+      };
+      
+      await storage.logAdminAction(auditLog);
+    } catch (error) {
+      console.error('[AUDIT] Failed to log admin action:', error);
     }
-    next();
   };
 
   // Admin user management API
-  app.get("/api/admin/users/count", requireAdmin, asyncRoute("get user count", async (req: any, res: any) => {
+  app.get("/api/admin/users/count", requireAdmin, asyncRoute("get user count", async (req: Request, res: Response) => {
     const storage = await getStorage();
     const count = await storage.getUserCount();
     res.json({ count });
   }));
 
-  app.get("/api/admin/users", requireAdmin, asyncRoute("get all users", async (req: any, res: any) => {
+  app.get("/api/admin/users", requireAdmin, asyncRoute("get all users", async (req: Request, res: Response) => {
     const storage = await getStorage();
     const offset = parseInt(req.query.offset as string) || 0;
     const limit = parseInt(req.query.limit as string) || 100;
@@ -822,202 +1690,712 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   }));
 
-  app.patch("/api/admin/users/:id", requireAdmin, asyncRoute("update user role", async (req: any, res: any) => {
-    const { id } = req.params;
-    const { role } = req.body;
-    const storage = await getStorage();
-    
-    // Validate role value
-    if (!role || !["customer", "admin"].includes(role)) {
-      return res.status(400).json({ 
-        message: "Invalid role. Role must be either 'customer' or 'admin'" 
-      });
-    }
-    
-    // Check if user exists
-    const existingUser = await storage.getUser(id);
-    if (!existingUser) {
-      return res.status(404).json({ message: "User not found" });
-    }
-    
-    // Prevent self-demotion (admin removing their own admin role)
-    const currentUser = req.user as any;
-    if (currentUser.id === id && role === "customer") {
-      return res.status(400).json({ 
-        message: "You cannot remove your own admin privileges" 
-      });
-    }
-    
-    // Update user role
-    const updatedUser = await storage.updateUser(id, { role });
-    if (!updatedUser) {
-      return res.status(500).json({ message: "Failed to update user role" });
-    }
-    
-    // Return updated user without password
-    const { password, ...safeUser } = updatedUser;
-    res.json({ 
-      message: `User role updated to ${role} successfully`,
-      user: safeUser
-    });
-  }));
-
-  // Admin consolidated statistics endpoint
-  app.get("/api/admin/stats", requireAdmin, asyncRoute("get admin dashboard statistics", async (req: any, res: any) => {
-    const storage = await getStorage();
-    
-    try {
-      // Fetch all data needed for admin dashboard in parallel
-      const [
-        appointments,
-        services, 
-        locations,
-        cars,
-        userCount
-      ] = await Promise.all([
-        storage.getAllAppointments(),
-        storage.getAllServices(),
-        storage.getAllLocations(),
-        storage.getAllCars(),
-        storage.getUserCount()
-      ]);
-
-      // Calculate statistics
-      const stats = {
-        // User statistics
-        totalUsers: userCount,
+  app.patch("/api/admin/users/:id", 
+    createEnhancedAdminMiddleware({
+      action: "role_change",
+      resource: "user",
+      rateLimit: 20, // More restrictive rate limit for role changes
+      validateInput: (req) => {
+        const { id } = req.params;
+        const { role } = req.body;
         
-        // Appointment statistics  
-        totalAppointments: appointments.length,
-        pendingAppointments: appointments.filter(a => a.status === "pending").length,
-        confirmedAppointments: appointments.filter(a => a.status === "confirmed").length,
-        completedAppointments: appointments.filter(a => a.status === "completed").length,
-        cancelledAppointments: appointments.filter(a => a.status === "cancelled").length,
-        
-        // Service statistics
-        totalServices: services.length,
-        popularServices: services.filter(s => s.popular).length,
-        
-        // Location statistics
-        totalLocations: locations.length,
-        
-        // Car statistics
-        totalCars: cars.length,
-        activeCars: cars.filter(c => !c.isAuction).length,
-        auctionCars: cars.filter(c => c.isAuction).length,
-        activeAuctions: cars.filter(c => c.isAuction && c.auctionEndTime && new Date(c.auctionEndTime) > new Date()).length,
-        
-        // Recent activity counts (last 30 days)
-        recentAppointments: appointments.filter(a => 
-          new Date(a.createdAt) > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-        ).length,
-      };
-
-      res.json(stats);
-    } catch (error) {
-      console.error("Failed to fetch admin statistics:", error);
-      res.status(500).json({ 
-        message: "Failed to fetch dashboard statistics",
-        error: error instanceof Error ? error.message : "Unknown error"
-      });
-    }
-  }));
-
-  // Services API
-  app.get("/api/services", asyncRoute("fetch services", async (req: any, res: any) => {
-    const storage = await getStorage();
-    const services = await storage.getAllServices();
-    res.json(services);
-  }));
-
-  app.get("/api/services/category/:category", asyncRoute("fetch services by category", async (req: any, res: any) => {
-    const { category } = req.params;
-    const storage = await getStorage();
-    const services = await storage.getServicesByCategory(category);
-    res.json(services);
-  }));
-
-  app.get("/api/services/:id", asyncRoute("fetch service", async (req: any, res: any) => {
-    const { id } = req.params;
-    const storage = await getStorage();
-    const service = await storage.getService(id);
-    
-    if (!service) {
-      return res.status(404).json({ message: "Service not found" });
-    }
-    
-    res.json(service);
-  }));
-
-  app.post("/api/services", requireAdmin, async (req, res) => {
-    try {
-      const storage = await getStorage();
-      const validatedData = insertServiceSchema.parse(req.body);
-      const service = await storage.createService(validatedData);
-      res.status(201).json(service);
-    } catch (error) {
-      // unified-error-handler
-      handleApiError(error, "create service", res);
-    }
-  });
-
-  // Update service (admin only)
-  app.put("/api/services/:id", requireAdmin, async (req, res) => {
-    try {
+        if (!id || typeof id !== 'string') {
+          return "Invalid user ID format";
+        }
+        if (!role || typeof role !== 'string') {
+          return "Role is required and must be a string";
+        }
+        if (!["customer", "admin"].includes(role)) {
+          return "Invalid role. Role must be either 'customer' or 'admin'";
+        }
+        return null;
+      }
+    }),
+    asyncRoute("update user role", async (req: Request, res: Response) => {
       const { id } = req.params;
+      const { role } = req.body;
       const storage = await getStorage();
       
-      // Check if service exists
-      const existingService = await storage.getService(id);
-      if (!existingService) {
-        return res.status(404).json({ message: "Service not found" });
-      }
-      
-      // Validate update data (allow partial updates)
-      const validatedData = insertServiceSchema.partial().parse(req.body);
-      const updatedService = await storage.updateService(id, validatedData);
-      
-      if (!updatedService) {
-        return res.status(500).json({ message: "Failed to update service" });
-      }
-      
-      res.json(updatedService);
-    } catch (error) {
-      // unified-error-handler
-      handleApiError(error, "update service", res);
-    }
-  });
-
-  // Delete service (admin only)
-  app.delete("/api/services/:id", requireAdmin, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const storage = await getStorage();
-      
-      // Check if service exists
-      const existingService = await storage.getService(id);
-      if (!existingService) {
-        return res.status(404).json({ message: "Service not found" });
-      }
-      
-      // Check if service is used in any appointments
-      const appointments = await storage.getAppointmentsByService(id);
-      if (appointments && appointments.length > 0) {
-        return res.status(400).json({ 
-          message: "Cannot delete service with existing appointments. Please cancel or complete all appointments first." 
+      try {
+        // Check if user exists
+        const existingUser = await storage.getUser(id);
+        if (!existingUser) {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: `Attempted to update non-existent user ${id}`
+          });
+          return res.status(404).json({ 
+            message: "User not found",
+            code: "USER_NOT_FOUND"
+          });
+        }
+        
+        // Prevent self-demotion (admin removing their own admin role)
+        const currentUser = req.user as any;
+        if (currentUser.id === id && role === "customer") {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: "Prevented self-demotion attempt"
+          });
+          return res.status(400).json({ 
+            message: "You cannot remove your own admin privileges",
+            code: "SELF_DEMOTION_DENIED"
+          });
+        }
+        
+        // Store old value for audit
+        const oldRole = existingUser.role;
+        
+        // Update user role
+        const updatedUser = await storage.updateUser(id, { role });
+        if (!updatedUser) {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: `Failed to update user ${id} role to ${role}`
+          });
+          return res.status(500).json({ 
+            message: "Failed to update user role",
+            code: "UPDATE_FAILED"
+          });
+        }
+        
+        // Log successful role change
+        await logAdminAction(req, res, {
+          resourceId: id,
+          oldValue: { role: oldRole, email: existingUser.email, name: existingUser.name },
+          newValue: { role: role, email: updatedUser.email, name: updatedUser.name },
+          additionalInfo: `Role changed from ${oldRole} to ${role}`
+        });
+        
+        // Return updated user without password
+        const { password, ...safeUser } = updatedUser;
+        res.json({ 
+          message: `User role updated to ${role} successfully`,
+          user: safeUser,
+          code: "ROLE_UPDATED"
+        });
+      } catch (error) {
+        console.error('[ADMIN] Role update error:', error);
+        await logAdminAction(req, res, {
+          resourceId: id,
+          additionalInfo: `Error during role update: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
+        return res.status(500).json({ 
+          message: "Internal server error during role update",
+          code: "INTERNAL_ERROR"
         });
       }
+    })
+  );
+
+  // Enhanced admin statistics endpoint with retry logic, caching, and improved reliability
+  app.get("/api/admin/stats", requireAdmin, asyncRoute("get admin dashboard statistics", async (req: Request, res: Response) => {
+    const startTime = Date.now();
+    console.log(`[ADMIN_STATS] Starting dashboard statistics request`);
+    
+    try {
+      // Fetch data from all sources concurrently with retry logic and caching
+      const [
+        appointmentsResult,
+        usersResult,
+        servicesResult,
+        locationsResult,
+        carsResult
+      ] = await Promise.all([
+        getCachedAppointments(),
+        getCachedUserCount(),
+        getCachedServices(),
+        getCachedLocations(),
+        getCachedCars()
+      ]);
+
+      // Track successful vs failed sources for reliability metrics
+      const sourceResults = {
+        appointments: appointmentsResult,
+        users: usersResult,
+        services: servicesResult,
+        locations: locationsResult,
+        cars: carsResult
+      };
+
+      const successfulSources = Object.values(sourceResults).filter(r => r.success).length;
+      const totalSources = Object.keys(sourceResults).length;
+      const failedSources = Object.entries(sourceResults)
+        .filter(([_, result]) => !result.success)
+        .map(([source, _]) => source);
+
+      // Extract data with fallbacks - always provide consistent structure
+      const appointments = appointmentsResult.success ? appointmentsResult.data! : [];
+      const userCount = usersResult.success ? usersResult.data! : 0;
+      const services = servicesResult.success ? servicesResult.data! : [];
+      const locations = locationsResult.success ? locationsResult.data! : [];
+      const cars = carsResult.success ? carsResult.data! : [];
+
+      // Calculate comprehensive statistics with consistent structure
+      const now = new Date();
+      const thirtyDaysAgo = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
       
-      await storage.deleteService(id);
-      res.status(204).send();
+      const stats: AdminStatsResponse = {
+        // User metrics - always present with availability indicator
+        totalUsers: usersResult.success ? userCount : null,
+        totalUsersAvailable: usersResult.success,
+        
+        // Appointment metrics - consistent structure regardless of availability
+        totalAppointments: appointmentsResult.success ? appointments.length : null,
+        appointmentsAvailable: appointmentsResult.success,
+        pendingAppointments: appointmentsResult.success ? 
+          appointments.filter(a => a.status === "pending").length : null,
+        confirmedAppointments: appointmentsResult.success ? 
+          appointments.filter(a => a.status === "confirmed").length : null,
+        completedAppointments: appointmentsResult.success ? 
+          appointments.filter(a => a.status === "completed").length : null,
+        cancelledAppointments: appointmentsResult.success ? 
+          appointments.filter(a => a.status === "cancelled").length : null,
+        recentAppointments: appointmentsResult.success ? 
+          appointments.filter(a => new Date(a.createdAt) > thirtyDaysAgo).length : null,
+        
+        // Service metrics - consistent structure
+        totalServices: servicesResult.success ? services.length : null,
+        servicesAvailable: servicesResult.success,
+        popularServices: servicesResult.success ? 
+          services.filter(s => s.popular).length : null,
+        
+        // Location metrics - consistent structure
+        totalLocations: locationsResult.success ? locations.length : null,
+        locationsAvailable: locationsResult.success,
+        
+        // Car metrics - consistent structure
+        totalCars: carsResult.success ? cars.length : null,
+        carsAvailable: carsResult.success,
+        activeCars: carsResult.success ? 
+          cars.filter(c => !c.isAuction).length : null,
+        auctionCars: carsResult.success ? 
+          cars.filter(c => c.isAuction).length : null,
+        activeAuctions: carsResult.success ? 
+          cars.filter(c => c.isAuction && c.auctionEndTime && new Date(c.auctionEndTime) > now).length : null,
+        
+        // Metadata for monitoring and debugging
+        lastUpdated: new Date().toISOString(),
+        cacheStatus: {
+          appointments: appointmentsResult.success ? 'cached' : 'fallback',
+          users: usersResult.success ? 'cached' : 'fallback',
+          services: servicesResult.success ? 'cached' : 'fallback',
+          locations: locationsResult.success ? 'cached' : 'fallback',
+          cars: carsResult.success ? 'cached' : 'fallback'
+        },
+        reliability: {
+          totalSources,
+          availableSources: successfulSources,
+          failedSources,
+          successRate: Number((successfulSources / totalSources * 100).toFixed(1))
+        }
+      };
+
+      // Add warnings only if there are significant issues affecting functionality
+      if (failedSources.length > 0) {
+        const criticalFailures = failedSources.filter(source => 
+          ['appointments', 'users'].includes(source)
+        );
+        
+        const impact = criticalFailures.length > 0 ? 'high' : 
+                      failedSources.length >= totalSources / 2 ? 'medium' : 'low';
+        
+        if (impact !== 'low') {
+          stats.warnings = {
+            message: `${failedSources.length} data source${failedSources.length > 1 ? 's' : ''} temporarily unavailable`,
+            details: failedSources.map(source => `${source} metrics may be incomplete`),
+            impact
+          };
+        }
+      }
+
+      // Determine appropriate status code based on functionality impact
+      // Return 200 if core functionality works (users + appointments available)
+      // Return 206 only if critical sources fail
+      const criticalSourcesAvailable = usersResult.success && appointmentsResult.success;
+      const statusCode = criticalSourcesAvailable ? 200 : 
+                        successfulSources > 0 ? 206 : 500;
+
+      const duration = Date.now() - startTime;
+      console.log(`[ADMIN_STATS] Request completed in ${duration}ms`, {
+        successRate: stats.reliability.successRate,
+        statusCode,
+        failedSources: stats.reliability.failedSources
+      });
+
+      res.status(statusCode).json(stats);
+      
     } catch (error) {
-      // unified-error-handler
-      handleApiError(error, "delete service", res);
+      const duration = Date.now() - startTime;
+      
+      // Enhanced error logging for admin visibility
+      logAdminStatsError({
+        operation: 'dashboard_statistics',
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : 'Unknown error',
+        attempts: 1,
+        duration,
+        context: {
+          userAgent: req.headers['user-agent'],
+          ip: req.ip,
+          userId: req.user?.id
+        }
+      });
+
+      console.error(`[ADMIN_STATS] Fatal error after ${duration}ms:`, error);
+      
+      res.status(500).json({ 
+        message: "Failed to retrieve dashboard statistics",
+        error: "Internal server error",
+        code: "STATS_FETCH_FAILED",
+        timestamp: new Date().toISOString(),
+        reliability: {
+          totalSources: 5,
+          availableSources: 0,
+          failedSources: ['appointments', 'users', 'services', 'locations', 'cars'],
+          successRate: 0
+        }
+      });
     }
-  });
+  }));
+
+  // Admin Image Management API
+  app.delete("/api/admin/images/profile/:userId", 
+    createEnhancedAdminMiddleware({
+      action: "delete",
+      resource: "profile_image",
+      rateLimit: 30, // Reasonable limit for image deletions
+      validateInput: (req) => {
+        const { userId } = req.params;
+        if (!userId || typeof userId !== 'string') {
+          return "Invalid user ID format";
+        }
+        return null;
+      }
+    }),
+    asyncRoute("delete user profile image as admin", async (req: Request, res: Response) => {
+      const { userId } = req.params;
+      const storage = await getStorage();
+      
+      try {
+        // Check if user exists and get their profile image
+        const existingUser = await storage.getUser(userId);
+        if (!existingUser) {
+          await logAdminAction(req, res, {
+            resourceId: userId,
+            additionalInfo: `Attempted to delete profile image for non-existent user ${userId}`
+          });
+          return res.status(404).json({ 
+            message: "User not found",
+            code: "USER_NOT_FOUND"
+          });
+        }
+        
+        if (!existingUser.profileImage) {
+          await logAdminAction(req, res, {
+            resourceId: userId,
+            additionalInfo: `User ${userId} has no profile image to delete`
+          });
+          return res.status(400).json({ 
+            message: "User has no profile image to delete",
+            code: "NO_PROFILE_IMAGE"
+          });
+        }
+        
+        // Delete the image files
+        const deletionResult = await ImageService.deleteImagesForUser(userId, existingUser.profileImage);
+        
+        if (!deletionResult.success) {
+          await logAdminAction(req, res, {
+            resourceId: userId,
+            additionalInfo: `Failed to delete profile image files: ${deletionResult.errors.join(', ')}`
+          });
+          return res.status(500).json({ 
+            message: "Failed to delete image files",
+            code: "DELETION_FAILED",
+            errors: deletionResult.errors
+          });
+        }
+        
+        // Update user record to remove profile image reference
+        await storage.updateUser(userId, { profileImage: null });
+        
+        // Log successful profile image deletion
+        await logAdminAction(req, res, {
+          resourceId: userId,
+          additionalInfo: JSON.stringify({
+            action: "delete_profile_image",
+            deletedImageUrl: existingUser.profileImage,
+            userName: existingUser.name,
+            userEmail: existingUser.email
+          })
+        });
+        
+        res.json({ 
+          success: true,
+          message: "Profile image deleted successfully",
+          deletedImageUrl: existingUser.profileImage
+        });
+        
+      } catch (error) {
+        // Log failed attempt
+        await logAdminAction(req, res, {
+          resourceId: userId,
+          additionalInfo: `Error deleting profile image: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
+        handleApiError(error, "delete profile image", res);
+      }
+    })
+  );
+
+  app.delete("/api/admin/images/car/:carId", 
+    createEnhancedAdminMiddleware({
+      action: "delete",
+      resource: "car_image",
+      rateLimit: 30, // Reasonable limit for image deletions
+      validateInput: (req) => {
+        const { carId } = req.params;
+        if (!carId || typeof carId !== 'string') {
+          return "Invalid car ID format";
+        }
+        return null;
+      }
+    }),
+    asyncRoute("delete car image as admin", async (req: Request, res: Response) => {
+      const { carId } = req.params;
+      const storage = await getStorage();
+      
+      try {
+        // Check if car exists and get its image
+        const existingCar = await storage.getCar(carId);
+        if (!existingCar) {
+          await logAdminAction(req, res, {
+            resourceId: carId,
+            additionalInfo: `Attempted to delete image for non-existent car ${carId}`
+          });
+          return res.status(404).json({ 
+            message: "Car not found",
+            code: "CAR_NOT_FOUND"
+          });
+        }
+        
+        if (!existingCar.image) {
+          await logAdminAction(req, res, {
+            resourceId: carId,
+            additionalInfo: `Car ${carId} has no image to delete`
+          });
+          return res.status(400).json({ 
+            message: "Car has no image to delete",
+            code: "NO_CAR_IMAGE"
+          });
+        }
+        
+        // Delete the image files
+        const deletionResult = await ImageService.deleteImagesForCar(carId, existingCar.image);
+        
+        if (!deletionResult.success) {
+          await logAdminAction(req, res, {
+            resourceId: carId,
+            additionalInfo: `Failed to delete car image files: ${deletionResult.errors.join(', ')}`
+          });
+          return res.status(500).json({ 
+            message: "Failed to delete image files",
+            code: "DELETION_FAILED",
+            errors: deletionResult.errors
+          });
+        }
+        
+        // Update car record to remove image reference
+        await storage.updateCar(carId, { image: "" });
+        
+        // Log successful car image deletion
+        await logAdminAction(req, res, {
+          resourceId: carId,
+          additionalInfo: JSON.stringify({
+            action: "delete_car_image",
+            deletedImageUrl: existingCar.image,
+            carMake: existingCar.make,
+            carModel: existingCar.model,
+            carYear: existingCar.year
+          })
+        });
+        
+        res.json({ 
+          success: true,
+          message: "Car image deleted successfully",
+          deletedImageUrl: existingCar.image
+        });
+        
+      } catch (error) {
+        // Log failed attempt
+        await logAdminAction(req, res, {
+          resourceId: carId,
+          additionalInfo: `Error deleting car image: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
+        handleApiError(error, "delete car image", res);
+      }
+    })
+  );
+
+  // Services API
+  app.get("/api/services", asyncRoute("fetch services", async (req: Request, res: Response) => {
+    const result = await getCachedServices();
+    
+    if (!result.success) {
+      console.error('[CACHE] Failed to get all services:', result.error);
+      return sendError(res, "Failed to fetch services", 500);
+    }
+    
+    res.json(result.data || []);
+  }));
+
+  app.get("/api/services/category/:category", asyncRoute("fetch services by category", async (req: Request, res: Response) => {
+    const { category } = req.params;
+    const result = await getCachedServicesByCategory(category);
+    
+    if (!result.success) {
+      console.error(`[CACHE] Failed to get services by category ${category}:`, result.error);
+      return sendError(res, "Failed to fetch services", 500);
+    }
+    
+    res.json(result.data || []);
+  }));
+
+  app.get("/api/services/:id", asyncRoute("fetch service", async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const result = await getCachedService(id);
+    
+    if (!result.success) {
+      console.error(`[CACHE] Failed to get service ${id}:`, result.error);
+      return sendError(res, "Failed to fetch service", 500);
+    }
+    
+    if (!result.data) {
+      return sendNotFoundError(res, "Service not found");
+    }
+    
+    res.json(result.data);
+  }));
+
+  app.post("/api/services", 
+    createEnhancedAdminMiddleware({
+      action: "create",
+      resource: "service",
+      rateLimit: 30, // Reasonable limit for service creation
+      validateInput: (req) => {
+        const { name, description, price, category, duration, features } = req.body;
+        
+        if (!name || typeof name !== 'string') {
+          return "Service name is required and must be a string";
+        }
+        if (!description || typeof description !== 'string') {
+          return "Service description is required and must be a string";
+        }
+        if (!price || typeof price !== 'number' || price <= 0) {
+          return "Service price is required and must be a positive number";
+        }
+        if (!category || typeof category !== 'string') {
+          return "Service category is required and must be a string";
+        }
+        if (!duration || typeof duration !== 'number' || duration <= 0) {
+          return "Service duration is required and must be a positive number";
+        }
+        // Check if features array is provided
+        if (features !== undefined && !Array.isArray(features)) {
+          return "Service features must be an array if provided";
+        }
+        return null;
+      }
+    }),
+    asyncRoute("create service", async (req: Request, res: Response) => {
+      try {
+        const storage = await getStorage();
+        const validatedData = insertServiceSchema.parse(req.body);
+        const service = await storage.createService(validatedData);
+        
+        // Log successful service creation
+        await logAdminAction(req, res, {
+          resourceId: service.id,
+          additionalInfo: JSON.stringify({
+            action: "create",
+            serviceName: service.title,
+            category: service.category,
+            price: service.price
+          })
+        });
+        
+        // Invalidate service caches after successful creation
+        cacheManager.invalidateServiceCaches(service.id, service.category);
+        
+        res.status(201).json(service);
+      } catch (error) {
+        // Log failed attempt
+        await logAdminAction(req, res, {
+          additionalInfo: `Failed to create service: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
+        handleApiError(error, "create service", res);
+      }
+    })
+  );
+
+  // Update service (admin only)
+  app.put("/api/services/:id", 
+    createEnhancedAdminMiddleware({
+      action: "update",
+      resource: "service",
+      rateLimit: 40, // Reasonable limit for service updates
+      validateInput: (req) => {
+        const { id } = req.params;
+        if (!id || typeof id !== 'string') {
+          return "Invalid service ID format";
+        }
+        // Allow partial updates, so don't require all fields
+        return null;
+      }
+    }),
+    asyncRoute("update service", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params;
+        const storage = await getStorage();
+        
+        // Check if service exists
+        const existingService = await storage.getService(id);
+        if (!existingService) {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: `Attempted to update non-existent service ${id}`
+          });
+          return res.status(404).json({ 
+            message: "Service not found",
+            code: "SERVICE_NOT_FOUND"
+          });
+        }
+        
+        // Validate update data (allow partial updates)
+        const validatedData = insertServiceSchema.partial().parse(req.body);
+        const updatedService = await storage.updateService(id, validatedData);
+        
+        if (!updatedService) {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: `Failed to update service ${id}`
+          });
+          return res.status(500).json({ 
+            message: "Failed to update service",
+            code: "UPDATE_FAILED"
+          });
+        }
+        
+        // Log successful service update
+        await logAdminAction(req, res, {
+          resourceId: id,
+          additionalInfo: JSON.stringify({
+            action: "update",
+            oldData: {
+              name: existingService.title,
+              price: existingService.price,
+              category: existingService.category
+            },
+            newData: validatedData
+          })
+        });
+        
+        // Invalidate service caches after successful update
+        // Use enhanced API to handle both old and new categories efficiently
+        const prevCategory = existingService.category;
+        const nextCategory = validatedData.category || prevCategory;
+        cacheManager.invalidateServiceCaches(id, prevCategory, nextCategory);
+        
+        res.json(updatedService);
+      } catch (error) {
+        // Log failed attempt
+        await logAdminAction(req, res, {
+          resourceId: req.params.id,
+          additionalInfo: `Error updating service: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
+        handleApiError(error, "update service", res);
+      }
+    })
+  );
+
+  // Delete service (admin only)
+  app.delete("/api/services/:id", 
+    createEnhancedAdminMiddleware({
+      action: "delete",
+      resource: "service",
+      rateLimit: 20, // More restrictive limit for deletions
+      validateInput: (req) => {
+        const { id } = req.params;
+        if (!id || typeof id !== 'string') {
+          return "Invalid service ID format";
+        }
+        return null;
+      }
+    }),
+    asyncRoute("delete service", async (req: Request, res: Response) => {
+      try {
+        const { id } = req.params;
+        const storage = await getStorage();
+        
+        // Check if service exists
+        const existingService = await storage.getService(id);
+        if (!existingService) {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: `Attempted to delete non-existent service ${id}`
+          });
+          return res.status(404).json({ 
+            message: "Service not found",
+            code: "SERVICE_NOT_FOUND"
+          });
+        }
+        
+        // Check if service is used in any appointments
+        const appointments = await storage.getAppointmentsByService(id);
+        if (appointments && appointments.length > 0) {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: `Attempted to delete service ${id} with ${appointments.length} existing appointments`
+          });
+          return res.status(400).json({ 
+            message: "Cannot delete service with existing appointments. Please cancel or complete all appointments first.",
+            code: "SERVICE_IN_USE",
+            appointmentCount: appointments.length
+          });
+        }
+        
+        await storage.deleteService(id);
+        
+        // Log successful service deletion
+        await logAdminAction(req, res, {
+          resourceId: id,
+          additionalInfo: JSON.stringify({
+            action: "delete",
+            deletedService: {
+              name: existingService.title,
+              category: existingService.category,
+              price: existingService.price
+            }
+          })
+        });
+        
+        // Invalidate service caches after successful deletion
+        cacheManager.invalidateServiceCaches(id, existingService.category);
+        
+        res.status(204).send();
+      } catch (error) {
+        // Log failed attempt
+        await logAdminAction(req, res, {
+          resourceId: req.params.id,
+          additionalInfo: `Error deleting service: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
+        handleApiError(error, "delete service", res);
+      }
+    })
+  );
 
   // Customers API
-  app.post("/api/customers", requireAuth, async (req: any, res: any) => {
+  app.post("/api/customers", requireAuth, async (req: Request, res: Response) => {
     try {
       const storage = await getStorage();
       const user = req.user as any;
@@ -1035,7 +2413,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // REMOVED: GET /api/customers/email/:email - Email enumeration vulnerability
   // Secure replacement: authenticated customer lookup/creation for current user only
-  app.post("/api/customers/ensure-own", requireAuth, async (req: any, res: any) => {
+  app.post("/api/customers/ensure-own", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = req.user as any;
       const storage = await getStorage();
@@ -1080,7 +2458,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Customer by User endpoint - needed for frontend appointment queries
-  app.get("/api/customer/by-user/:userId", requireAuth, asyncRoute("get customer by user ID", async (req: any, res: any) => {
+  app.get("/api/customer/by-user/:userId", requireAuth, asyncRoute("get customer by user ID", async (req: Request, res: Response) => {
     const { userId } = req.params;
     const user = req.user as any;
     
@@ -1097,32 +2475,116 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   // Admin Routes - must be defined before other appointment routes
-  app.get("/api/admin/appointments", requireAdmin, asyncRoute("fetch all appointments for admin", async (req: any, res: any) => {
+  app.get("/api/admin/appointments", requireAdmin, asyncRoute("fetch all appointments for admin", async (req: Request, res: Response) => {
     const storage = await getStorage();
     const appointments = await storage.getAllAppointments();
     res.json(appointments);
   }));
 
-  app.patch("/api/admin/appointments/:id/status", requireAdmin, asyncRoute("update appointment status as admin", async (req: any, res: any) => {
-    const { id } = req.params;
-    const { status } = req.body;
-    
-    if (!["pending", "confirmed", "in-progress", "completed", "cancelled"].includes(status)) {
-      return res.status(400).json({ message: "Invalid status value" });
-    }
-    
-    const storage = await getStorage();
-    const success = await storage.updateAppointmentStatus(id, status);
-    
-    if (!success) {
-      return res.status(404).json({ message: "Appointment not found" });
-    }
-    
-    res.json({ message: "Appointment status updated successfully" });
-  }));
+  app.patch("/api/admin/appointments/:id/status", 
+    createEnhancedAdminMiddleware({
+      action: "status_update",
+      resource: "appointment",
+      rateLimit: 50, // Reasonable limit for appointment status updates
+      validateInput: (req) => {
+        const { id } = req.params;
+        const { status } = req.body;
+        
+        if (!id || typeof id !== 'string') {
+          return "Invalid appointment ID format";
+        }
+        if (!status || typeof status !== 'string') {
+          return "Status is required and must be a string";
+        }
+        if (!["pending", "confirmed", "in-progress", "completed", "cancelled"].includes(status)) {
+          return "Invalid status. Status must be one of: pending, confirmed, in-progress, completed, cancelled";
+        }
+        return null;
+      }
+    }),
+    asyncRoute("update appointment status as admin", async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const { status } = req.body;
+      const storage = await getStorage();
+      
+      try {
+        // Check if appointment exists
+        const existingAppointment = await storage.getAppointment(id);
+        if (!existingAppointment) {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: `Attempted to update non-existent appointment ${id}`
+          });
+          return res.status(404).json({ 
+            message: "Appointment not found",
+            code: "APPOINTMENT_NOT_FOUND"
+          });
+        }
+        
+        // Store old status for audit
+        const oldStatus = existingAppointment.status;
+        
+        // Prevent unnecessary updates
+        if (oldStatus === status) {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: `No change needed - appointment ${id} already has status: ${status}`
+          });
+          return res.status(200).json({ 
+            message: "Appointment status is already set to the requested value",
+            appointmentId: id,
+            status: status,
+            code: "NO_CHANGE_NEEDED"
+          });
+        }
+        
+        // Update appointment status
+        const success = await storage.updateAppointmentStatus(id, status);
+        if (!success) {
+          await logAdminAction(req, res, {
+            resourceId: id,
+            additionalInfo: `Failed to update appointment ${id} status from ${oldStatus} to ${status}`
+          });
+          return res.status(500).json({ 
+            message: "Failed to update appointment status",
+            code: "UPDATE_FAILED"
+          });
+        }
+        
+        // Log successful status change
+        await logAdminAction(req, res, {
+          resourceId: id,
+          additionalInfo: JSON.stringify({
+            action: "status_update",
+            oldStatus,
+            newStatus: status,
+            appointmentId: id
+          })
+        });
+        
+        res.json({ 
+          message: "Appointment status updated successfully",
+          appointmentId: id,
+          oldStatus,
+          newStatus: status,
+          code: "SUCCESS"
+        });
+      } catch (error) {
+        console.error("Error updating appointment status:", error);
+        await logAdminAction(req, res, {
+          resourceId: id,
+          additionalInfo: `Error updating appointment ${id}: ${error instanceof Error ? error.message : 'Unknown error'}`
+        });
+        return res.status(500).json({ 
+          message: "Internal server error during appointment update",
+          code: "INTERNAL_ERROR"
+        });
+      }
+    })
+  );
 
   // Conflict checking endpoint
-  app.post("/api/appointments/check-conflict", requireAuth, asyncRoute("check appointment conflict", async (req: any, res: any) => {
+  app.post("/api/appointments/check-conflict", requireAuth, asyncRoute("check appointment conflict", async (req: Request, res: Response) => {
     const { locationId, dateTime } = req.body;
     
     if (!locationId || !dateTime) {
@@ -1141,7 +2603,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   // Appointments API
-  app.get("/api/appointments/customer/:customerId", requireAuth, asyncRoute("fetch customer appointments", async (req: any, res: any) => {
+  app.get("/api/appointments/customer/:customerId", requireAuth, asyncRoute("fetch customer appointments", async (req: Request, res: Response) => {
     const { customerId } = req.params;
     const user = req.user as any;
     const storage = await getStorage();
@@ -1164,7 +2626,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(appointments);
   }));
 
-  app.post("/api/appointments", requireAuth, asyncRoute("create appointment", async (req: any, res: any) => {
+  app.get("/api/appointments/:id", requireAuth, asyncRoute("fetch appointment", async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const user = req.user as any;
+    const storage = await getStorage();
+    
+    // Get the appointment with details (includes service, location, and customer names)
+    const appointment = await storage.getAppointmentWithDetails(id);
+    if (!appointment) {
+      return res.status(404).json({ message: "Appointment not found" });
+    }
+    
+    // Authorization check: Admin users can access any appointment, 
+    // regular users can only access appointments they own
+    if (user.role !== "admin") {
+      // Get the customer associated with this appointment
+      const customer = await storage.getCustomer(appointment.customerId);
+      if (!customer || customer.userId !== user.id) {
+        return res.status(403).json({ 
+          message: "Unauthorized: You can only access your own appointments" 
+        });
+      }
+    }
+    
+    res.json(appointment);
+  }));
+
+  app.post("/api/appointments", requireAuth, asyncRoute("create appointment", async (req: Request, res: Response) => {
     try {
       const storage = await getStorage();
       const user = req.user as any;
@@ -1272,8 +2760,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } else {
           console.error("[APPOINTMENT] Missing customer, service, or location data for notifications");
         }
-      } catch (notificationError: any) {
-        console.error(`[APPOINTMENT] Notification setup failed: ${notificationError.message}`);
+      } catch (notificationError: unknown) {
+        console.error(`[APPOINTMENT] Notification setup failed: ${notificationError instanceof Error ? notificationError.message : 'Unknown error'}`);
       }
       
       // Return appointment immediately without waiting for email
@@ -1284,7 +2772,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }));
 
-  app.patch("/api/appointments/:id/status", requireAuth, asyncRoute("update appointment status", async (req: any, res: any) => {
+  app.patch("/api/appointments/:id/status", requireAuth, asyncRoute("update appointment status", async (req: Request, res: Response) => {
     const { id } = req.params;
     const { status } = req.body;
     
@@ -1380,16 +2868,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             } else {
               console.error(`[STATUS] WhatsApp update failed: ${whatsappResult.error}`);
             }
-          } catch (whatsappError: any) {
-            console.error(`[STATUS] WhatsApp update error: ${whatsappError.message}`);
+          } catch (whatsappError: unknown) {
+            console.error(`[STATUS] WhatsApp update error: ${whatsappError instanceof Error ? whatsappError.message : 'Unknown error'}`);
             statusWhatsAppSent = false;
           }
         } else {
           console.log("[STATUS] No phone number available for WhatsApp update");
         }
       }
-    } catch (notificationError: any) {
-      console.error("Failed to send status update notifications:", notificationError.message);
+    } catch (notificationError: unknown) {
+      console.error("Failed to send status update notifications:", notificationError instanceof Error ? notificationError.message : 'Unknown error');
       statusEmailSent = false;
       statusWhatsAppSent = false;
     }
@@ -1417,7 +2905,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   // Reschedule appointment with full security and validation
-  app.patch("/api/appointments/:id/reschedule", requireAuth, asyncRoute("reschedule appointment", async (req: any, res: any) => {
+  app.patch("/api/appointments/:id/reschedule", requireAuth, asyncRoute("reschedule appointment", async (req: Request, res: Response) => {
     try {
       const { id } = req.params;
       const user = req.user as any;
@@ -1503,9 +2991,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Cars API
   app.get("/api/cars", async (req, res) => {
     try {
-      const storage = await getStorage();
-      const cars = await storage.getAllCars();
-      res.json(cars);
+      const result = await getCachedCars();
+      
+      if (!result.success) {
+        console.error('[CACHE] Failed to get all cars:', result.error);
+        return res.status(500).json({ message: "Failed to fetch cars" });
+      }
+      
+      res.json(result.data || []);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch cars" });
     }
@@ -1531,25 +3024,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/api/cars/:id", async (req, res) => {
-    try {
-      const { id } = req.params;
-      const storage = await getStorage();
-      const car = await storage.getCar(id);
-      if (!car) {
-        return res.status(404).json({ message: "Car not found" });
-      }
-      res.json(car);
-    } catch (error) {
-      res.status(500).json({ message: "Failed to fetch car" });
+  app.get("/api/cars/:id", asyncRoute("fetch car", async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const result = await getCachedCar(id);
+    
+    if (!result.success) {
+      console.error(`[CACHE] Failed to get car ${id}:`, result.error);
+      return sendError(res, "Failed to fetch car", 500);
     }
-  });
+    
+    if (!result.data) {
+      return sendNotFoundError(res, "Car not found");
+    }
+    
+    res.json(result.data);
+  }));
 
-  app.post("/api/cars", requireAdmin, async (req: any, res: any) => {
+  app.post("/api/cars", requireAdmin, async (req: Request, res: Response) => {
     try {
       const storage = await getStorage();
       const validatedData = insertCarSchema.parse(req.body);
       const car = await storage.createCar(validatedData);
+      
+      // Invalidate car caches after successful creation
+      cacheManager.invalidateCarCaches(car.id);
+      
       res.status(201).json(car);
     } catch (error) {
       if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
@@ -1643,8 +3142,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.log("[BID] No phone number available for WhatsApp confirmation");
           }
           
-        } catch (notificationError: any) {
-          console.error(`[BID] WhatsApp notification failed: ${notificationError.message}`);
+        } catch (notificationError: unknown) {
+          console.error(`[BID] WhatsApp notification failed: ${notificationError instanceof Error ? notificationError.message : 'Unknown error'}`);
         }
       });
       
@@ -1668,9 +3167,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { carId } = req.params;
       const storage = await getStorage();
       
-      // Check if car exists
-      const car = await storage.getCar(carId);
-      if (!car) {
+      // Check if car exists using cached variant
+      const carResult = await getCachedCar(carId);
+      if (!carResult.success || !carResult.data) {
         return res.status(404).json({ message: "Car not found" });
       }
       
@@ -1685,7 +3184,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Contacts API
-  app.post("/api/contacts", requireAuth, async (req: any, res: any) => {
+  app.post("/api/contacts", requireAuth, async (req: Request, res: Response) => {
     try {
       const storage = await getStorage();
       const validatedData = insertContactSchema.parse(req.body);
@@ -1701,21 +3200,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Locations API
-  app.get("/api/locations", async (req: any, res: any) => {
+  app.get("/api/locations", async (req: Request, res: Response) => {
     try {
-      const storage = await getStorage();
-      const locations = await storage.getAllLocations();
-      res.json(locations);
+      const result = await getCachedLocations();
+      
+      if (!result.success) {
+        console.error('[CACHE] Failed to get all locations:', result.error);
+        return res.status(500).json({ message: "Failed to fetch locations" });
+      }
+      
+      res.json(result.data || []);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch locations" });
     }
   });
 
-  app.post("/api/locations", requireAdmin, async (req: any, res: any) => {
+  app.get("/api/locations/:id", asyncRoute("fetch location", async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const result = await getCachedLocation(id);
+    
+    if (!result.success) {
+      console.error(`[CACHE] Failed to get location ${id}:`, result.error);
+      return sendError(res, "Failed to fetch location", 500);
+    }
+    
+    if (!result.data) {
+      return sendNotFoundError(res, "Location not found");
+    }
+    
+    res.json(result.data);
+  }));
+
+  app.post("/api/locations", requireAdmin, async (req: Request, res: Response) => {
     try {
       const storage = await getStorage();
       const validatedData = insertLocationSchema.parse(req.body);
       const location = await storage.createLocation(validatedData);
+      
+      // Invalidate location caches after successful creation
+      cacheManager.invalidateLocationCaches(location.id);
+      
       res.status(201).json(location);
     } catch (error) {
       if (error && typeof error === "object" && "name" in error && error.name === "ZodError") {
@@ -1726,32 +3250,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put("/api/locations/:id", requireAdmin, asyncRoute("update location", async (req: any, res: any) => {
+  app.put("/api/locations/:id", requireAdmin, asyncRoute("update location", async (req: Request, res: Response) => {
     const { id } = req.params;
     const storage = await getStorage();
     
     // Validate the update data
     const validatedData = insertLocationSchema.parse(req.body);
     
-    // Check if location exists
-    const existingLocation = await storage.getLocation(id);
-    if (!existingLocation) {
+    // Check if location exists using cached variant
+    const locationResult = await getCachedLocation(id);
+    if (!locationResult.success || !locationResult.data) {
       return res.status(404).json({ message: "Location not found" });
     }
+    const existingLocation = locationResult.data;
     
     const updatedLocation = await storage.updateLocation(id, validatedData);
+    
+    // Invalidate location caches after successful update
+    cacheManager.invalidateLocationCaches(id);
+    
     res.json(updatedLocation);
   }));
 
-  app.delete("/api/locations/:id", requireAdmin, asyncRoute("delete location", async (req: any, res: any) => {
+  app.delete("/api/locations/:id", requireAdmin, asyncRoute("delete location", async (req: Request, res: Response) => {
     const { id } = req.params;
     const storage = await getStorage();
     
-    // Check if location exists
-    const existingLocation = await storage.getLocation(id);
-    if (!existingLocation) {
+    // Check if location exists using cached variant
+    const locationResult = await getCachedLocation(id);
+    if (!locationResult.success || !locationResult.data) {
       return res.status(404).json({ message: "Location not found" });
     }
+    const existingLocation = locationResult.data;
     
     // Check if location has any appointments
     const hasAppointments = await storage.hasLocationAppointments(id);
@@ -1762,13 +3292,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     await storage.deleteLocation(id);
+    
+    // Invalidate location caches after successful deletion
+    cacheManager.invalidateLocationCaches(id);
+    
     res.json({ message: "Location deleted successfully" });
   }));
 
   // Image Upload Routes
   
   // Upload profile image
-  app.post("/api/upload/profile", requireAuth, profileUpload.single('profileImage'), asyncRoute("upload profile image", async (req: any, res: any) => {
+  app.post("/api/upload/profile", requireAuth, profileUpload.single('profileImage'), asyncRoute("upload profile image", async (req: Request, res: Response) => {
     const storage = await getStorage();
     const user = req.user;
     
@@ -1777,7 +3311,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
 
     const inputPath = req.file.path;
-    const filename = `profile-${user.id}-${Date.now()}.jpg`;
+    const filename = `profile-${user.id}-${Date.now()}`;
     const outputPath = path.join('public/uploads/profiles', filename);
     const thumbnailPath = path.join('public/uploads/thumbs', `thumb-${filename}`);
 
@@ -1789,12 +3323,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid image file. Please upload a valid image." });
       }
 
-      // Process the image
-      await ImageService.processProfileImage(inputPath, outputPath);
-      await ImageService.createThumbnail(outputPath, thumbnailPath);
+      // Process the image - generates both WebP and JPEG
+      const processedImages = await ImageService.processProfileImage(inputPath, outputPath);
+      const thumbnails = await ImageService.createThumbnail(processedImages.jpeg, thumbnailPath);
 
-      // Update user profile with image URL
+      // Update user profile with JPEG URL (backward compatible)
       const imageUrl = ImageService.generateImageUrl(filename, 'profiles');
+      const imageUrls = ImageService.generateImageUrls(filename, 'profiles');
       await storage.updateUser(user.id, { profileImage: imageUrl });
 
       // Clean up original uploaded file
@@ -1802,13 +3337,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ 
         message: "Profile image uploaded successfully",
-        imageUrl: imageUrl
+        imageUrl: imageUrl,
+        imageUrls: imageUrls // Include WebP and JPEG URLs for frontend
       });
     } catch (error) {
       // Clean up files on error
       await ImageService.deleteImage(inputPath);
-      await ImageService.deleteImage(outputPath);
-      await ImageService.deleteImage(thumbnailPath);
+      await ImageService.deleteImage(`${outputPath}.jpg`);
+      await ImageService.deleteImage(`${outputPath}.webp`);
+      await ImageService.deleteImage(`${thumbnailPath}.jpg`);
+      await ImageService.deleteImage(`${thumbnailPath}.webp`);
       // Don't throw - let asyncRoute handle error properly
       console.error('Profile image upload error:', error);
       return res.status(500).json({
@@ -1818,13 +3356,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   // Upload car image
-  app.post("/api/upload/car", requireAuth, carUpload.single('carImage'), asyncRoute("upload car image", async (req: any, res: any) => {
+  app.post("/api/upload/car", requireAuth, carUpload.single('carImage'), asyncRoute("upload car image", async (req: Request, res: Response) => {
     if (!req.file) {
       return res.status(400).json({ message: "No image file provided" });
     }
 
     const inputPath = req.file.path;
-    const filename = `car-${Date.now()}-${Math.round(Math.random() * 1E9)}.jpg`;
+    const filename = `car-${Date.now()}-${Math.round(Math.random() * 1E9)}`;
     const outputPath = path.join('public/uploads/cars', filename);
     const thumbnailPath = path.join('public/uploads/thumbs', `thumb-${filename}`);
 
@@ -1836,25 +3374,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid image file. Please upload a valid image." });
       }
 
-      // Process the image
-      await ImageService.processCarImage(inputPath, outputPath);
-      await ImageService.createThumbnail(outputPath, thumbnailPath);
+      // Process the image - generates both WebP and JPEG
+      const processedImages = await ImageService.processCarImage(inputPath, outputPath);
+      const thumbnails = await ImageService.createThumbnail(processedImages.jpeg, thumbnailPath);
 
       // Clean up original uploaded file
       await ImageService.deleteImage(inputPath);
 
       const imageUrl = ImageService.generateImageUrl(filename, 'cars');
+      const imageUrls = ImageService.generateImageUrls(filename, 'cars');
       
       res.json({ 
         message: "Car image uploaded successfully",
         imageUrl: imageUrl,
+        imageUrls: imageUrls, // Include WebP and JPEG URLs for frontend
         filename: filename
       });
     } catch (error) {
       // Clean up files on error
       await ImageService.deleteImage(inputPath);
-      await ImageService.deleteImage(outputPath);
-      await ImageService.deleteImage(thumbnailPath);
+      await ImageService.deleteImage(`${outputPath}.jpg`);
+      await ImageService.deleteImage(`${outputPath}.webp`);
+      await ImageService.deleteImage(`${thumbnailPath}.jpg`);
+      await ImageService.deleteImage(`${thumbnailPath}.webp`);
       // Don't throw - let asyncRoute handle error properly
       console.error('Car image upload error:', error);
       return res.status(500).json({
@@ -1863,11 +3405,284 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }));
 
+  // Replace profile image - PUT /api/upload/profile/replace/:filename
+  app.put("/api/upload/profile/replace/:filename", requireAuth, profileUpload.single('profileImage'), asyncRoute("replace profile image", async (req: Request, res: Response) => {
+    const { filename } = req.params;
+    const user = req.user;
+    const storage = await getStorage();
+
+    // Validate ownership - user can only replace their own profile image
+    const currentUser = await storage.getUser(user.id);
+    if (!currentUser || !currentUser.profileImage) {
+      return res.status(404).json({ message: "No profile image found to replace" });
+    }
+
+    // Extract filename from current profile image URL
+    const currentFilename = currentUser.profileImage.split('/').pop();
+    if (currentFilename !== filename) {
+      return res.status(403).json({ message: "Unauthorized: You can only replace your own profile image" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: "No image file provided" });
+    }
+
+    const inputPath = req.file.path;
+    const newFilename = `profile-${user.id}-${Date.now()}.jpg`;
+    const outputPath = path.join('public/uploads/profiles', newFilename);
+    const thumbnailPath = path.join('public/uploads/thumbs', `thumb-${newFilename}`);
+
+    try {
+      // Validate the uploaded image
+      const isValid = await ImageService.validateImage(inputPath);
+      if (!isValid) {
+        await ImageService.deleteImage(inputPath);
+        return res.status(400).json({ message: "Invalid image file. Please upload a valid image." });
+      }
+
+      // Process the new image
+      await ImageService.processProfileImage(inputPath, outputPath);
+      await ImageService.createThumbnail(outputPath, thumbnailPath);
+
+      // Delete old image files
+      const oldImagePath = path.join('public/uploads/profiles', filename);
+      await ImageService.deleteImageWithThumbnail(oldImagePath, 'profiles');
+
+      // Update user's profile image URL
+      const imageUrl = ImageService.generateImageUrl(newFilename, 'profiles');
+      await storage.updateUser(user.id, { profileImage: imageUrl });
+
+      // Clean up original uploaded file
+      await ImageService.deleteImage(inputPath);
+
+      res.json({ 
+        message: "Profile image replaced successfully",
+        imageUrl: imageUrl
+      });
+    } catch (error) {
+      // Clean up files on error
+      await ImageService.deleteImage(inputPath);
+      await ImageService.deleteImage(outputPath);
+      await ImageService.deleteImage(thumbnailPath);
+      console.error('Profile image replace error:', error);
+      return res.status(500).json({
+        message: 'Profile image replacement failed. Please try again later.'
+      });
+    }
+  }));
+
+  // Replace car image - PUT /api/upload/car/replace/:filename  
+  app.put("/api/upload/car/replace/:filename", requireAdmin, carUpload.single('carImage'), asyncRoute("replace car image", async (req: Request, res: Response) => {
+    const { filename } = req.params;
+    const storage = await getStorage();
+
+    // Find car with this image filename using exact path segment matching
+    const allCars = await storage.getAllCars();
+    const carWithImage = allCars.find(car => {
+      if (!car.image) return false;
+      // Extract the last path segment from car.image and compare for strict equality
+      const carImageFilename = car.image.split('/').pop();
+      return carImageFilename === filename;
+    });
+    
+    if (!carWithImage) {
+      return res.status(404).json({ message: "Car with specified image not found" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: "No image file provided" });
+    }
+
+    const inputPath = req.file.path;
+    const newFilename = `car-${Date.now()}-${Math.round(Math.random() * 1E9)}.jpg`;
+    const outputPath = path.join('public/uploads/cars', newFilename);
+    const thumbnailPath = path.join('public/uploads/thumbs', `thumb-${newFilename}`);
+
+    try {
+      // Validate the uploaded image
+      const isValid = await ImageService.validateImage(inputPath);
+      if (!isValid) {
+        await ImageService.deleteImage(inputPath);
+        return res.status(400).json({ message: "Invalid image file. Please upload a valid image." });
+      }
+
+      // Process the new image
+      await ImageService.processCarImage(inputPath, outputPath);
+      await ImageService.createThumbnail(outputPath, thumbnailPath);
+
+      // Delete old image files
+      const oldImagePath = path.join('public/uploads/cars', filename);
+      await ImageService.deleteImageWithThumbnail(oldImagePath, 'cars');
+
+      // Update car's image URL
+      const imageUrl = ImageService.generateImageUrl(newFilename, 'cars');
+      await storage.updateCar(carWithImage.id, { image: imageUrl });
+
+      // Clean up original uploaded file
+      await ImageService.deleteImage(inputPath);
+
+      res.json({ 
+        message: "Car image replaced successfully",
+        imageUrl: imageUrl,
+        carId: carWithImage.id
+      });
+    } catch (error) {
+      // Clean up files on error
+      await ImageService.deleteImage(inputPath);
+      await ImageService.deleteImage(outputPath);
+      await ImageService.deleteImage(thumbnailPath);
+      console.error('Car image replace error:', error);
+      return res.status(500).json({
+        message: 'Car image replacement failed. Please try again later.'
+      });
+    }
+  }));
+
+  // Delete profile image - DELETE /api/upload/profile/:filename
+  app.delete("/api/upload/profile/:filename", requireAuth, asyncRoute("delete profile image", async (req: Request, res: Response) => {
+    const { filename } = req.params;
+    const user = req.user;
+    const storage = await getStorage();
+
+    // Validate ownership - user can only delete their own profile image
+    const currentUser = await storage.getUser(user.id);
+    if (!currentUser || !currentUser.profileImage) {
+      return res.status(404).json({ message: "No profile image found to delete" });
+    }
+
+    // Extract filename from current profile image URL
+    const currentFilename = currentUser.profileImage.split('/').pop();
+    if (currentFilename !== filename) {
+      return res.status(403).json({ message: "Unauthorized: You can only delete your own profile image" });
+    }
+
+    try {
+      // Delete image files
+      const imagePath = path.join('public/uploads/profiles', filename);
+      const deleteResult = await ImageService.deleteImageWithThumbnail(imagePath, 'profiles');
+
+      // Update user's profile image field to null
+      await storage.updateUser(user.id, { profileImage: null });
+
+      if (deleteResult.success) {
+        res.json({ message: "Profile image deleted successfully" });
+      } else {
+        res.json({ 
+          message: "Profile image record updated, but some files may not have been found",
+          errors: deleteResult.errors
+        });
+      }
+    } catch (error) {
+      console.error('Profile image delete error:', error);
+      return res.status(500).json({
+        message: 'Profile image deletion failed. Please try again later.'
+      });
+    }
+  }));
+
+  // Delete car image - DELETE /api/upload/car/:filename
+  app.delete("/api/upload/car/:filename", requireAdmin, asyncRoute("delete car image", async (req: Request, res: Response) => {
+    const { filename } = req.params;
+    const storage = await getStorage();
+
+    // Find car with this image filename using exact path segment matching
+    const allCars = await storage.getAllCars();
+    const carWithImage = allCars.find(car => {
+      if (!car.image) return false;
+      // Extract the last path segment from car.image and compare for strict equality
+      const carImageFilename = car.image.split('/').pop();
+      return carImageFilename === filename;
+    });
+    
+    if (!carWithImage) {
+      return res.status(404).json({ message: "Car with specified image not found" });
+    }
+
+    try {
+      // Delete image files
+      const imagePath = path.join('public/uploads/cars', filename);
+      const deleteResult = await ImageService.deleteImageWithThumbnail(imagePath, 'cars');
+
+      // Update car's image field to a placeholder or null - for this implementation, we'll keep the old image URL
+      // In a real-world scenario, you might want to set it to a default placeholder image
+      // await storage.updateCar(carWithImage.id, { image: '/uploads/cars/default-car.jpg' });
+
+      if (deleteResult.success) {
+        res.json({ 
+          message: "Car image deleted successfully",
+          carId: carWithImage.id,
+          note: "Car record still exists. Consider updating with a new image."
+        });
+      } else {
+        res.json({ 
+          message: "Car image deletion completed, but some files may not have been found",
+          errors: deleteResult.errors,
+          carId: carWithImage.id
+        });
+      }
+    } catch (error) {
+      console.error('Car image delete error:', error);
+      return res.status(500).json({
+        message: 'Car image deletion failed. Please try again later.'
+      });
+    }
+  }));
+
+  // Get user images - GET /api/upload/user/:userId/images
+  app.get("/api/upload/user/:userId/images", requireAuth, asyncRoute("get user images", async (req: Request, res: Response) => {
+    const { userId } = req.params;
+    const currentUser = req.user;
+    const storage = await getStorage();
+
+    // Validate ownership - users can only access their own images, admins can access any
+    if (currentUser.role !== "admin" && currentUser.id !== userId) {
+      return res.status(403).json({ message: "Unauthorized: You can only access your own images" });
+    }
+
+    try {
+      // Get user data
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Collect user's images
+      const userImages = [];
+
+      // Add profile image if exists
+      if (user.profileImage) {
+        const filename = user.profileImage.split('/').pop();
+        userImages.push({
+          type: 'profile',
+          filename: filename,
+          url: user.profileImage,
+          thumbnailUrl: `/uploads/thumbs/thumb-${filename}`,
+          uploadedAt: user.createdAt // Best approximation we have
+        });
+      }
+
+      // Note: Cars don't have user ownership in the current schema,
+      // so we can't reliably associate car images with specific users
+      // This would require adding a userId field to the cars table
+
+      res.json({
+        userId: userId,
+        totalImages: userImages.length,
+        images: userImages
+      });
+    } catch (error) {
+      console.error('Get user images error:', error);
+      return res.status(500).json({
+        message: 'Failed to retrieve user images. Please try again later.'
+      });
+    }
+  }));
+
   // Serve uploaded images
   app.use('/uploads', express.static(path.join(process.cwd(), 'public/uploads')));
 
   // Delete image (admin only)
-  app.delete("/api/upload/:type/:filename", requireAdmin, asyncRoute("delete image", async (req: any, res: any) => {
+  app.delete("/api/upload/:type/:filename", requireAdmin, asyncRoute("delete image", async (req: Request, res: Response) => {
     const { type, filename } = req.params;
     
     if (!['profiles', 'cars'].includes(type)) {
@@ -1891,7 +3706,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // New CRUD endpoints
 
   // Delete appointment (auth + ownership or admin)
-  app.delete("/api/appointments/:id", requireAuth, asyncRoute("delete appointment", async (req: any, res: any) => {
+  app.delete("/api/appointments/:id", requireAuth, asyncRoute("delete appointment", async (req: Request, res: Response) => {
     const { id } = req.params;
     const user = req.user as any;
     const storage = await getStorage();
@@ -1921,15 +3736,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   // Update car (admin only since no ownership model)
-  app.put("/api/cars/:id", requireAdmin, asyncRoute("update car", async (req: any, res: any) => {
+  app.put("/api/cars/:id", requireAdmin, asyncRoute("update car", async (req: Request, res: Response) => {
     const { id } = req.params;
     const storage = await getStorage();
 
-    // Check if car exists
-    const existingCar = await storage.getCar(id);
-    if (!existingCar) {
+    // Check if car exists using cached variant
+    const carResult = await getCachedCar(id);
+    if (!carResult.success || !carResult.data) {
       return res.status(404).json({ message: "Car not found" });
     }
+    const existingCar = carResult.data;
 
     // Validate update data (insertCarSchema already excludes id and createdAt)
     const validatedData = insertCarSchema.partial().parse(req.body);
@@ -1939,19 +3755,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: "Failed to update car" });
     }
 
+    // Invalidate car caches after successful update
+    cacheManager.invalidateCarCaches(id);
+
     res.json(updatedCar);
   }));
 
   // Delete car (admin only since no ownership model)
-  app.delete("/api/cars/:id", requireAdmin, asyncRoute("delete car", async (req: any, res: any) => {
+  app.delete("/api/cars/:id", requireAdmin, asyncRoute("delete car", async (req: Request, res: Response) => {
     const { id } = req.params;
     const storage = await getStorage();
 
-    // Check if car exists
-    const existingCar = await storage.getCar(id);
-    if (!existingCar) {
+    // Check if car exists using cached variant
+    const carResult = await getCachedCar(id);
+    if (!carResult.success || !carResult.data) {
       return res.status(404).json({ message: "Car not found" });
     }
+    const existingCar = carResult.data;
 
     // Check if car has active bids (prevent deletion of cars with active auctions)
     const hasActiveBids = await storage.hasActiveBids(id);
@@ -1961,16 +3781,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     }
 
-    const success = await storage.deleteCar(id);
-    if (!success) {
-      return res.status(500).json({ message: "Failed to delete car" });
-    }
+    // Use proper transaction-based approach to ensure atomicity
+    // Either both database deletion and file cleanup succeed, or both fail
+    try {
+      // Step 1: Delete from database first (reversible operation)
+      const dbDeleteSuccess = await storage.deleteCar(id);
+      if (!dbDeleteSuccess) {
+        return res.status(500).json({ message: "Failed to delete car from database" });
+      }
 
-    res.status(204).send();
+      // Step 2: Clean up associated images after successful database deletion
+      if (existingCar.image) {
+        const imageCleanupResult = await ImageService.deleteImagesForCar(id, existingCar.image);
+        if (!imageCleanupResult.success) {
+          console.error(`Image cleanup failed after car deletion for car ${id}:`, imageCleanupResult.errors);
+          // Since DB deletion succeeded but image cleanup failed, log this for manual cleanup
+          // This is acceptable because orphaned files are less critical than orphaned DB references
+          console.warn(`Car ${id} deleted from database but images may remain. Manual cleanup may be required.`);
+        } else {
+          console.log(`Successfully cleaned up images for car ${id}`);
+        }
+      }
+
+      // Invalidate car caches after successful deletion
+      cacheManager.invalidateCarCaches(id);
+
+      res.status(204).send();
+    } catch (error) {
+      // If any step fails, the error will be caught by the asyncRoute wrapper
+      // and handled consistently with other route errors
+      throw error;
+    }
   }));
 
   // Get customer by ID (auth + ownership or admin)
-  app.get("/api/customers/:id", requireAuth, asyncRoute("get customer by ID", async (req: any, res: any) => {
+  app.get("/api/customers/:id", requireAuth, asyncRoute("get customer by ID", async (req: Request, res: Response) => {
     const { id } = req.params;
     const user = req.user as any;
     const storage = await getStorage();
@@ -1991,7 +3836,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }));
 
   // Update customer (auth + ownership)
-  app.put("/api/customers/:id", requireAuth, asyncRoute("update customer", async (req: any, res: any) => {
+  app.put("/api/customers/:id", requireAuth, asyncRoute("update customer", async (req: Request, res: Response) => {
     const { id } = req.params;
     const user = req.user as any;
     const storage = await getStorage();
@@ -2032,6 +3877,390 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ status: "error", message: "Storage connection failed" });
     }
   });
+
+  // WhatsApp webhook endpoint for delivery status tracking
+  app.post("/api/webhooks/whatsapp", async (req: Request, res: Response) => {
+    try {
+      const signature = req.get('X-Twilio-Signature');
+      const url = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+      
+      // Always verify webhook signature when auth token is available for security
+      if (process.env.TWILIO_AUTH_TOKEN) {
+        if (!signature) {
+          console.error('[WhatsApp Webhook] Missing signature header');
+          return res.status(403).json({ message: 'Webhook signature required' });
+        }
+        
+        // Create the payload string that Twilio signed (URL + sorted form parameters)
+        // For JSON webhooks, we need to reconstruct the raw body as received
+        const rawBody = JSON.stringify(req.body);
+        const expectedSignature = crypto
+          .createHmac('sha1', process.env.TWILIO_AUTH_TOKEN)
+          .update(url + rawBody)
+          .digest('base64');
+        
+        const providedSignature = signature.replace('sha1=', '');
+        
+        // Use crypto.timingSafeEqual to prevent timing attacks
+        const expectedBuffer = Buffer.from(expectedSignature, 'base64');
+        const providedBuffer = Buffer.from(providedSignature, 'base64');
+        
+        if (expectedBuffer.length !== providedBuffer.length || 
+            !crypto.timingSafeEqual(expectedBuffer, providedBuffer)) {
+          console.error('[WhatsApp Webhook] Invalid signature verification failed');
+          console.error(`[WhatsApp Webhook] Expected: sha1=${expectedSignature}`);
+          console.error(`[WhatsApp Webhook] Received: ${signature}`);
+          console.error(`[WhatsApp Webhook] URL: ${url}`);
+          console.error(`[WhatsApp Webhook] Body: ${rawBody}`);
+          return res.status(403).json({ message: 'Invalid webhook signature' });
+        }
+        
+        console.log('[WhatsApp Webhook] Signature verification passed');
+      } else {
+        console.warn('[WhatsApp Webhook] TWILIO_AUTH_TOKEN not configured - skipping signature verification');
+      }
+      
+      const { MessageSid, MessageStatus, From, To, ErrorCode, ErrorMessage } = req.body;
+      
+      if (!MessageSid || !MessageStatus) {
+        console.error('[WhatsApp Webhook] Missing required fields:', { MessageSid, MessageStatus });
+        return res.status(400).json({ message: 'Missing required fields' });
+      }
+      
+      console.log(`[WhatsApp Webhook] Status update: ${MessageSid} -> ${MessageStatus}`);
+      
+      // Update message status in database
+      const storage = await getStorage();
+      const updated = await storage.updateWhatsAppMessageStatus(MessageSid, {
+        status: MessageStatus.toLowerCase(),
+        providerResponse: JSON.stringify({
+          status: MessageStatus,
+          from: From,
+          to: To,
+          errorCode: ErrorCode,
+          errorMessage: ErrorMessage,
+          updatedAt: new Date().toISOString()
+        })
+      });
+      
+      if (updated) {
+        console.log(`[WhatsApp Webhook] Updated message ${MessageSid} status to ${MessageStatus}`);
+        // Twilio expects 200 response for successful processing
+        res.status(200).send('OK');
+      } else {
+        console.warn(`[WhatsApp Webhook] Message ${MessageSid} not found in database`);
+        // Still return 200 for missing messages to avoid Twilio retries
+        // This is expected for messages sent outside our system
+        res.status(200).send('Message not found');
+      }
+      
+    } catch (error: unknown) {
+      const err = error as Error & { code?: string };
+      console.error('[WhatsApp Webhook] Error processing webhook:', {
+        error: err.message,
+        stack: err.stack,
+        body: req.body,
+        timestamp: new Date().toISOString()
+      });
+      
+      // Enhanced error categorization for better monitoring
+      const isTransientError = err.code && ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND'].includes(err.code);
+      const isDatabaseError = err.code && err.code.startsWith('2'); // PostgreSQL error codes start with 2
+      
+      if (isTransientError) {
+        console.warn(`[WhatsApp Webhook] Transient error detected: ${err.code} - returning 503 for retry`);
+        // Return 503 for transient errors to allow Twilio retries
+        return res.status(503).json({ 
+          message: 'Service temporarily unavailable', 
+          retryAfter: 60 // Suggest retry after 60 seconds
+        });
+      }
+      
+      if (isDatabaseError) {
+        console.error(`[WhatsApp Webhook] Database error: ${err.code} - ${err.message}`);
+        // Database errors might be transient (connection issues) or permanent (constraint violations)
+        // For webhook processing, err on the side of caution and allow retries
+        return res.status(503).json({ 
+          message: 'Database temporarily unavailable',
+          retryAfter: 120 // Suggest retry after 2 minutes for DB issues
+        });
+      }
+      
+      // For all other application errors, return 200 to prevent Twilio retries
+      // These are likely permanent issues that won't be resolved by retrying
+      console.log(`[WhatsApp Webhook] Returning 200 for application error to prevent retries`);
+      res.status(200).send('Error logged - no retry needed');
+    }
+  });
+  
+  // WhatsApp admin endpoints for message management
+  app.get("/api/admin/whatsapp/messages", requireAdmin, asyncRoute("get whatsapp messages", async (req: Request, res: Response) => {
+    const storage = await getStorage();
+    const { page = 1, limit = 50, status } = req.query;
+    
+    try {
+      const messages = await storage.getWhatsAppMessages({
+        page: parseInt(page),
+        limit: parseInt(limit),
+        status
+      });
+      
+      res.json(messages);
+    } catch (error) {
+      handleApiError(error, "fetch WhatsApp messages", res);
+    }
+  }));
+  
+  // WhatsApp message retry endpoint for failed messages
+  app.post("/api/admin/whatsapp/retry/:id", requireAdmin, asyncRoute("retry whatsapp message", async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const storage = await getStorage();
+    
+    try {
+      const message = await storage.getWhatsAppMessage(id);
+      if (!message) {
+        return res.status(404).json({ message: "WhatsApp message not found" });
+      }
+      
+      if (message.status !== 'failed') {
+        return res.status(400).json({ 
+          message: "Only failed messages can be retried",
+          currentStatus: message.status 
+        });
+      }
+      
+      // Retry sending the message
+      // Format the phone number for WhatsApp
+      const whatsappNumber = `whatsapp:+${(message.countryCode || '+91').replace(/\D/g, '')}${message.phone}`;
+      const result = await WhatsAppService.sendMessage(
+        whatsappNumber,
+        message.content,
+        message.messageType as any,
+        message.appointmentId || undefined
+      );
+      
+      if (result.success && result.messageSid) {
+        await storage.updateWhatsAppMessage(id, {
+          status: 'sent',
+          providerResponse: result.messageSid
+        });
+        
+        res.json({ 
+          message: "Message retried successfully",
+          messageSid: result.messageSid 
+        });
+      } else {
+        res.status(500).json({ 
+          message: "Failed to retry message",
+          error: result.error 
+        });
+      }
+    } catch (error) {
+      handleApiError(error, "retry WhatsApp message", res);
+    }
+  }));
+
+  // Contact admin endpoints for contact form management
+  app.get("/api/admin/contacts", 
+    createEnhancedAdminMiddleware({
+      action: "read", 
+      resource: "contact",
+      rateLimit: 100, // Higher limit for read operations
+      validateInput: (req) => {
+        const { page, limit, status } = req.query;
+        
+        if (page && (isNaN(Number(page)) || Number(page) < 1)) {
+          return "Page must be a positive number";
+        }
+        if (limit && (isNaN(Number(limit)) || Number(limit) < 1 || Number(limit) > 100)) {
+          return "Limit must be between 1 and 100";
+        }
+        if (status && !["new", "responded", "resolved"].includes(status as string)) {
+          return "Status must be one of: new, responded, resolved";
+        }
+        return null;
+      }
+    }),
+    asyncRoute("get admin contacts", withStorage(async (storage, req: Request, res: Response) => {
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 50;
+      const status = req.query.status as string;
+
+      const result = await storage.getContactsWithFilter({ page, limit, status });
+      
+      // Log admin action
+      await logAdminAction(req, res, {
+        additionalInfo: `Viewed contacts page ${page}, limit ${limit}, status: ${status || 'all'}`
+      });
+
+      res.json({
+        contacts: result.contacts,
+        pagination: {
+          page,
+          limit,
+          total: result.total,
+          hasMore: result.hasMore,
+          totalPages: Math.ceil(result.total / limit)
+        }
+      });
+    }))
+  );
+
+  app.patch("/api/admin/contacts/:id", 
+    createEnhancedAdminMiddleware({
+      action: "status_update",
+      resource: "contact", 
+      rateLimit: 50, // Moderate limit for status updates
+      validateInput: (req) => {
+        const { id } = req.params;
+        const { status } = req.body;
+        
+        if (!id || typeof id !== 'string') {
+          return "Contact ID is required and must be a string";
+        }
+        if (!status || typeof status !== 'string') {
+          return "Status is required and must be a string";
+        }
+        if (!["new", "responded", "resolved"].includes(status)) {
+          return "Status must be one of: new, responded, resolved";
+        }
+        return null;
+      }
+    }),
+    asyncRoute("update contact status", withStorage(async (storage, req: Request, res: Response) => {
+      const { id } = req.params;
+      
+      // Validate request body using Zod schema
+      const validatedData = updateContactSchema.parse(req.body);
+      
+      // Get the existing contact for audit logging
+      const existingContacts = await storage.getAllContacts();
+      const existingContact = existingContacts.find(c => c.id === id);
+      
+      if (!existingContact) {
+        return res.status(404).json({ message: "Contact not found" });
+      }
+
+      // Update the contact status
+      const updatedContact = await storage.updateContact(id, validatedData);
+      
+      if (!updatedContact) {
+        return res.status(404).json({ message: "Contact not found" });
+      }
+
+      // Log admin action with old and new values
+      await logAdminAction(req, res, {
+        resourceId: id,
+        oldValue: { status: existingContact.status },
+        newValue: { status: updatedContact.status },
+        additionalInfo: `Contact status changed from ${existingContact.status} to ${updatedContact.status}`
+      });
+
+      res.json({
+        message: "Contact status updated successfully",
+        contact: updatedContact
+      });
+    }))
+  );
+
+  // Admin audit log endpoints for viewing administrative actions
+  app.get("/api/admin/audit-logs", 
+    createEnhancedAdminMiddleware({
+      action: "read", 
+      resource: "audit_log",
+      rateLimit: 100, // Higher limit for read operations
+      validateInput: (req) => {
+        const { adminUserId, limit, offset } = req.query;
+        
+        if (adminUserId && typeof adminUserId !== 'string') {
+          return "Admin user ID must be a string";
+        }
+        if (limit && (isNaN(Number(limit)) || Number(limit) < 1 || Number(limit) > 100)) {
+          return "Limit must be between 1 and 100";
+        }
+        if (offset && (isNaN(Number(offset)) || Number(offset) < 0)) {
+          return "Offset must be a non-negative number";
+        }
+        return null;
+      }
+    }),
+    asyncRoute("get admin audit logs", withStorage(async (storage, req: Request, res: Response) => {
+      const adminUserId = req.query.adminUserId as string | undefined;
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      const auditLogs = await storage.getAdminAuditLogs(adminUserId, limit, offset);
+      
+      // Log admin action
+      await logAdminAction(req, res, {
+        additionalInfo: `Viewed audit logs - adminUserId: ${adminUserId || 'all'}, limit: ${limit}, offset: ${offset}`
+      });
+
+      res.json({
+        auditLogs,
+        pagination: {
+          limit,
+          offset,
+          hasMore: auditLogs.length === limit,
+          total: await storage.getAdminAuditLogsCount(adminUserId) // Precise total
+        },
+        filters: {
+          adminUserId: adminUserId || null
+        }
+      });
+    }))
+  );
+
+  app.get("/api/admin/audit-logs/resource/:resource/:resourceId", 
+    createEnhancedAdminMiddleware({
+      action: "read", 
+      resource: "audit_log",
+      rateLimit: 100, // Higher limit for read operations
+      validateInput: (req) => {
+        const { resource, resourceId } = req.params;
+        const { limit } = req.query;
+        
+        if (!resource || typeof resource !== 'string') {
+          return "Resource type is required and must be a string";
+        }
+        if (!resourceId || typeof resourceId !== 'string') {
+          return "Resource ID is required and must be a string";
+        }
+        if (limit && (isNaN(Number(limit)) || Number(limit) < 1 || Number(limit) > 100)) {
+          return "Limit must be between 1 and 100";
+        }
+        
+        // Validate resource type against known types
+        const validResources = ["user", "service", "appointment", "location", "car", "contact"];
+        if (!validResources.includes(resource)) {
+          return `Resource type must be one of: ${validResources.join(", ")}`;
+        }
+        
+        return null;
+      }
+    }),
+    asyncRoute("get resource audit logs", withStorage(async (storage, req: Request, res: Response) => {
+      const { resource, resourceId } = req.params;
+      const limit = parseInt(req.query.limit as string) || 50;
+
+      const auditLogs = await storage.getResourceAuditLogs(resource, resourceId, limit);
+      
+      // Log admin action
+      await logAdminAction(req, res, {
+        additionalInfo: `Viewed audit logs for ${resource} ${resourceId}, limit: ${limit}`
+      });
+
+      res.json({
+        auditLogs,
+        resource,
+        resourceId,
+        pagination: {
+          limit,
+          hasMore: auditLogs.length === limit
+        }
+      });
+    }))
+  );
 
   const httpServer = createServer(app);
 

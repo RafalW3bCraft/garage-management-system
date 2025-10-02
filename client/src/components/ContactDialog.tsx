@@ -23,6 +23,9 @@ import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { z } from "zod";
 
+/**
+ * Zod schema for contact form validation
+ */
 const contactFormSchema = z.object({
   name: z.string().min(1, "Name is required").max(100, "Name is too long"),
   email: z.string().email("Please enter a valid email address"),
@@ -32,6 +35,9 @@ const contactFormSchema = z.object({
 
 type ContactFormData = z.infer<typeof contactFormSchema>;
 
+/**
+ * Props for the ContactDialog component
+ */
 interface ContactDialogProps {
   carMake: string;
   carModel: string;
@@ -41,6 +47,25 @@ interface ContactDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+/**
+ * Contact seller dialog for inquiring about cars for sale.
+ * Pre-fills car details and allows users to send customized messages to sellers.
+ * 
+ * @param {ContactDialogProps} props - Component props
+ * @returns {JSX.Element} The rendered contact dialog
+ * 
+ * @example
+ * ```tsx
+ * <ContactDialog
+ *   carMake="Maruti"
+ *   carModel="Swift"
+ *   carYear={2020}
+ *   carPrice={550000}
+ *   open={isOpen}
+ *   onOpenChange={setIsOpen}
+ * />
+ * ```
+ */
 export function ContactDialog({ 
   carMake, 
   carModel, 
@@ -80,7 +105,7 @@ export function ContactDialog({
       form.reset();
       onOpenChange(false);
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       console.error("Error sending contact message:", error);
       const errorMessage = error?.message || "Failed to send message. Please try again.";
       toast({
@@ -97,14 +122,17 @@ export function ContactDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md" data-testid="dialog-contact">
+      <DialogContent className="w-full max-w-sm md:max-w-lg max-h-[90vh] overflow-y-auto" data-testid="dialog-contact" aria-describedby="contact-dialog-description">
         <DialogHeader>
-          <DialogTitle data-testid="text-contact-title">
+          <DialogTitle id="contact-dialog-title" data-testid="text-contact-title">
             Contact Seller
           </DialogTitle>
+          <p id="contact-dialog-description" className="sr-only">
+            Fill out this form to inquire about the car
+          </p>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 max-h-[60vh] overflow-y-auto">
           <div className="rounded-lg border p-3 bg-muted/50">
             <h4 className="font-medium text-sm">Car Details</h4>
             <p className="text-sm text-muted-foreground">
@@ -122,15 +150,18 @@ export function ContactDialog({
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Full Name *</FormLabel>
+                    <FormLabel htmlFor="name">Full Name *</FormLabel>
                     <FormControl>
                       <Input 
+                        id="name"
                         placeholder="Enter your full name" 
                         {...field}
                         data-testid="input-contact-name"
+                        aria-invalid={form.formState.errors.name ? "true" : "false"}
+                        aria-describedby={form.formState.errors.name ? "name-error" : undefined}
                       />
                     </FormControl>
-                    <FormMessage />
+                    <FormMessage id="name-error" role="alert" />
                   </FormItem>
                 )}
               />
@@ -140,16 +171,19 @@ export function ContactDialog({
                 name="email"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Email Address *</FormLabel>
+                    <FormLabel htmlFor="email">Email Address *</FormLabel>
                     <FormControl>
                       <Input 
+                        id="email"
                         type="email"
                         placeholder="Enter your email address" 
                         {...field}
                         data-testid="input-contact-email"
+                        aria-invalid={form.formState.errors.email ? "true" : "false"}
+                        aria-describedby={form.formState.errors.email ? "email-error" : undefined}
                       />
                     </FormControl>
-                    <FormMessage />
+                    <FormMessage id="email-error" role="alert" />
                   </FormItem>
                 )}
               />
@@ -159,16 +193,19 @@ export function ContactDialog({
                 name="phone"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Phone Number *</FormLabel>
+                    <FormLabel htmlFor="phone">Phone Number *</FormLabel>
                     <FormControl>
                       <Input 
+                        id="phone"
                         type="tel"
                         placeholder="Enter your phone number" 
                         {...field}
                         data-testid="input-contact-phone"
+                        aria-invalid={form.formState.errors.phone ? "true" : "false"}
+                        aria-describedby={form.formState.errors.phone ? "phone-error" : undefined}
                       />
                     </FormControl>
-                    <FormMessage />
+                    <FormMessage id="phone-error" role="alert" />
                   </FormItem>
                 )}
               />
@@ -178,21 +215,24 @@ export function ContactDialog({
                 name="message"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Message *</FormLabel>
+                    <FormLabel htmlFor="message">Message *</FormLabel>
                     <FormControl>
                       <Textarea
+                        id="message"
                         placeholder="Enter your message..."
                         className="min-h-[100px] resize-none"
                         {...field}
                         data-testid="textarea-contact-message"
+                        aria-invalid={form.formState.errors.message ? "true" : "false"}
+                        aria-describedby={form.formState.errors.message ? "message-error" : undefined}
                       />
                     </FormControl>
-                    <FormMessage />
+                    <FormMessage id="message-error" role="alert" />
                   </FormItem>
                 )}
               />
 
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <Button 
                   type="button"
                   variant="outline" 

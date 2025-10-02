@@ -1,9 +1,22 @@
 import { Button } from "@/components/ui/button";
 import { Calendar, Shield, Wrench } from "lucide-react";
 
-// Using a professional automotive garage image from Unsplash
+/**
+ * Using a professional automotive garage image from Unsplash
+ */
 const heroImage = "https://images.unsplash.com/photo-1621939514649-280e2198acc0?w=1920&h=600&fit=crop&crop=center";
 
+/**
+ * Hero section component for the landing page featuring a background image,
+ * main headline, call-to-action buttons, and key feature highlights.
+ * 
+ * @returns {JSX.Element} The rendered hero section
+ * 
+ * @example
+ * ```tsx
+ * <HeroSection />
+ * ```
+ */
 export function HeroSection() {
   return (
     <section className="relative h-[600px] flex items-center justify-center overflow-hidden">
@@ -15,11 +28,11 @@ export function HeroSection() {
       <div className="absolute inset-0 bg-black/50" />
       
       {/* Content */}
-      <div className="relative z-10 text-center text-white max-w-4xl mx-auto px-6">
-        <h1 className="text-5xl font-bold mb-6">
+      <div className="relative z-10 text-center text-white max-w-4xl mx-auto px-4 md:px-6">
+        <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-4 md:mb-6">
           Professional Automotive Services You Can Trust
         </h1>
-        <p className="text-xl mb-8 text-gray-200">
+        <p className="text-base sm:text-lg md:text-xl mb-6 md:mb-8 text-gray-200">
           Expert car maintenance, repairs, and resale services with modern facilities 
           and certified technicians. Your vehicle deserves the best care.
         </p>

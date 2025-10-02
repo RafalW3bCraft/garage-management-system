@@ -1,18 +1,30 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
+/**
+ * Theme type definition
+ */
 type Theme = "dark" | "light" | "system";
 
+/**
+ * Props for the ThemeProvider component
+ */
 type ThemeProviderProps = {
   children: React.ReactNode;
   defaultTheme?: Theme;
   storageKey?: string;
 };
 
+/**
+ * Theme provider state type
+ */
 type ThemeProviderState = {
   theme: Theme;
   setTheme: (theme: Theme) => void;
 };
 
+/**
+ * Initial theme provider state
+ */
 const initialState: ThemeProviderState = {
   theme: "system",
   setTheme: () => null,
@@ -20,6 +32,24 @@ const initialState: ThemeProviderState = {
 
 const ThemeProviderContext = createContext<ThemeProviderState>(initialState);
 
+/**
+ * Theme provider component for managing application theme (dark/light/system).
+ * Persists theme preference to localStorage and automatically applies theme class to root element.
+ * Supports system theme detection for automatic theme switching.
+ * 
+ * @param {ThemeProviderProps} props - Component props
+ * @param {React.ReactNode} props.children - Child components
+ * @param {Theme} [props.defaultTheme="system"] - Default theme
+ * @param {string} [props.storageKey="ui-theme"] - localStorage key for theme persistence
+ * @returns {JSX.Element} The theme provider wrapper
+ * 
+ * @example
+ * ```tsx
+ * <ThemeProvider defaultTheme="light" storageKey="app-theme">
+ *   <App />
+ * </ThemeProvider>
+ * ```
+ */
 export function ThemeProvider({
   children,
   defaultTheme = "system",
@@ -63,6 +93,19 @@ export function ThemeProvider({
   );
 }
 
+/**
+ * Hook for accessing theme context and controls.
+ * Must be used within a ThemeProvider component.
+ * 
+ * @returns {ThemeProviderState} Theme state and setter
+ * @throws {Error} If used outside of ThemeProvider
+ * 
+ * @example
+ * ```tsx
+ * const { theme, setTheme } = useTheme();
+ * setTheme("dark");
+ * ```
+ */
 export const useTheme = () => {
   const context = useContext(ThemeProviderContext);
 

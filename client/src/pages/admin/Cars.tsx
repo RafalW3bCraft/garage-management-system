@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Car, Plus, Edit, Trash2, Filter, Calendar, DollarSign, Eye } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
+import { useErrorHandler } from "@/lib/error-utils";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertCarSchema } from "@shared/schema";
@@ -24,29 +25,81 @@ import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 
-// Form schema for car management
+/**
+ * Zod schema for car form validation with support for both sale and auction cars
+ */
 const carFormSchema = z.object({
-  make: z.string().min(1, "Make is required"),
-  model: z.string().min(1, "Model is required"),
-  year: z.coerce.number().min(1900, "Invalid year"),
-  price: z.coerce.number().min(0, "Price must be positive"),
-  mileage: z.coerce.number().min(0, "Mileage must be positive"),
+  make: z.string()
+    .min(1, "Make is required")
+    .min(2, "Make must be at least 2 characters")
+    .max(50, "Make cannot exceed 50 characters"),
+  model: z.string()
+    .min(1, "Model is required")
+    .min(1, "Model must be at least 1 character")
+    .max(50, "Model cannot exceed 50 characters"),
+  year: z.coerce.number()
+    .min(1900, "Year must be 1900 or later")
+    .max(new Date().getFullYear() + 1, `Year cannot be later than ${new Date().getFullYear() + 1}`),
+  price: z.coerce.number()
+    .min(0, "Price must be positive")
+    .max(100000000, "Price cannot exceed ₹10 crore"),
+  mileage: z.coerce.number()
+    .min(0, "Mileage must be positive")
+    .max(10000000, "Mileage cannot exceed 10,000,000 km"),
   fuelType: z.string().min(1, "Fuel type is required"),
-  location: z.string().min(1, "Location is required"),
+  location: z.string()
+    .min(1, "Location is required")
+    .min(3, "Location must be at least 3 characters")
+    .max(100, "Location cannot exceed 100 characters"),
   condition: z.string().min(1, "Condition is required"),
-  image: z.string().min(1, "Image URL is required"),
+  image: z.string()
+    .min(1, "Image URL is required")
+    .url("Please enter a valid URL")
+    .regex(/\.(jpg|jpeg|png|webp|gif)$/i, "Image URL must end with .jpg, .jpeg, .png, .webp, or .gif"),
   isAuction: z.boolean().default(false),
-  currentBid: z.coerce.number().optional(),
+  currentBid: z.coerce.number()
+    .min(0, "Current bid must be positive")
+    .optional(),
   auctionEndTime: z.string().optional(),
-  description: z.string().optional(),
+  description: z.string()
+    .max(1000, "Description cannot exceed 1000 characters")
+    .optional(),
 });
 
 type CarFormData = z.infer<typeof carFormSchema>;
 
+/**
+ * Helper function to parse and generate image URLs in multiple formats
+ * 
+ * @param {string} imageUrl - Base image URL
+ * @returns {{webp: string, jpeg: string, fallback: string}} Image URLs in different formats
+ */
+const getImageUrls = (imageUrl: string) => {
+  const baseUrl = imageUrl.replace(/\.(jpg|jpeg|png|webp)$/i, '');
+  return {
+    webp: `${baseUrl}.webp`,
+    jpeg: `${baseUrl}.jpg`,
+    fallback: imageUrl
+  };
+};
+
+/**
+ * Admin cars management component for managing car inventory including sales and auctions.
+ * Features CRUD operations, tabbed interface for filtering, bid viewing for auction cars,
+ * and comprehensive car details management with image support.
+ * 
+ * @returns {JSX.Element} The rendered admin cars management page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/admin/cars" component={AdminCars} />
+ * ```
+ */
 export default function AdminCars() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { handleMutationError } = useErrorHandler();
   const [selectedTab, setSelectedTab] = useState<string>("all");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingCar, setEditingCar] = useState<CarType | null>(null);
@@ -66,7 +119,7 @@ export default function AdminCars() {
   }
 
   // Fetch all cars
-  const { data: cars = [], isLoading, isError } = useQuery<CarType[]>({
+  const { data: cars = [], isLoading, isError, refetch } = useQuery<CarType[]>({
     queryKey: ["/api/cars"],
   });
 
@@ -90,11 +143,10 @@ export default function AdminCars() {
         description: "Car created successfully!",
       });
     },
-    onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to create car",
-        variant: "destructive",
+    onError: (error: Error) => {
+      handleMutationError(error, {
+        title: "Failed to Create Car",
+        defaultMessage: "Could not create car. Please try again.",
       });
     },
   });
@@ -113,11 +165,10 @@ export default function AdminCars() {
         description: "Car updated successfully!",
       });
     },
-    onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to update car",
-        variant: "destructive",
+    onError: (error: Error) => {
+      handleMutationError(error, {
+        title: "Failed to Update Car",
+        defaultMessage: "Could not update car. Please try again.",
       });
     },
   });
@@ -134,11 +185,10 @@ export default function AdminCars() {
         description: "Car deleted successfully!",
       });
     },
-    onError: (error: any) => {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to delete car",
-        variant: "destructive",
+    onError: (error: Error) => {
+      handleMutationError(error, {
+        title: "Failed to Delete Car",
+        defaultMessage: "Could not delete car. Please try again.",
       });
     },
   });
@@ -264,7 +314,7 @@ export default function AdminCars() {
       <div className="container mx-auto px-4 py-8 text-center">
         <h1 className="text-2xl font-bold text-destructive mb-4">Error Loading Cars</h1>
         <p className="text-muted-foreground mb-4">Failed to load cars. Please try again.</p>
-        <Button onClick={() => window.location.reload()}>Retry</Button>
+        <Button onClick={() => refetch()}>Retry</Button>
       </div>
     );
   }
@@ -298,7 +348,7 @@ export default function AdminCars() {
               </DialogHeader>
               <Form {...addForm}>
                 <form onSubmit={addForm.handleSubmit(handleAddCar)} className="space-y-4">
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <FormField
                       control={addForm.control}
                       name="make"
@@ -345,7 +395,7 @@ export default function AdminCars() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-4 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                     <FormField
                       control={addForm.control}
                       name="price"
@@ -430,7 +480,7 @@ export default function AdminCars() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FormField
                       control={addForm.control}
                       name="location"
@@ -496,7 +546,7 @@ export default function AdminCars() {
                   />
 
                   {addForm.watch("isAuction") && (
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <FormField
                         control={addForm.control}
                         name="currentBid"
@@ -640,12 +690,15 @@ export default function AdminCars() {
                   <div className="flex">
                     <div className="w-48 h-32 bg-muted rounded-l-lg overflow-hidden flex-shrink-0">
                       {car.image ? (
-                        <img 
-                          src={car.image} 
-                          alt={`${car.make} ${car.model}`}
-                          className="w-full h-full object-cover"
-                          data-testid={`image-${car.id}`}
-                        />
+                        <picture>
+                          <source srcSet={getImageUrls(car.image).webp} type="image/webp" />
+                          <img 
+                            src={getImageUrls(car.image).jpeg} 
+                            alt={`${car.make} ${car.model}`}
+                            className="w-full h-full object-cover"
+                            data-testid={`image-${car.id}`}
+                          />
+                        </picture>
                       ) : (
                         <div className="w-full h-full flex items-center justify-center">
                           <Car className="w-8 h-8 text-muted-foreground" />
@@ -824,7 +877,7 @@ export default function AdminCars() {
           {editingCar && (
             <Form {...editForm}>
               <form onSubmit={editForm.handleSubmit(handleEditCar)} className="space-y-4">
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <FormField
                     control={editForm.control}
                     name="make"
@@ -871,7 +924,7 @@ export default function AdminCars() {
                   />
                 </div>
 
-                <div className="grid grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                   <FormField
                     control={editForm.control}
                     name="price"
@@ -956,7 +1009,7 @@ export default function AdminCars() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <FormField
                     control={editForm.control}
                     name="location"
@@ -1022,7 +1075,7 @@ export default function AdminCars() {
                 />
 
                 {editForm.watch("isAuction") && (
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FormField
                       control={editForm.control}
                       name="currentBid"

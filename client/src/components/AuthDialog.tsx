@@ -36,7 +36,9 @@ import { useAuthMutations } from "@/hooks/useAuthMutations";
 import { useAuthForm } from "@/hooks/useAuthForm";
 import { useAuth } from "@/hooks/use-auth";
 
-// Country options for mobile registration
+/**
+ * Country options for mobile registration
+ */
 const COUNTRY_OPTIONS = [
   { value: "+91", label: "India", flag: "🇮🇳" },
   { value: "+1", label: "United States", flag: "🇺🇸" },
@@ -45,10 +47,29 @@ const COUNTRY_OPTIONS = [
   { value: "+81", label: "Japan", flag: "🇯🇵" },
 ] as const;
 
+/**
+ * Props for the AuthDialog component
+ */
 interface AuthDialogProps {
   children: React.ReactNode;
 }
 
+/**
+ * Comprehensive authentication dialog supporting multiple authentication methods.
+ * Features email/password, mobile OTP, and Google OAuth authentication flows with
+ * smart method selection, preference memory, and seamless multi-step registration.
+ * 
+ * @param {AuthDialogProps} props - Component props
+ * @param {React.ReactNode} props.children - Trigger element for opening the dialog
+ * @returns {JSX.Element} The rendered authentication dialog
+ * 
+ * @example
+ * ```tsx
+ * <AuthDialog>
+ *   <Button>Login</Button>
+ * </AuthDialog>
+ * ```
+ */
 export function AuthDialog({ children }: AuthDialogProps) {
   const [open, setOpen] = useState(false);
   const [otpCountdown, setOtpCountdown] = useState(0);
@@ -62,7 +83,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
   const mutations = useAuthMutations({
     onTransition: (nextStep) => {
       if (nextStep) {
-        flow.goToStep(nextStep as any);
+        flow.goToStep(nextStep);
         // For OTP, set countdown
         if (nextStep === "otp-verification") {
           setOtpCountdown(300); // 5 minutes
@@ -84,16 +105,6 @@ export function AuthDialog({ children }: AuthDialogProps) {
     preferences.getDefaultEmail(),
     preferences.lastCountryCode
   );
-  
-  // Handle existing mutation states with useEffect (temporary bridge)
-  useEffect(() => {
-    mutations.handleExistingMutations();
-  }, [
-    mutations.loginMutation.isSuccess,
-    mutations.loginMutation.isError,
-    mutations.registerMutation.isSuccess,
-    mutations.registerMutation.isError,
-  ]);
   
   // OTP countdown timer
   useEffect(() => {
@@ -129,12 +140,26 @@ export function AuthDialog({ children }: AuthDialogProps) {
     }
   };
   
+  // Keyboard shortcut handler for Escape key
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && open) {
+        handleDialogClose(false);
+      }
+    };
+    
+    if (open) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [open]);
+  
   // Method selection handler
   const handleMethodSelection = (method: "email" | "mobile" | "google") => {
     preferences.saveMethod(method);
     
     if (method === "google") {
-      mutations.googleLoginWithToast();
+      mutations.googleLogin();
       return;
     }
     
@@ -142,7 +167,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
   };
   
   // Form submission handler
-  const handleFormSubmit = (formData: any) => {
+  const handleFormSubmit = (formData: Record<string, unknown>) => {
     const stepData = authForm.getStepData(formData);
     
     switch (flow.step) {
@@ -228,25 +253,33 @@ export function AuthDialog({ children }: AuthDialogProps) {
       const config = authForm.getFieldConfig(fieldName);
       if (!config) return null;
       
+      const hasError = authForm.form.formState.errors[fieldName];
+      
       return (
         <FormField
           key={fieldName}
           control={authForm.form.control}
-          name={fieldName as any}
+          name={fieldName}
           render={({ field }) => (
             <FormItem>
-              <FormLabel>{config.label}</FormLabel>
+              <FormLabel htmlFor={fieldName}>{config.label}</FormLabel>
               <FormControl>
                 {fieldName === "countryCode" ? (
                   <Select onValueChange={field.onChange} value={field.value}>
-                    <SelectTrigger data-testid={config.testId}>
+                    <SelectTrigger 
+                      id={fieldName}
+                      data-testid={config.testId}
+                      aria-label="Select country code"
+                      aria-invalid={hasError ? "true" : "false"}
+                      aria-describedby={hasError ? `${fieldName}-error` : undefined}
+                    >
                       <SelectValue placeholder={config.placeholder} />
                     </SelectTrigger>
                     <SelectContent>
                       {COUNTRY_OPTIONS.map((country) => (
                         <SelectItem key={country.value} value={country.value}>
                           <div className="flex items-center gap-2">
-                            <span>{country.flag}</span>
+                            <span aria-hidden="true">{country.flag}</span>
                             <span>{country.label}</span>
                             <span className="text-muted-foreground">
                               {country.value}
@@ -262,6 +295,9 @@ export function AuthDialog({ children }: AuthDialogProps) {
                     value={field.value || ""}
                     onChange={field.onChange}
                     data-testid={config.testId}
+                    aria-label="Enter 6-digit OTP code"
+                    aria-invalid={hasError ? "true" : "false"}
+                    aria-describedby={hasError ? `${fieldName}-error` : undefined}
                   >
                     <InputOTPGroup>
                       <InputOTPSlot index={0} />
@@ -274,15 +310,18 @@ export function AuthDialog({ children }: AuthDialogProps) {
                   </InputOTP>
                 ) : (
                   <Input
+                    id={fieldName}
                     type={config.type}
                     placeholder={config.placeholder}
                     className="h-12"
                     data-testid={config.testId}
+                    aria-invalid={hasError ? "true" : "false"}
+                    aria-describedby={hasError ? `${fieldName}-error` : undefined}
                     {...field}
                   />
                 )}
               </FormControl>
-              <FormMessage />
+              <FormMessage id={`${fieldName}-error`} role="alert" />
             </FormItem>
           )}
         />
@@ -293,7 +332,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
   return (
     <Dialog open={open} onOpenChange={handleDialogClose}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-full max-w-sm md:max-w-lg max-h-[90vh] overflow-y-auto" aria-describedby="auth-dialog-description">
         <DialogHeader>
           <div className="flex items-center gap-2">
             {flow.canGoBack && (
@@ -303,13 +342,14 @@ export function AuthDialog({ children }: AuthDialogProps) {
                 onClick={flow.prevStep}
                 className="p-1 h-auto"
                 data-testid="button-auth-back"
+                aria-label="Go back to previous step"
               >
-                <ArrowLeft className="w-4 h-4" />
+                <ArrowLeft className="w-4 h-4" aria-hidden="true" />
               </Button>
             )}
             <div className="flex-1">
               <DialogTitle className="text-left">{flow.stepTitle}</DialogTitle>
-              <DialogDescription className="text-left">
+              <DialogDescription id="auth-dialog-description" className="text-left">
                 {flow.stepDescription}
               </DialogDescription>
             </div>
@@ -323,7 +363,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
           )}
         </DialogHeader>
 
-        <div className="space-y-6 mt-6">
+        <div className="space-y-6 mt-6 max-h-[60vh] overflow-y-auto">
           {/* Method Selection Step */}
           {flow.step === "method-selection" && (
             <div className="space-y-4">
@@ -331,7 +371,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
               {preferences.lastMethod !== 'email' && preferences.lastEmail && (
                 <div className="text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
                   <div className="flex items-center gap-2">
-                    <User className="w-4 h-4" />
+                    <User className="w-4 h-4" aria-hidden="true" />
                     <span>Welcome back! Continue with your preferred method below.</span>
                   </div>
                 </div>
@@ -346,7 +386,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
                     onClick={() => handleMethodSelection("google")}
                     data-testid="button-google-auth"
                   >
-                    <Chrome className="w-5 h-5 mr-3" />
+                    <Chrome className="w-5 h-5 mr-3" aria-hidden="true" />
                     Continue with Google
                     {preferences.lastMethod === 'google' && (
                       <span className="ml-2 text-xs opacity-75">(Last used)</span>
@@ -372,7 +412,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
                   onClick={() => handleMethodSelection("email")}
                   data-testid="button-email-auth"
                 >
-                  <Mail className="w-5 h-5 mr-3" />
+                  <Mail className="w-5 h-5 mr-3" aria-hidden="true" />
                   <div className="text-left flex-1">
                     <div className="font-medium flex items-center gap-2">
                       Continue with Email
@@ -393,7 +433,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
                   onClick={() => handleMethodSelection("mobile")}
                   data-testid="button-mobile-auth"
                 >
-                  <Smartphone className="w-5 h-5 mr-3" />
+                  <Smartphone className="w-5 h-5 mr-3" aria-hidden="true" />
                   <div className="text-left flex-1">
                     <div className="font-medium flex items-center gap-2">
                       Continue with Phone
@@ -417,7 +457,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
               {flow.step === "password-input" && flow.context.email && (
                 <div className="text-sm text-muted-foreground">
                   <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
-                    <Mail className="w-4 h-4" />
+                    <Mail className="w-4 h-4" aria-hidden="true" />
                     <span>{flow.context.email}</span>
                   </div>
                 </div>
@@ -426,7 +466,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
               {flow.step === "otp-verification" && flow.context.phone && (
                 <div className="text-sm text-muted-foreground">
                   <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
-                    <Smartphone className="w-4 h-4" />
+                    <Smartphone className="w-4 h-4" aria-hidden="true" />
                     <span>{flow.context.countryCode}{flow.context.phone}</span>
                   </div>
                 </div>

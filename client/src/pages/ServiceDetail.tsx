@@ -25,7 +25,13 @@ import {
 } from "lucide-react";
 import type { Service, Location } from "@shared/schema";
 
-// Icon mapping function
+/**
+ * Maps icon names to their corresponding Lucide icon components with configurable size
+ * 
+ * @param {string | null} iconName - Name of the icon to retrieve
+ * @param {"sm" | "lg"} [size="sm"] - Icon size variant
+ * @returns {JSX.Element} The corresponding icon component with size styling
+ */
 const getIconComponent = (iconName: string | null, size: "sm" | "lg" = "sm") => {
   const iconClass = size === "lg" ? "h-12 w-12" : "h-6 w-6";
   const iconMap: Record<string, JSX.Element> = {
@@ -42,6 +48,17 @@ const getIconComponent = (iconName: string | null, size: "sm" | "lg" = "sm") => 
   return iconMap[iconName || ''] || <Wrench className={iconClass} />;
 };
 
+/**
+ * Service detail page component displaying comprehensive information about a specific service.
+ * Shows service description, pricing, features, process steps, available locations, and related services.
+ * 
+ * @returns {JSX.Element} The rendered service detail page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/services/:id" component={ServiceDetail} />
+ * ```
+ */
 export default function ServiceDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();

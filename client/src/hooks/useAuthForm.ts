@@ -4,27 +4,53 @@ import { z } from "zod";
 import { useEffect, useMemo } from "react";
 import type { AuthStep, AuthMode, AuthContext } from "./useAuthFlow";
 
-// Individual validation schemas for each step
+/**
+ * Validation schema for email input step
+ */
 const emailSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
 });
 
+/**
+ * Validation schema for password input step with strength requirements
+ */
 const passwordSchema = z.object({
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  password: z.string()
+    .min(8, "Password must be at least 8 characters")
+    .max(100, "Password cannot exceed 100 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/[0-9]/, "Password must contain at least one number")
+    .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character"),
 });
 
+/**
+ * Validation schema for password confirmation (registration) with strength requirements
+ */
 const confirmPasswordSchema = z.object({
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  password: z.string()
+    .min(8, "Password must be at least 8 characters")
+    .max(100, "Password cannot exceed 100 characters")
+    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+    .regex(/[0-9]/, "Password must contain at least one number")
+    .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character"),
   confirmPassword: z.string().min(1, "Please confirm your password"),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
 });
 
+/**
+ * Validation schema for name input step
+ */
 const nameSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
 });
 
+/**
+ * Validation schema for phone input step
+ */
 const phoneSchema = z.object({
   phone: z
     .string()
@@ -34,11 +60,16 @@ const phoneSchema = z.object({
   countryCode: z.string().min(1, "Please select a country"),
 });
 
+/**
+ * Validation schema for OTP verification step
+ */
 const otpSchema = z.object({
   otp: z.string().length(6, "OTP must be 6 digits"),
 });
 
-// Schema mapping for each step
+/**
+ * Schema mapping for each authentication step
+ */
 const STEP_SCHEMAS: Record<AuthStep, z.ZodSchema> = {
   "method-selection": z.object({}), // No validation needed
   "email-input": emailSchema,
@@ -49,12 +80,19 @@ const STEP_SCHEMAS: Record<AuthStep, z.ZodSchema> = {
   "profile-setup": nameSchema, // Reuse name schema
 };
 
-// Enhanced schema for registration password step (includes confirm password)
+/**
+ * Gets the appropriate password schema based on authentication mode
+ * 
+ * @param {AuthMode} mode - Current authentication mode
+ * @returns {z.ZodSchema} Validation schema for password step
+ */
 const getPasswordStepSchema = (mode: AuthMode): z.ZodSchema => {
   return mode === "register" ? confirmPasswordSchema : passwordSchema;
 };
 
-// Dynamic form data type based on all possible fields
+/**
+ * Form data type containing all possible authentication fields
+ */
 type AuthFormData = {
   email?: string;
   password?: string;
@@ -65,7 +103,16 @@ type AuthFormData = {
   otp?: string;
 };
 
-// Get default values for the current step
+/**
+ * Gets default form values for the current authentication step
+ * 
+ * @param {AuthStep} step - Current authentication step
+ * @param {AuthMode} mode - Current authentication mode
+ * @param {AuthContext} context - Authentication context
+ * @param {string} [defaultEmail=""] - Default email to pre-fill
+ * @param {string} [defaultCountryCode="+91"] - Default country code
+ * @returns {Partial<AuthFormData>} Default form values
+ */
 const getStepDefaultValues = (
   step: AuthStep, 
   mode: AuthMode,
@@ -100,7 +147,46 @@ const getStepDefaultValues = (
   }
 };
 
-// Hook for unified auth form management
+/**
+ * Hook for unified authentication form management with dynamic validation and field configuration.
+ * Provides form instance, validation schemas, field configurations, and step-specific helpers.
+ * 
+ * @param {AuthStep} step - Current authentication step
+ * @param {AuthMode} mode - Current authentication mode
+ * @param {AuthContext} context - Authentication context
+ * @param {string} [defaultEmail=""] - Default email to pre-fill
+ * @param {string} [defaultCountryCode="+91"] - Default country code
+ * @returns {object} Form state and methods
+ * @property {object} form - React Hook Form instance
+ * @property {z.ZodSchema} schema - Current step's validation schema
+ * @property {(fieldName: string) => object} getFieldConfig - Get field configuration
+ * @property {() => string[]} getStepFields - Get fields for current step
+ * @property {(formData: AuthFormData) => object} getStepData - Extract relevant step data
+ * @property {() => object} getSubmitButtonConfig - Get submit button configuration
+ * @property {boolean} isValid - Whether form is valid
+ * @property {boolean} isSubmitting - Whether form is submitting
+ * 
+ * @example
+ * ```tsx
+ * const {
+ *   form,
+ *   getFieldConfig,
+ *   getStepFields,
+ *   isValid
+ * } = useAuthForm(step, mode, context);
+ * 
+ * const fields = getStepFields();
+ * 
+ * return (
+ *   <Form {...form}>
+ *     {fields.map(field => {
+ *       const config = getFieldConfig(field);
+ *       return <FormField key={field} {...config} />;
+ *     })}
+ *   </Form>
+ * );
+ * ```
+ */
 export function useAuthForm(
   step: AuthStep,
   mode: AuthMode,

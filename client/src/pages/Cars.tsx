@@ -16,6 +16,17 @@ import {
 import { Search, SlidersHorizontal, Loader2 } from "lucide-react";
 import type { Car } from "@shared/schema";
 
+/**
+ * Cars page component displaying available cars for sale and auction with filtering capabilities.
+ * Features tabbed interface for regular sales and auctions, with filters for brand, price, and fuel type.
+ * 
+ * @returns {JSX.Element} The rendered cars page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/cars" component={Cars} />
+ * ```
+ */
 export default function Cars() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedBrand, setSelectedBrand] = useState("all");
@@ -101,21 +112,21 @@ export default function Cars() {
       {/* Filters */}
       <section className="py-8 border-b">
         <div className="container mx-auto px-4">
-          <div className="flex flex-col lg:flex-row gap-4 items-center">
-            <div className="relative flex-1 max-w-md">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="relative w-full">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
               <Input
                 placeholder="Search cars..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10"
+                className="pl-10 min-h-11 w-full"
                 data-testid="input-search-cars"
               />
             </div>
             
-            <div className="flex gap-4">
+            <div className="w-full">
               <Select value={selectedBrand} onValueChange={setSelectedBrand}>
-                <SelectTrigger className="w-40" data-testid="select-brand">
+                <SelectTrigger className="min-h-11 w-full" data-testid="select-brand">
                   <SelectValue placeholder="Brand" />
                 </SelectTrigger>
                 <SelectContent>
@@ -126,9 +137,11 @@ export default function Cars() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
 
+            <div className="w-full">
               <Select value={priceRange} onValueChange={setPriceRange}>
-                <SelectTrigger className="w-40" data-testid="select-price">
+                <SelectTrigger className="min-h-11 w-full" data-testid="select-price">
                   <SelectValue placeholder="Price" />
                 </SelectTrigger>
                 <SelectContent>
@@ -139,9 +152,11 @@ export default function Cars() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
 
+            <div className="w-full">
               <Select value={fuelType} onValueChange={setFuelType}>
-                <SelectTrigger className="w-40" data-testid="select-fuel">
+                <SelectTrigger className="min-h-11 w-full" data-testid="select-fuel">
                   <SelectValue placeholder="Fuel Type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -210,7 +225,7 @@ export default function Cars() {
                   </Button>
                 </div>
               ) : filteredCarsForSale.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div className="grid sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {filteredCarsForSale.map((car) => (
                     <CarCard 
                       key={car.id} 
@@ -266,7 +281,7 @@ export default function Cars() {
                   </Button>
                 </div>
               ) : filteredAuctionCars.length > 0 ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div className="grid sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {filteredAuctionCars.map((car) => {
                     const formatAuctionEndTime = (endTime: string | Date | null) => {
                       if (!endTime) return "Soon";

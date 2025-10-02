@@ -19,7 +19,10 @@ import { apiRequest } from "@/lib/queryClient";
 import { updateProfileSchema } from "@shared/schema";
 import { User, Settings, Phone, Mail, MapPin, Calendar, Car, Camera, Save, Edit3 } from "lucide-react";
 
-// Frontend profile schema - extends shared schema for UI-specific needs
+/**
+ * Frontend profile schema extending shared schema with UI-specific validations
+ * for date formatting and registration number validation
+ */
 const profileSchema = updateProfileSchema.extend({
   dateOfBirth: z.string().optional(), // UI uses YYYY-MM-DD format
   registrationNumbers: z.string().optional().refine((regNumbers) => {
@@ -32,6 +35,17 @@ const profileSchema = updateProfileSchema.extend({
 
 type ProfileFormData = z.infer<typeof profileSchema>;
 
+/**
+ * Profile page component allowing authenticated users to view and edit their personal information.
+ * Features include profile overview, contact details, address information, and vehicle registration management.
+ * 
+ * @returns {JSX.Element} The rendered profile page with view and edit modes
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/profile" component={Profile} />
+ * ```
+ */
 export default function Profile() {
   const { user, isLoading } = useAuth();
   const { toast } = useToast();
@@ -44,7 +58,7 @@ export default function Profile() {
       name: user?.name || "",
       email: user?.email || "",
       phone: user?.phone || "",
-      countryCode: user?.countryCode || "+91",
+      countryCode: (user?.countryCode === "Universal" ? "Universal" : "+91") as "+91" | "Universal",
       address: user?.address || "",
       city: user?.city || "",
       state: user?.state || "",
@@ -62,7 +76,7 @@ export default function Profile() {
         name: user.name || "",
         email: user.email || "",
         phone: user.phone || "",
-        countryCode: user.countryCode || "+91",
+        countryCode: (user.countryCode === "Universal" ? "Universal" : "+91") as "+91" | "Universal",
         address: user.address || "",
         city: user.city || "",
         state: user.state || "",
@@ -106,7 +120,7 @@ export default function Profile() {
         description: "Your profile has been updated successfully.",
       });
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       toast({
         title: "Update Failed",
         description: error.message || "Failed to update profile. Please try again.",
@@ -119,6 +133,16 @@ export default function Profile() {
     updateProfileMutation.mutate(data);
   };
 
+  /**
+   * Generates initials from a user's full name
+   * 
+   * @param {string} name - User's full name
+   * @returns {string} Up to 2 uppercase initials from the name
+   * 
+   * @example
+   * getInitials("John Doe") // Returns "JD"
+   * getInitials("Jane") // Returns "JA"
+   */
   const getInitials = (name: string) => {
     return name
       .split(' ')
@@ -126,6 +150,32 @@ export default function Profile() {
       .join('')
       .toUpperCase()
       .slice(0, 2);
+  };
+
+  /**
+   * Helper to parse and generate profile image URLs in multiple formats
+   * 
+   * @param {string | null | undefined} profileImage - Profile image URL or object
+   * @returns {{webp: string | null, jpeg: string | null} | null} Image URLs in different formats or null
+   */
+  const getImageUrls = (profileImage: string | null | undefined) => {
+    if (!profileImage) return null;
+    
+    // Handle object format (new imageUrls structure)
+    if (typeof profileImage === 'object' && profileImage !== null) {
+      const imgUrls = profileImage as { webp?: string; jpeg?: string; jpg?: string };
+      return {
+        webp: imgUrls.webp || null,
+        jpeg: imgUrls.jpeg || imgUrls.jpg || null
+      };
+    }
+    
+    // Legacy string format - convert to imageUrls format
+    const baseUrl = profileImage.replace(/\.(jpg|jpeg|png|webp)$/i, '');
+    return {
+      webp: `${baseUrl}.webp`,
+      jpeg: `${baseUrl}.jpg`
+    };
   };
 
   if (isLoading) {
@@ -188,7 +238,11 @@ export default function Profile() {
           <CardHeader>
             <div className="flex items-center space-x-4">
               <Avatar className="h-20 w-20">
-                <AvatarImage src={user.profileImage || undefined} alt={user.name} />
+                <AvatarImage
+                  srcSet={getImageUrls(user.profileImage)?.webp || undefined}
+                  src={getImageUrls(user.profileImage)?.jpeg || user.profileImage || undefined}
+                  alt={user.name}
+                />
                 <AvatarFallback className="text-lg">
                   {getInitials(user.name)}
                 </AvatarFallback>

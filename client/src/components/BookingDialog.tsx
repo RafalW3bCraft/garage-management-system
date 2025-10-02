@@ -36,21 +36,53 @@ import { CalendarIcon, Clock, MapPin, Loader2, CheckCircle2, XCircle } from "luc
 import { cn } from "@/lib/utils";
 import type { Service, Location, Customer, Appointment } from "@shared/schema";
 
+/**
+ * Zod schema for booking form validation with future date validation
+ */
 const bookingSchema = z.object({
-  carDetails: z.string().min(5, "Please provide car details (make, model, year, registration)"),
-  dateTime: z.date({ required_error: "Please select a date and time" }),
-  timeSlot: z.string().min(1, "Please select a time slot"),
+  carDetails: z.string()
+    .min(5, "Please provide car details (make, model, year, registration)")
+    .max(500, "Car details cannot exceed 500 characters"),
+  dateTime: z.date({ required_error: "Please select a date and time" })
+    .refine((date) => date > new Date(), {
+      message: "Appointment date must be in the future",
+    }),
+  timeSlot: z.string()
+    .min(1, "Please select a time slot")
+    .regex(/^(0[9]|1[0-8]):[0-3]0$/, "Invalid time slot format"),
   locationId: z.string().min(1, "Please select a location"),
-  notes: z.string().optional(),
+  notes: z.string()
+    .max(1000, "Notes cannot exceed 1000 characters")
+    .optional(),
 });
 
 type BookingData = z.infer<typeof bookingSchema>;
 
+/**
+ * Props for the BookingDialog component
+ */
 interface BookingDialogProps {
   children: React.ReactNode;
   service: Service;
 }
 
+/**
+ * Service appointment booking dialog with real-time availability checking.
+ * Features date/time selection, location choice, car details input, and conflict detection.
+ * Shows available time slots with visual indicators for booked vs. available times.
+ * 
+ * @param {BookingDialogProps} props - Component props
+ * @param {React.ReactNode} props.children - Trigger element for opening the dialog
+ * @param {Service} props.service - The service to book an appointment for
+ * @returns {JSX.Element} The rendered booking dialog
+ * 
+ * @example
+ * ```tsx
+ * <BookingDialog service={selectedService}>
+ *   <Button>Book Now</Button>
+ * </BookingDialog>
+ * ```
+ */
 export function BookingDialog({ children, service }: BookingDialogProps) {
   const [open, setOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>();
@@ -201,7 +233,7 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
       form.reset();
       setSelectedDate(undefined);
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       console.error("Booking error:", error);
       
       let errorMessage = "Failed to book appointment. Please try again.";
@@ -237,14 +269,15 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
       <DialogTrigger asChild>
         {children}
       </DialogTrigger>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-full max-w-sm md:max-w-lg max-h-[90vh] overflow-y-auto" aria-describedby="booking-dialog-description">
         <DialogHeader>
-          <DialogTitle>Book {service.title}</DialogTitle>
-          <DialogDescription>
+          <DialogTitle id="booking-dialog-title">Book {service.title}</DialogTitle>
+          <DialogDescription id="booking-dialog-description">
             Schedule your service appointment. We'll confirm the details with you shortly.
           </DialogDescription>
         </DialogHeader>
 
+        <div className="max-h-[60vh] overflow-y-auto">
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             {/* Car Details */}
@@ -253,18 +286,21 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               name="carDetails"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Car Details</FormLabel>
+                  <FormLabel htmlFor="carDetails">Car Details</FormLabel>
                   <FormControl>
                     <Input
+                      id="carDetails"
                       placeholder="e.g., Maruti Swift 2020 (MH-01-AB-1234)"
                       {...field}
                       data-testid="input-car-details"
+                      aria-invalid={form.formState.errors.carDetails ? "true" : "false"}
+                      aria-describedby={form.formState.errors.carDetails ? "carDetails-error car-details-description" : "car-details-description"}
                     />
                   </FormControl>
-                  <FormDescription>
+                  <FormDescription id="car-details-description">
                     Include make, model, year, and registration number
                   </FormDescription>
-                  <FormMessage />
+                  <FormMessage id="carDetails-error" role="alert" />
                 </FormItem>
               )}
             />
@@ -275,24 +311,28 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               name="dateTime"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>Appointment Date</FormLabel>
+                  <FormLabel htmlFor="dateTime">Appointment Date</FormLabel>
                   <Popover>
                     <PopoverTrigger asChild>
                       <FormControl>
                         <Button
+                          id="dateTime"
                           variant="outline"
                           className={cn(
-                            "pl-3 text-left font-normal",
+                            "w-full sm:w-auto pl-3 text-left font-normal",
                             !field.value && "text-muted-foreground"
                           )}
                           data-testid="button-date-picker"
+                          aria-label={field.value ? `Selected date: ${format(field.value, "PPP")}` : "Pick an appointment date"}
+                          aria-invalid={form.formState.errors.dateTime ? "true" : "false"}
+                          aria-describedby={form.formState.errors.dateTime ? "dateTime-error" : undefined}
                         >
                           {field.value ? (
                             format(field.value, "PPP")
                           ) : (
                             <span>Pick a date</span>
                           )}
-                          <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                          <CalendarIcon className="ml-auto h-4 w-4 opacity-50" aria-hidden="true" />
                         </Button>
                       </FormControl>
                     </PopoverTrigger>
@@ -310,10 +350,11 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
                           return date < today;
                         }}
                         initialFocus
+                        aria-label="Choose appointment date"
                       />
                     </PopoverContent>
                   </Popover>
-                  <FormMessage />
+                  <FormMessage id="dateTime-error" role="alert" />
                 </FormItem>
               )}
             />
@@ -324,18 +365,23 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               name="timeSlot"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="flex items-center">
+                  <FormLabel htmlFor="timeSlot" className="flex items-center">
                     Time Slot
                     {checkingAvailability && (
-                      <Loader2 className="inline w-4 h-4 ml-2 animate-spin text-muted-foreground" />
+                      <Loader2 className="inline w-4 h-4 ml-2 animate-spin text-muted-foreground" aria-label="Checking availability" />
                     )}
                   </FormLabel>
                   {checkingAvailability ? (
-                    <Skeleton className="h-10 w-full" data-testid="skeleton-time-slots" />
+                    <Skeleton className="h-10 w-full" data-testid="skeleton-time-slots" aria-label="Loading time slots" />
                   ) : (
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
-                        <SelectTrigger data-testid="select-time-slot">
+                        <SelectTrigger 
+                          data-testid="select-time-slot"
+                          aria-label="Select appointment time slot"
+                          aria-invalid={form.formState.errors.timeSlot ? "true" : "false"}
+                          aria-describedby={form.formState.errors.timeSlot ? "timeSlot-error" : undefined}
+                        >
                           <SelectValue placeholder="Select a time" />
                         </SelectTrigger>
                       </FormControl>
@@ -355,14 +401,14 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
                               )}
                             >
                               <div className="flex items-center gap-2 flex-1">
-                                <Clock className="h-4 w-4" />
+                                <Clock className="h-4 w-4" aria-hidden="true" />
                                 {time}
                               </div>
                               {hasAvailabilityInfo && (
                                 isAvailable ? (
-                                  <CheckCircle2 className="w-4 h-4 text-green-600" />
+                                  <CheckCircle2 className="w-4 h-4 text-green-600" aria-hidden="true" />
                                 ) : (
-                                  <XCircle className="w-4 h-4 text-red-600" />
+                                  <XCircle className="w-4 h-4 text-red-600" aria-hidden="true" />
                                 )
                               )}
                             </SelectItem>
@@ -374,16 +420,16 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
                   {selectedDate && form.watch("locationId") && !checkingAvailability && (
                     <FormDescription className="text-xs flex items-center gap-3">
                       <span className="flex items-center gap-1">
-                        <CheckCircle2 className="w-3 h-3 text-green-600" />
+                        <CheckCircle2 className="w-3 h-3 text-green-600" aria-hidden="true" />
                         Available
                       </span>
                       <span className="flex items-center gap-1">
-                        <XCircle className="w-3 h-3 text-red-600" />
+                        <XCircle className="w-3 h-3 text-red-600" aria-hidden="true" />
                         Unavailable
                       </span>
                     </FormDescription>
                   )}
-                  <FormMessage />
+                  <FormMessage id="timeSlot-error" role="alert" />
                 </FormItem>
               )}
             />
@@ -394,17 +440,22 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               name="locationId"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Service Location</FormLabel>
+                  <FormLabel htmlFor="locationId">Service Location</FormLabel>
                   {locationsLoading ? (
-                    <Skeleton className="h-10 w-full" data-testid="skeleton-locations" />
+                    <Skeleton className="h-10 w-full" data-testid="skeleton-locations" aria-label="Loading service locations" />
                   ) : locationsError ? (
-                    <div className="text-sm text-destructive p-2 border border-destructive/50 rounded-md">
+                    <div className="text-sm text-destructive p-2 border border-destructive/50 rounded-md" role="alert">
                       Failed to load locations. Please refresh and try again.
                     </div>
                   ) : (
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
-                        <SelectTrigger data-testid="select-location">
+                        <SelectTrigger 
+                          data-testid="select-location"
+                          aria-label="Select service location"
+                          aria-invalid={form.formState.errors.locationId ? "true" : "false"}
+                          aria-describedby={form.formState.errors.locationId ? "locationId-error" : undefined}
+                        >
                           <SelectValue placeholder="Select a location" />
                         </SelectTrigger>
                       </FormControl>
@@ -412,7 +463,7 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
                         {locations.map((location) => (
                           <SelectItem key={location.id} value={location.id}>
                             <div className="flex items-center gap-2">
-                              <MapPin className="h-4 w-4" />
+                              <MapPin className="h-4 w-4" aria-hidden="true" />
                               {location.name} - {location.address}
                             </div>
                           </SelectItem>
@@ -420,7 +471,7 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
                       </SelectContent>
                     </Select>
                   )}
-                  <FormMessage />
+                  <FormMessage id="locationId-error" role="alert" />
                 </FormItem>
               )}
             />
@@ -431,33 +482,38 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               name="notes"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Additional Notes (Optional)</FormLabel>
+                  <FormLabel htmlFor="notes">Additional Notes (Optional)</FormLabel>
                   <FormControl>
                     <Textarea
+                      id="notes"
                       placeholder="Any specific requirements or concerns..."
                       {...field}
                       data-testid="textarea-notes"
+                      aria-invalid={form.formState.errors.notes ? "true" : "false"}
+                      aria-describedby={form.formState.errors.notes ? "notes-error" : undefined}
                     />
                   </FormControl>
-                  <FormMessage />
+                  <FormMessage id="notes-error" role="alert" />
                 </FormItem>
               )}
             />
 
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+            <DialogFooter className="flex-col gap-2 sm:flex-row">
+              <Button type="button" variant="outline" onClick={() => setOpen(false)} aria-label="Cancel booking">
                 Cancel
               </Button>
               <Button 
                 type="submit" 
                 disabled={createAppointmentMutation.isPending}
                 data-testid="button-confirm-booking"
+                aria-label={createAppointmentMutation.isPending ? "Booking appointment, please wait" : "Confirm booking"}
               >
                 {createAppointmentMutation.isPending ? "Booking..." : "Book Appointment"}
               </Button>
             </DialogFooter>
           </form>
         </Form>
+        </div>
       </DialogContent>
     </Dialog>
   );

@@ -2,9 +2,7 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation } from "@tanstack/react-query";
-import { apiRequestJson } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
+import { useAuthMutations } from "@/hooks/useAuthMutations";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
@@ -57,17 +55,59 @@ type ProfileData = z.infer<typeof profileSchema>;
 
 type MobileStep = "phone" | "otp" | "profile";
 
+/**
+ * Props for the MobileRegistration component
+ * 
+ * @property {("login" | "register")} mode - Registration mode
+ * @property {function} onSuccess - Callback when authentication succeeds
+ * @property {function} onBack - Callback to navigate back
+ */
 interface MobileRegistrationProps {
   mode: "login" | "register";
   onSuccess: (user: UserType) => void;
   onBack: () => void;
 }
 
+/**
+ * Mobile phone-based authentication component with OTP verification
+ * 
+ * Supports both login and registration flows through mobile number verification.
+ * Handles three steps: phone input, OTP verification, and profile setup (for new users).
+ * 
+ * @param {MobileRegistrationProps} props - Component props
+ * @returns {JSX.Element} Mobile registration form with multi-step flow
+ * 
+ * @example
+ * <MobileRegistration
+ *   mode="register"
+ *   onSuccess={(user) => console.log('User authenticated:', user)}
+ *   onBack={() => navigate('/auth')}
+ * />
+ */
 export function MobileRegistration({ mode, onSuccess, onBack }: MobileRegistrationProps) {
   const [currentStep, setCurrentStep] = useState<MobileStep>("phone");
   const [phoneData, setPhoneData] = useState<PhoneData | null>(null);
   const [otpCountdown, setOtpCountdown] = useState(0);
-  const { toast } = useToast();
+
+  // Use centralized auth mutations
+  const {
+    sendOtpMutation,
+    verifyOtpMutation,
+    registerMobileMutation,
+  } = useAuthMutations({
+    onTransition: (nextStep) => {
+      if (nextStep === "otp-verification") {
+        setCurrentStep("otp");
+        setOtpCountdown(300); // 5 minutes countdown
+      } else if (nextStep === "profile-setup") {
+        setCurrentStep("profile");
+      }
+    },
+    onComplete: () => {
+      // Success handling is done in the mutations with toasts
+      // Parent component handles user update through onSuccess
+    },
+  });
 
   // Forms for each step
   const phoneForm = useForm<PhoneData>({
@@ -103,136 +143,73 @@ export function MobileRegistration({ mode, onSuccess, onBack }: MobileRegistrati
     return () => clearInterval(interval);
   }, [otpCountdown]);
 
-  // Send OTP mutation
-  const sendOtpMutation = useMutation({
-    mutationFn: async (data: PhoneData) => {
-      const response = await apiRequestJson<{ message: string; expiresIn?: number }>(
-        "POST",
-        "/api/auth/mobile/send-otp",
-        {
-          phone: data.phone,
-          countryCode: data.countryCode,
-          purpose: mode === "login" ? "login" : "registration",
-        }
-      );
-      return response;
-    },
-    onSuccess: (data, variables) => {
-      setPhoneData(variables);
-      setCurrentStep("otp");
-      setOtpCountdown(300); // 5 minutes countdown
-      toast({
-        title: "OTP Sent",
-        description: `Verification code sent to ${variables.countryCode}${variables.phone}`,
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Failed to Send OTP",
-        description: error.message || "Please try again later",
-        variant: "destructive",
-      });
-    },
-  });
+  // Handle successful auth (from mutations)
+  useEffect(() => {
+    if (verifyOtpMutation.isSuccess && verifyOtpMutation.data?.user) {
+      onSuccess(verifyOtpMutation.data.user);
+    }
+  }, [verifyOtpMutation.isSuccess, verifyOtpMutation.data, onSuccess]);
 
-  // Verify OTP mutation
-  const verifyOtpMutation = useMutation({
-    mutationFn: async (data: OtpData) => {
-      if (!phoneData) throw new Error("Phone data not available");
-      
-      const response = await apiRequestJson<{ user?: UserType; message: string }>(
-        "POST",
-        "/api/auth/mobile/verify-otp",
-        {
-          phone: phoneData.phone,
-          countryCode: phoneData.countryCode,
-          otpCode: data.otp,
-          purpose: mode === "login" ? "login" : "registration",
-        }
-      );
-      return response;
-    },
-    onSuccess: (data) => {
-      if (data.user) {
-        // Login successful - user already exists
-        onSuccess(data.user);
-        toast({
-          title: "Login Successful",
-          description: "Welcome back!",
-        });
-      } else {
-        // For registration, proceed to profile setup
-        setCurrentStep("profile");
-        toast({
-          title: "Phone Verified",
-          description: "Please complete your profile",
-        });
-      }
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Invalid OTP",
-        description: error.message || "Please check the code and try again",
-        variant: "destructive",
-      });
-      otpForm.reset();
-    },
-  });
-
-  // Complete registration mutation
-  const completeRegistrationMutation = useMutation({
-    mutationFn: async (data: ProfileData) => {
-      if (!phoneData) throw new Error("Phone data not available");
-      
-      const response = await apiRequestJson<{ user: UserType; message: string }>(
-        "POST",
-        "/api/auth/mobile/register",
-        {
-          phone: phoneData.phone,
-          countryCode: phoneData.countryCode,
-          name: data.name,
-        }
-      );
-      return response;
-    },
-    onSuccess: (data) => {
-      onSuccess(data.user);
-      toast({
-        title: "Registration Complete",
-        description: "Welcome to RonakMotorGarage!",
-      });
-    },
-    onError: (error: any) => {
-      toast({
-        title: "Registration Failed",
-        description: error.message || "Please try again",
-        variant: "destructive",
-      });
-    },
-  });
+  useEffect(() => {
+    if (registerMobileMutation.isSuccess && registerMobileMutation.data?.user) {
+      onSuccess(registerMobileMutation.data.user);
+    }
+  }, [registerMobileMutation.isSuccess, registerMobileMutation.data, onSuccess]);
 
   // Handle phone form submission
   const onPhoneSubmit = (data: PhoneData) => {
-    sendOtpMutation.mutate(data);
+    setPhoneData(data); // Store phone data for later use
+    sendOtpMutation.mutate({
+      phone: data.phone,
+      countryCode: data.countryCode,
+      purpose: mode === "login" ? "login" : "registration",
+    });
   };
 
   // Handle OTP form submission
   const onOtpSubmit = (data: OtpData) => {
-    verifyOtpMutation.mutate(data);
+    if (!phoneData) return;
+    
+    verifyOtpMutation.mutate({
+      phone: phoneData.phone,
+      countryCode: phoneData.countryCode,
+      otpCode: data.otp,
+      mode,
+    });
   };
 
   // Handle profile form submission
   const onProfileSubmit = (data: ProfileData) => {
-    completeRegistrationMutation.mutate(data);
+    if (!phoneData) return;
+    
+    registerMobileMutation.mutate({
+      phone: phoneData.phone,
+      countryCode: phoneData.countryCode,
+      name: data.name,
+    });
   };
 
   // Resend OTP
   const resendOtp = () => {
     if (phoneData && otpCountdown === 0) {
-      sendOtpMutation.mutate(phoneData);
+      sendOtpMutation.mutate({
+        phone: phoneData.phone,
+        countryCode: phoneData.countryCode,
+        purpose: mode === "login" ? "login" : "registration",
+      });
     }
   };
 
+  /**
+   * Formats time in seconds to MM:SS display format
+   * 
+   * @param {number} seconds - Time in seconds to format
+   * @returns {string} Formatted time string in MM:SS format
+   * 
+   * @example
+   * formatTime(125) // Returns "2:05"
+   * formatTime(65) // Returns "1:05"
+   */
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -473,10 +450,10 @@ export function MobileRegistration({ mode, onSuccess, onBack }: MobileRegistrati
               <Button
                 type="submit"
                 className="w-full"
-                disabled={completeRegistrationMutation.isPending}
+                disabled={registerMobileMutation.isPending}
                 data-testid="button-complete-registration"
               >
-                {completeRegistrationMutation.isPending ? (
+                {registerMobileMutation.isPending ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     Creating Account...

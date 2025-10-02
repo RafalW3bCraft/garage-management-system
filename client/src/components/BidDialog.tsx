@@ -1,22 +1,63 @@
-import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Car } from "@shared/schema";
 
+/**
+ * Props for the BidDialog component
+ */
 interface BidDialogProps {
   car: Car;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
+/**
+ * Zod schema for bid form validation with dynamic minimum bid validation
+ */
+const createBidSchema = (minimumBid: number) => z.object({
+  bidAmount: z.coerce
+    .number({
+      required_error: "Please enter a bid amount",
+      invalid_type_error: "Bid amount must be a number"
+    })
+    .int("Bid amount must be a whole number")
+    .positive("Bid amount must be positive")
+    .min(minimumBid, `Minimum bid is ₹${minimumBid.toLocaleString('en-IN')}`)
+    .min(1000, "Minimum bid is ₹1,000")
+});
+
+type BidFormData = z.infer<ReturnType<typeof createBidSchema>>;
+
+/**
+ * Auction bid placement dialog for submitting bids on auction cars.
+ * Validates minimum bid amounts, displays current bid information, and handles bid submission.
+ * Uses Zod schema validation with react-hook-form for comprehensive input validation.
+ * 
+ * @param {BidDialogProps} props - Component props
+ * @param {Car} props.car - The auction car to bid on
+ * @param {boolean} props.open - Dialog open state
+ * @param {(open: boolean) => void} props.onOpenChange - Callback when dialog state changes
+ * @returns {JSX.Element} The rendered bid dialog
+ * 
+ * @example
+ * ```tsx
+ * <BidDialog
+ *   car={auctionCar}
+ *   open={isOpen}
+ *   onOpenChange={setIsOpen}
+ * />
+ * ```
+ */
 export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
-  const [bidAmount, setBidAmount] = useState("");
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -24,16 +65,27 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
   const currentBid = car.currentBid || car.price;
   const minimumBid = currentBid + 1000; // Minimum ₹1,000 increment
 
+  // Create form with dynamic validation schema
+  const bidSchema = createBidSchema(minimumBid);
+  
+  const form = useForm<BidFormData>({
+    resolver: zodResolver(bidSchema),
+    defaultValues: {
+      bidAmount: minimumBid,
+    },
+    mode: "onChange", // Real-time validation
+  });
+
   const placeBidMutation = useMutation({
-    mutationFn: async (bidData: { carId: string; bidAmount: number }) => {
-      return apiRequest("POST", `/api/cars/${bidData.carId}/bids`, {
+    mutationFn: async (bidData: BidFormData) => {
+      return apiRequest("POST", `/api/cars/${car.id}/bids`, {
         bidAmount: bidData.bidAmount
       });
     },
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       toast({
         title: "Bid Placed Successfully!",
-        description: `Your bid of ₹${parseInt(bidAmount).toLocaleString('en-IN')} has been placed for ${car.make} ${car.model}.`,
+        description: `Your bid of ₹${variables.bidAmount.toLocaleString('en-IN')} has been placed for ${car.make} ${car.model}.`,
       });
       
       // Invalidate and refetch cars data
@@ -42,10 +94,10 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
       queryClient.invalidateQueries({ queryKey: [`/api/cars/${car.id}/bids`] });
       
       // Reset form and close dialog
-      setBidAmount("");
+      form.reset();
       onOpenChange(false);
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       console.error("Error placing bid:", error);
       const errorMessage = error?.message || "Failed to place bid. Please try again.";
       toast({
@@ -56,49 +108,34 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
     },
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    const bidValue = parseInt(bidAmount);
-    
-    // Client-side validation
-    if (!bidAmount || isNaN(bidValue)) {
-      toast({
-        title: "Invalid Bid",
-        description: "Please enter a valid bid amount.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (bidValue < minimumBid) {
-      toast({
-        title: "Bid Too Low",
-        description: `Minimum bid is ₹${minimumBid.toLocaleString('en-IN')}`,
-        variant: "destructive",
-      });
-      return;
-    }
-
-    placeBidMutation.mutate({
-      carId: car.id,
-      bidAmount: bidValue
-    });
+  const onSubmit = (data: BidFormData) => {
+    placeBidMutation.mutate(data);
   };
 
   // Check if auction has ended
-  const auctionEnded = car.auctionEndTime && new Date() > car.auctionEndTime;
+  const auctionEnded = car.auctionEndTime && new Date() > new Date(car.auctionEndTime);
+
+  // Reset form when dialog closes
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen) {
+      form.reset();
+    }
+    onOpenChange(newOpen);
+  };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md" data-testid="dialog-bid">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="w-full max-w-sm md:max-w-lg max-h-[90vh] overflow-y-auto" data-testid="dialog-bid" aria-describedby="bid-dialog-description">
         <DialogHeader>
-          <DialogTitle data-testid="text-bid-title">
+          <DialogTitle id="bid-dialog-title" data-testid="text-bid-title">
             Place Bid - {car.make} {car.model} ({car.year})
           </DialogTitle>
+          <p id="bid-dialog-description" className="sr-only">
+            Place your bid on this auction car
+          </p>
         </DialogHeader>
         
-        <div className="space-y-4">
+        <div className="space-y-4 max-h-[60vh] overflow-y-auto">
           {/* Car Info */}
           <div className="bg-muted p-4 rounded-lg space-y-2">
             <div className="flex justify-between items-center">
@@ -141,46 +178,59 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
               </p>
             </div>
           ) : (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="bidAmount">Your Bid Amount (₹)</Label>
-                <Input
-                  id="bidAmount"
-                  type="number"
-                  placeholder={`Minimum: ₹${minimumBid.toLocaleString('en-IN')}`}
-                  value={bidAmount}
-                  onChange={(e) => setBidAmount(e.target.value)}
-                  min={minimumBid}
-                  step="1000"
-                  disabled={placeBidMutation.isPending}
-                  data-testid="input-bid-amount"
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4" aria-label="Bid form">
+                <FormField
+                  control={form.control}
+                  name="bidAmount"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel htmlFor="bidAmount">Your Bid Amount (₹)</FormLabel>
+                      <FormControl>
+                        <Input
+                          id="bidAmount"
+                          type="number"
+                          placeholder={`Minimum: ₹${minimumBid.toLocaleString('en-IN')}`}
+                          {...field}
+                          onChange={(e) => field.onChange(e.target.value)}
+                          min={minimumBid}
+                          step="1000"
+                          disabled={placeBidMutation.isPending}
+                          data-testid="input-bid-amount"
+                          aria-invalid={form.formState.errors.bidAmount ? "true" : "false"}
+                          aria-describedby="bidAmount-help bidAmount-error"
+                        />
+                      </FormControl>
+                      <FormDescription id="bidAmount-help">
+                        Minimum bid: ₹{minimumBid.toLocaleString('en-IN')} (₹1,000 increment)
+                      </FormDescription>
+                      <FormMessage id="bidAmount-error" role="alert" />
+                    </FormItem>
+                  )}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Minimum bid: ₹{minimumBid.toLocaleString('en-IN')} (₹1,000 increment)
-                </p>
-              </div>
 
-              <div className="flex gap-2 pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => onOpenChange(false)}
-                  className="flex-1"
-                  disabled={placeBidMutation.isPending}
-                  data-testid="button-cancel-bid"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  className="flex-1"
-                  disabled={placeBidMutation.isPending || !bidAmount}
-                  data-testid="button-place-bid"
-                >
-                  {placeBidMutation.isPending ? "Placing Bid..." : "Place Bid"}
-                </Button>
-              </div>
-            </form>
+                <DialogFooter className="flex-col gap-2 sm:flex-row">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleOpenChange(false)}
+                    disabled={placeBidMutation.isPending}
+                    data-testid="button-cancel-bid"
+                    aria-label="Cancel bid"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={placeBidMutation.isPending || !form.formState.isValid}
+                    data-testid="button-place-bid"
+                    aria-label={placeBidMutation.isPending ? "Placing bid, please wait" : "Place bid"}
+                  >
+                    {placeBidMutation.isPending ? "Placing Bid..." : "Place Bid"}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </Form>
           )}
         </div>
       </DialogContent>

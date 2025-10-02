@@ -10,6 +10,18 @@ import { useToast } from "@/hooks/use-toast";
 import { useEffect } from "react";
 import type { Appointment, Service, Location, Car as CarType } from "@shared/schema";
 
+/**
+ * Admin dashboard component providing an overview of key business metrics and quick access
+ * to management pages. Displays statistics for appointments, services, locations, and cars.
+ * Restricted to admin users only.
+ * 
+ * @returns {JSX.Element} The rendered admin dashboard
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/admin" component={AdminDashboard} />
+ * ```
+ */
 export default function AdminDashboard() {
   const { user, isAuthenticated } = useAuth();
   const { toast } = useToast();
@@ -27,22 +39,43 @@ export default function AdminDashboard() {
     );
   }
 
-  // Fetch consolidated admin statistics
+  // Fetch consolidated admin statistics - match backend AdminStatsResponse type
   const { data: stats, isLoading, isError, error } = useQuery<{
-    totalUsers: number;
-    totalAppointments: number;
-    pendingAppointments: number;
-    confirmedAppointments: number;
-    completedAppointments: number;
-    cancelledAppointments: number;
-    totalServices: number;
-    popularServices: number;
-    totalLocations: number;
-    totalCars: number;
-    activeCars: number;
-    auctionCars: number;
-    activeAuctions: number;
-    recentAppointments: number;
+    // Core metrics with availability indicators
+    totalUsers: number | null;
+    totalUsersAvailable: boolean;
+    totalAppointments: number | null;
+    appointmentsAvailable: boolean;
+    pendingAppointments: number | null;
+    confirmedAppointments: number | null;
+    completedAppointments: number | null;
+    cancelledAppointments: number | null;
+    recentAppointments: number | null;
+    totalServices: number | null;
+    servicesAvailable: boolean;
+    popularServices: number | null;
+    totalLocations: number | null;
+    locationsAvailable: boolean;
+    totalCars: number | null;
+    carsAvailable: boolean;
+    activeCars: number | null;
+    auctionCars: number | null;
+    activeAuctions: number | null;
+    // Metadata
+    lastUpdated: string;
+    cacheStatus: {
+      appointments: 'cached' | 'fresh' | 'fallback';
+      users: 'cached' | 'fresh' | 'fallback';
+      services: 'cached' | 'fresh' | 'fallback';
+      locations: 'cached' | 'fresh' | 'fallback';
+      cars: 'cached' | 'fresh' | 'fallback';
+    };
+    reliability: {
+      totalSources: number;
+      availableSources: number;
+      failedSources: string[];
+      reliabilityScore: number;
+    };
   }>({
     queryKey: ["/api/admin/stats"],
   });
@@ -59,22 +92,33 @@ export default function AdminDashboard() {
     }
   }, [isError, error, toast]);
 
-  // Provide default values if data is not loaded yet
-  const dashboardStats = stats || {
-    totalUsers: 0,
-    totalAppointments: 0,
-    pendingAppointments: 0,
-    confirmedAppointments: 0,
-    completedAppointments: 0,
-    cancelledAppointments: 0,
-    totalServices: 0,
-    popularServices: 0,
-    totalLocations: 0,
-    totalCars: 0,
-    activeCars: 0,
-    auctionCars: 0,
-    activeAuctions: 0,
-    recentAppointments: 0,
+  // Provide safe access to stats with null handling
+  const dashboardStats = {
+    totalUsers: stats?.totalUsers ?? 0,
+    totalAppointments: stats?.totalAppointments ?? 0,
+    pendingAppointments: stats?.pendingAppointments ?? 0,
+    confirmedAppointments: stats?.confirmedAppointments ?? 0,
+    completedAppointments: stats?.completedAppointments ?? 0,
+    cancelledAppointments: stats?.cancelledAppointments ?? 0,
+    totalServices: stats?.totalServices ?? 0,
+    popularServices: stats?.popularServices ?? 0,
+    totalLocations: stats?.totalLocations ?? 0,
+    totalCars: stats?.totalCars ?? 0,
+    activeCars: stats?.activeCars ?? 0,
+    auctionCars: stats?.auctionCars ?? 0,
+    activeAuctions: stats?.activeAuctions ?? 0,
+    recentAppointments: stats?.recentAppointments ?? 0,
+    // Availability flags for UI indicators
+    availabilityFlags: {
+      usersAvailable: stats?.totalUsersAvailable ?? false,
+      appointmentsAvailable: stats?.appointmentsAvailable ?? false,
+      servicesAvailable: stats?.servicesAvailable ?? false,
+      locationsAvailable: stats?.locationsAvailable ?? false,
+      carsAvailable: stats?.carsAvailable ?? false,
+    },
+    // Reliability metrics for monitoring
+    reliability: stats?.reliability,
+    lastUpdated: stats?.lastUpdated,
   };
 
   const adminActions = [
@@ -123,12 +167,12 @@ export default function AdminDashboard() {
   // Show loading state
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-8">
+      <div className="container mx-auto px-4 py-8" role="status" aria-live="polite">
         <div className="mb-8">
           <h1 className="text-3xl font-bold tracking-tight mb-2">Admin Dashboard</h1>
           <p className="text-muted-foreground">Loading dashboard data...</p>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6" aria-label="Loading statistics">
           {[1, 2, 3, 4].map((i) => (
             <Card key={i} className="animate-pulse">
               <CardHeader className="pb-2">
@@ -147,8 +191,8 @@ export default function AdminDashboard() {
 
   // Show error alert if statistics failed to load
   const errorComponent = isError ? (
-    <Alert variant="destructive" className="mb-4">
-      <AlertCircle className="h-4 w-4" />
+    <Alert variant="destructive" className="mb-4" role="alert">
+      <AlertCircle className="h-4 w-4" aria-hidden="true" />
       <AlertTitle>Dashboard Data Error</AlertTitle>
       <AlertDescription>
         Failed to load dashboard statistics. Please try refreshing the page.
@@ -176,94 +220,104 @@ export default function AdminDashboard() {
       </div>
 
       {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Appointments</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold" data-testid="stat-total-appointments">{dashboardStats.totalAppointments}</div>
-            <div className="flex gap-2 mt-2">
-              <Badge variant="secondary" className="text-xs">
-                {dashboardStats.pendingAppointments} pending
-              </Badge>
-              <Badge variant="outline" className="text-xs">
-                {dashboardStats.confirmedAppointments} confirmed
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
+      <section aria-labelledby="stats-heading" className="mb-8">
+        <h2 id="stats-heading" className="sr-only">Dashboard Statistics</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Total Appointments</CardTitle>
+              <Calendar className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold" data-testid="stat-total-appointments">{dashboardStats.totalAppointments}</div>
+              <div className="flex gap-2 mt-2">
+                <Badge variant="secondary" className="text-xs">
+                  {dashboardStats.pendingAppointments} pending
+                </Badge>
+                <Badge variant="outline" className="text-xs">
+                  {dashboardStats.confirmedAppointments} confirmed
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Services</CardTitle>
-            <Wrench className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold" data-testid="stat-total-services">{dashboardStats.totalServices}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Service offerings available
-            </p>
-          </CardContent>
-        </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Active Services</CardTitle>
+              <Wrench className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold" data-testid="stat-total-services">{dashboardStats.totalServices}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Service offerings available
+              </p>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Service Locations</CardTitle>
-            <MapPin className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold" data-testid="stat-total-locations">{dashboardStats.totalLocations}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Branches operating
-            </p>
-          </CardContent>
-        </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Service Locations</CardTitle>
+              <MapPin className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold" data-testid="stat-total-locations">{dashboardStats.totalLocations}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Branches operating
+              </p>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Cars Available</CardTitle>
-            <Car className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold" data-testid="stat-active-cars">{dashboardStats.activeCars}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {dashboardStats.totalCars} total inventory
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Cars Available</CardTitle>
+              <Car className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold" data-testid="stat-active-cars">{dashboardStats.activeCars}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {dashboardStats.totalCars} total inventory
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
 
       {/* Admin Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {adminActions.map((action) => {
-          const IconComponent = action.icon;
-          return (
-            <Card key={action.href} className="hover-elevate transition-all duration-200">
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div className={`p-3 rounded-lg ${action.color}`}>
-                    <IconComponent className="h-6 w-6" />
+      <section aria-labelledby="actions-heading">
+        <h2 id="actions-heading" className="sr-only">Admin Management Actions</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {adminActions.map((action) => {
+            const IconComponent = action.icon;
+            return (
+              <Card key={action.href} className="hover-elevate transition-all duration-200">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div className={`p-3 rounded-lg ${action.color}`} aria-hidden="true">
+                      <IconComponent className="h-6 w-6" />
+                    </div>
+                    <Badge variant="outline" data-testid={`count-${action.href.replace('/admin/', '')}`}>
+                      {action.count}
+                    </Badge>
                   </div>
-                  <Badge variant="outline" data-testid={`count-${action.href.replace('/admin/', '')}`}>
-                    {action.count}
-                  </Badge>
-                </div>
-                <CardTitle className="text-lg">{action.title}</CardTitle>
-                <CardDescription>{action.description}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Link href={action.href}>
-                  <Button className="w-full" data-testid={`button-${action.href.replace('/admin/', '')}`}>
-                    Manage
-                  </Button>
-                </Link>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
+                  <CardTitle className="text-lg">{action.title}</CardTitle>
+                  <CardDescription>{action.description}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Link href={action.href}>
+                    <Button 
+                      className="w-full" 
+                      data-testid={`button-${action.href.replace('/admin/', '')}`}
+                      aria-label={`${action.title}: ${action.description}`}
+                    >
+                      Manage
+                    </Button>
+                  </Link>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      </section>
     </div>
   );
 }

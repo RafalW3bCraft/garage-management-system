@@ -1,15 +1,20 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/hooks/use-auth";
 import { apiRequest } from "@/lib/queryClient";
 import type { AuthMode, AuthMethod, AuthContext } from "./useAuthFlow";
+import type { User } from "@shared/schema";
 
-// Types for mutation data
+/**
+ * Login mutation data interface
+ */
 interface LoginData {
   email: string;
   password: string;
 }
 
+/**
+ * Registration mutation data interface
+ */
 interface RegisterData {
   email: string;
   name: string;
@@ -17,25 +22,45 @@ interface RegisterData {
   confirmPassword: string;
 }
 
+/**
+ * Send OTP mutation data interface
+ */
 interface SendOtpData {
   phone: string;
   countryCode: string;
   purpose: string;
 }
 
+/**
+ * Verify OTP mutation data interface
+ */
 interface VerifyOtpData {
   phone: string;
   countryCode: string;
   otpCode: string;
+  purpose: string;
 }
 
+/**
+ * Mobile registration mutation data interface
+ */
 interface RegisterMobileData {
   phone: string;
   countryCode: string;
   name: string;
 }
 
-// Callbacks for mutation success/error handling
+/**
+ * Authentication response interface
+ */
+interface AuthResponse {
+  message: string;
+  user: User;
+}
+
+/**
+ * Callbacks for mutation success/error handling
+ */
 interface AuthMutationCallbacks {
   onSuccess?: () => void;
   onError?: (error: Error) => void;
@@ -43,13 +68,46 @@ interface AuthMutationCallbacks {
   onComplete?: () => void;
 }
 
-// Hook for centralized auth mutations with toast handling
+/**
+ * Hook for centralized authentication mutations with automatic toast notifications.
+ * Provides mutations for login, registration, logout, and mobile OTP verification.
+ * Handles query cache invalidation and success/error callbacks.
+ * 
+ * @param {AuthMutationCallbacks} [callbacks] - Optional callbacks for mutation lifecycle
+ * @returns {object} Authentication mutations and methods
+ * @property {object} loginMutation - Login mutation
+ * @property {object} registerMutation - Registration mutation
+ * @property {object} logoutMutation - Logout mutation
+ * @property {object} sendOtpMutation - Send OTP mutation
+ * @property {object} verifyOtpMutation - Verify OTP mutation
+ * @property {object} registerMobileMutation - Mobile registration mutation
+ * @property {(method: AuthMethod, data: object, context: AuthContext) => void} executeLogin - Execute login
+ * @property {(method: AuthMethod, data: object, context: AuthContext) => void} executeRegister - Execute registration
+ * @property {(phone: string, countryCode: string, mode: AuthMode) => void} sendOtp - Send OTP
+ * @property {(phone: string, countryCode: string, otpCode: string, mode: AuthMode) => void} verifyOtp - Verify OTP
+ * @property {() => void} googleLogin - Initiate Google OAuth
+ * @property {boolean} isLoading - Whether any mutation is loading
+ * 
+ * @example
+ * ```tsx
+ * const { executeLogin, sendOtp, isLoading } = useAuthMutations({
+ *   onComplete: () => navigate("/dashboard"),
+ *   onError: (error) => console.error(error)
+ * });
+ * 
+ * // Execute email login
+ * executeLogin("email", { password: "******" }, { email: "user@example.com" });
+ * 
+ * // Send mobile OTP
+ * sendOtp("9876543210", "+91", "login");
+ * ```
+ */
 export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
   const { toast } = useToast();
-  const { login, register, googleLogin, loginMutation, registerMutation } = useAuth();
+  const queryClient = useQueryClient();
   
   // Centralized error handler
-  const handleError = (error: any, defaultMessage: string) => {
+  const handleError = (error: Error, defaultMessage: string) => {
     const message = error?.message || defaultMessage;
     toast({
       title: "Error",
@@ -67,6 +125,59 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
     });
     callbacks?.onSuccess?.();
   };
+  
+  // Login mutation
+  const loginMutation = useMutation({
+    mutationFn: async (data: LoginData): Promise<AuthResponse> => {
+      const response = await apiRequest("POST", "/api/auth/login", data);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["/api/auth/me"], data.user);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      handleSuccess("Success", "Logged in successfully");
+      callbacks?.onComplete?.();
+    },
+    onError: (error) => {
+      handleError(error, "Login failed. Please check your credentials.");
+    },
+  });
+  
+  // Register mutation
+  const registerMutation = useMutation({
+    mutationFn: async (data: RegisterData): Promise<AuthResponse> => {
+      // Remove confirmPassword before sending to server
+      const { confirmPassword, ...sanitizedData } = data;
+      const response = await apiRequest("POST", "/api/auth/register", sanitizedData);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["/api/auth/me"], data.user);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      handleSuccess("Success", "Account created successfully");
+      callbacks?.onComplete?.();
+    },
+    onError: (error) => {
+      handleError(error, "Registration failed. Please try again.");
+    },
+  });
+  
+  // Logout mutation
+  const logoutMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/auth/logout");
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.setQueryData(["/api/auth/me"], null);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      handleSuccess("Success", "Logged out successfully");
+      callbacks?.onComplete?.();
+    },
+    onError: (error) => {
+      handleError(error, "Logout failed. Please try again.");
+    },
+  });
   
   // Mobile OTP mutations
   const sendOtpMutation = useMutation({
@@ -91,8 +202,8 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
       const response = await apiRequest("POST", "/api/auth/mobile/verify-otp", data);
       return response.json();
     },
-    onSuccess: (_, __, { mode }: { mode: AuthMode }) => {
-      if (mode === "register") {
+    onSuccess: (_, variables) => {
+      if (variables.purpose === "registration") {
         // For registration, go to profile setup
         callbacks?.onTransition?.("profile-setup");
       } else {
@@ -111,7 +222,9 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
       const response = await apiRequest("POST", "/api/auth/mobile/register", data);
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      queryClient.setQueryData(["/api/auth/me"], data.user);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       handleSuccess("Success", "Account created successfully");
       callbacks?.onComplete?.();
     },
@@ -120,52 +233,16 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
     },
   });
   
-  // Enhanced wrappers for existing mutations with toast handling
-  const loginWithToast = (data: LoginData) => {
-    login(data);
-  };
-  
-  const registerWithToast = (data: RegisterData) => {
-    register(data);
-  };
-  
-  // Handle existing mutation success/error states
-  const handleExistingMutations = () => {
-    // Handle login mutation
-    if (loginMutation.isSuccess) {
-      handleSuccess("Success", "Logged in successfully");
-      callbacks?.onComplete?.();
-    }
-    
-    if (loginMutation.isError) {
-      handleError(loginMutation.error, "Login failed. Please check your credentials.");
-    }
-    
-    // Handle register mutation
-    if (registerMutation.isSuccess) {
-      handleSuccess("Success", "Account created successfully");
-      callbacks?.onComplete?.();
-    }
-    
-    if (registerMutation.isError) {
-      handleError(registerMutation.error, "Registration failed. Please try again.");
-    }
-  };
-  
-  // Google login with toast
-  const googleLoginWithToast = () => {
-    try {
-      googleLogin();
-    } catch (error) {
-      handleError(error, "Google login failed. Please try again.");
-    }
+  // Google login redirect (no mutation needed, just redirects)
+  const googleLogin = () => {
+    window.location.href = "/api/auth/google";
   };
   
   // Composite mutation handlers for different auth flows
-  const executeLogin = (method: AuthMethod, data: any, context: AuthContext) => {
+  const executeLogin = (method: AuthMethod, data: { password: string }, context: AuthContext) => {
     switch (method) {
       case "email":
-        loginWithToast({
+        loginMutation.mutate({
           email: context.email!,
           password: data.password,
         });
@@ -176,15 +253,15 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
         break;
         
       case "google":
-        googleLoginWithToast();
+        googleLogin();
         break;
     }
   };
   
-  const executeRegister = (method: AuthMethod, data: any, context: AuthContext) => {
+  const executeRegister = (method: AuthMethod, data: { name: string }, context: AuthContext) => {
     switch (method) {
       case "email":
-        registerWithToast({
+        registerMutation.mutate({
           email: context.email!,
           name: data.name,
           password: context.password!,
@@ -201,7 +278,7 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
         break;
         
       case "google":
-        googleLoginWithToast();
+        googleLogin();
         break;
     }
   };
@@ -215,27 +292,31 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
   };
   
   const verifyOtp = (phone: string, countryCode: string, otpCode: string, mode: AuthMode) => {
-    verifyOtpMutation.mutate(
-      { phone, countryCode, otpCode },
-      { mode } as any // Pass mode through context
-    );
+    verifyOtpMutation.mutate({ 
+      phone, 
+      countryCode, 
+      otpCode, 
+      purpose: mode === "login" ? "login" : "registration" 
+    });
   };
   
   // Get loading states
   const isLoading = 
     loginMutation.isPending || 
     registerMutation.isPending ||
+    logoutMutation.isPending ||
     sendOtpMutation.isPending ||
     verifyOtpMutation.isPending ||
     registerMobileMutation.isPending;
   
   return {
     // Mutations
+    loginMutation,
+    registerMutation,
+    logoutMutation,
     sendOtpMutation,
     verifyOtpMutation,
     registerMobileMutation,
-    loginMutation,
-    registerMutation,
     
     // Composite handlers
     executeLogin,
@@ -244,15 +325,10 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
     verifyOtp,
     
     // Individual handlers
-    loginWithToast,
-    registerWithToast,
-    googleLoginWithToast,
+    googleLogin,
     
     // State
     isLoading,
-    
-    // Handlers for existing mutations (to be called in useEffect)
-    handleExistingMutations,
     
     // Error handling
     handleError,

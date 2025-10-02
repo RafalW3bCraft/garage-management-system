@@ -22,23 +22,63 @@ import { z } from "zod";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
-// Form schema - features as string for form input, transform to array for API
+/**
+ * Service form schema with features as comma-separated string for form input,
+ * transformed to array when submitting to API
+ */
 const serviceFormSchema = z.object({
-  title: z.string().min(1, "Title is required"),
-  description: z.string().min(1, "Description is required"),
-  price: z.coerce.number().min(0, "Price must be positive"),
-  duration: z.string().min(1, "Duration is required"),
-  category: z.string().min(1, "Category is required"),
-  features: z.string().min(1, "Features are required"),
+  title: z.string()
+    .min(1, "Title is required")
+    .min(3, "Title must be at least 3 characters")
+    .max(100, "Title cannot exceed 100 characters"),
+  description: z.string()
+    .min(1, "Description is required")
+    .min(10, "Description must be at least 10 characters")
+    .max(1000, "Description cannot exceed 1000 characters"),
+  price: z.coerce.number()
+    .min(0, "Price must be positive")
+    .max(1000000, "Price cannot exceed ₹10,00,000"),
+  duration: z.string()
+    .min(1, "Duration is required")
+    .regex(/^\d+\s*(min|mins|minute|minutes|hour|hours|hr|hrs|day|days)$/i, "Duration must be in format like '30 mins', '1 hour', '2 days'"),
+  category: z.string()
+    .min(1, "Category is required")
+    .max(50, "Category cannot exceed 50 characters"),
+  features: z.string()
+    .min(1, "Features are required")
+    .min(5, "Features must be at least 5 characters")
+    .max(500, "Features cannot exceed 500 characters"),
   popular: z.boolean().default(false),
-  icon: z.string().optional(),
-  providerName: z.string().optional(),
-  providerPhone: z.string().optional(),
-  providerCountryCode: z.string().default("+91"),
+  icon: z.string()
+    .max(50, "Icon name cannot exceed 50 characters")
+    .optional(),
+  providerName: z.string()
+    .min(2, "Provider name must be at least 2 characters")
+    .max(100, "Provider name cannot exceed 100 characters")
+    .optional(),
+  providerPhone: z.string()
+    .regex(/^[0-9]{7,15}$/, "Phone number must be 7-15 digits")
+    .optional()
+    .or(z.literal("")),
+  providerCountryCode: z.string()
+    .regex(/^\+[1-9][0-9]{0,2}$/, "Invalid country code format")
+    .default("+91"),
 });
 
 type ServiceFormData = z.infer<typeof serviceFormSchema>;
 
+/**
+ * Admin services management component for managing automotive service offerings.
+ * Supports CRUD operations, category filtering, and marking services as popular.
+ * Features include pricing, duration, provider details, and feature list management.
+ * 
+ * @returns {JSX.Element} The rendered admin services management page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/admin/services" component={AdminServices} />
+ * ```
+ */
 export default function AdminServices() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
@@ -67,7 +107,7 @@ export default function AdminServices() {
 
   // Create service mutation
   const createServiceMutation = useMutation({
-    mutationFn: async (data: any) => {
+    mutationFn: async (data: ServiceFormData) => {
       const response = await apiRequest("POST", "/api/services", data);
       return response.json();
     },
@@ -79,7 +119,7 @@ export default function AdminServices() {
         description: "Service created successfully!",
       });
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       toast({
         title: "Error",
         description: error.message || "Failed to create service",
@@ -90,7 +130,7 @@ export default function AdminServices() {
 
   // Update service mutation
   const updateServiceMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+    mutationFn: async ({ id, data }: { id: string; data: ServiceFormData }) => {
       const response = await apiRequest("PUT", `/api/services/${id}`, data);
       return response.json();
     },
@@ -102,7 +142,7 @@ export default function AdminServices() {
         description: "Service updated successfully!",
       });
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       toast({
         title: "Error",
         description: error.message || "Failed to update service",
@@ -123,7 +163,7 @@ export default function AdminServices() {
         description: "Service deleted successfully!",
       });
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       toast({
         title: "Error",
         description: error.message || "Failed to delete service",
@@ -260,7 +300,7 @@ export default function AdminServices() {
               </DialogHeader>
               <Form {...addForm}>
                 <form onSubmit={addForm.handleSubmit(handleAddService)} className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FormField
                       control={addForm.control}
                       name="title"
@@ -314,7 +354,7 @@ export default function AdminServices() {
                     )}
                   />
 
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <FormField
                       control={addForm.control}
                       name="price"
@@ -382,7 +422,7 @@ export default function AdminServices() {
                     )}
                   />
 
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <FormField
                       control={addForm.control}
                       name="providerName"
@@ -623,7 +663,7 @@ export default function AdminServices() {
           {editingService && (
             <Form {...editForm}>
               <form onSubmit={editForm.handleSubmit(handleEditService)} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <FormField
                     control={editForm.control}
                     name="title"
@@ -677,7 +717,7 @@ export default function AdminServices() {
                   )}
                 />
 
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <FormField
                     control={editForm.control}
                     name="price"
@@ -745,7 +785,7 @@ export default function AdminServices() {
                   )}
                 />
 
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <FormField
                     control={editForm.control}
                     name="providerName"

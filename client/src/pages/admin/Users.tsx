@@ -18,6 +18,44 @@ import { format } from "date-fns";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
+/**
+ * Helper function to parse and generate user profile image URLs in multiple formats
+ * 
+ * @param {string | null | undefined} imageUrl - Profile image URL or object
+ * @returns {{webp: string | null, jpeg: string | null} | null} Image URLs in different formats or null
+ */
+const getImageUrls = (imageUrl: string | null | undefined) => {
+  if (!imageUrl) return null;
+  
+  // Handle object format (new imageUrls structure)
+  if (typeof imageUrl === 'object' && imageUrl !== null) {
+    const imgUrls = imageUrl as any;
+    return {
+      webp: imgUrls.webp || null,
+      jpeg: imgUrls.jpeg || imgUrls.jpg || null
+    };
+  }
+  
+  // Legacy string format - convert to imageUrls format
+  const baseUrl = imageUrl.replace(/\.(jpg|jpeg|png|webp)$/i, '');
+  return {
+    webp: `${baseUrl}.webp`,
+    jpeg: `${baseUrl}.jpg`
+  };
+};
+
+/**
+ * Admin users management component for viewing and managing user accounts.
+ * Features comprehensive user search and filtering by role/provider, user details viewing,
+ * and role management with protection against self-demotion.
+ * 
+ * @returns {JSX.Element} The rendered admin users management page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/admin/users" component={AdminUsers} />
+ * ```
+ */
 export default function AdminUsers() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
@@ -329,7 +367,11 @@ export default function AdminUsers() {
                 <div className="flex items-start justify-between">
                   <div className="flex items-start gap-4">
                     <Avatar className="h-12 w-12">
-                      <AvatarImage src={usr.profileImage || ""} alt={usr.name} />
+                      <AvatarImage
+                        srcSet={getImageUrls(usr.profileImage)?.webp || undefined}
+                        src={getImageUrls(usr.profileImage)?.jpeg || usr.profileImage || undefined}
+                        alt={usr.name}
+                      />
                       <AvatarFallback>{getUserInitials(usr.name)}</AvatarFallback>
                     </Avatar>
                     <div className="flex-1">
@@ -419,7 +461,11 @@ export default function AdminUsers() {
                         <div className="space-y-6">
                           <div className="flex items-center gap-4">
                             <Avatar className="h-16 w-16">
-                              <AvatarImage src={usr.profileImage || ""} alt={usr.name} />
+                              <AvatarImage
+                                srcSet={getImageUrls(usr.profileImage)?.webp || undefined}
+                                src={getImageUrls(usr.profileImage)?.jpeg || usr.profileImage || undefined}
+                                alt={usr.name}
+                              />
                               <AvatarFallback className="text-lg">{getUserInitials(usr.name)}</AvatarFallback>
                             </Avatar>
                             <div>

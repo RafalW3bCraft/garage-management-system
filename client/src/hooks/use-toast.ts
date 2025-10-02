@@ -5,9 +5,19 @@ import type {
   ToastProps,
 } from "@/components/ui/toast"
 
+/**
+ * Maximum number of toasts to display simultaneously
+ */
 const TOAST_LIMIT = 1
+
+/**
+ * Delay in milliseconds before removing a dismissed toast
+ */
 const TOAST_REMOVE_DELAY = 1000000
 
+/**
+ * Extended toast type with additional properties
+ */
 type ToasterToast = ToastProps & {
   id: string
   title?: React.ReactNode
@@ -15,6 +25,9 @@ type ToasterToast = ToastProps & {
   action?: ToastActionElement
 }
 
+/**
+ * Action types for toast reducer
+ */
 const actionTypes = {
   ADD_TOAST: "ADD_TOAST",
   UPDATE_TOAST: "UPDATE_TOAST",
@@ -24,6 +37,11 @@ const actionTypes = {
 
 let count = 0
 
+/**
+ * Generates a unique ID for toast notifications
+ * 
+ * @returns {string} Unique toast ID
+ */
 function genId() {
   count = (count + 1) % Number.MAX_SAFE_INTEGER
   return count.toString()
@@ -139,6 +157,21 @@ function dispatch(action: Action) {
 
 type Toast = Omit<ToasterToast, "id">
 
+/**
+ * Function to display a toast notification
+ * 
+ * @param {Toast} props - Toast properties (title, description, variant, etc.)
+ * @returns {object} Toast control object with id, dismiss, and update methods
+ * 
+ * @example
+ * ```tsx
+ * toast({
+ *   title: "Success",
+ *   description: "Your changes have been saved",
+ *   variant: "default"
+ * });
+ * ```
+ */
 function toast({ ...props }: Toast) {
   const id = genId()
 
@@ -168,6 +201,28 @@ function toast({ ...props }: Toast) {
   }
 }
 
+/**
+ * Hook for managing toast notifications throughout the application.
+ * Provides toast state and methods to display, update, and dismiss toasts.
+ * 
+ * @returns {object} Toast state and methods
+ * @property {ToasterToast[]} toasts - Array of active toasts
+ * @property {(props: Toast) => object} toast - Function to display a new toast
+ * @property {(toastId?: string) => void} dismiss - Function to dismiss toast(s)
+ * 
+ * @example
+ * ```tsx
+ * const { toast } = useToast();
+ * 
+ * const handleSave = () => {
+ *   // ... save logic
+ *   toast({
+ *     title: "Success",
+ *     description: "Data saved successfully"
+ *   });
+ * };
+ * ```
+ */
 function useToast() {
   const [state, setState] = React.useState<State>(memoryState)
 

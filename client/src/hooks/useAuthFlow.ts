@@ -1,9 +1,19 @@
 import { useReducer, useMemo } from "react";
 import { z } from "zod";
 
-// Types for auth flow configuration
+/**
+ * Authentication mode (login or register)
+ */
 export type AuthMode = "login" | "register";
+
+/**
+ * Authentication method (email, mobile, or Google)
+ */
 export type AuthMethod = "email" | "mobile" | "google";
+
+/**
+ * Authentication flow step
+ */
 export type AuthStep = 
   | "method-selection" 
   | "email-input" 
@@ -13,7 +23,9 @@ export type AuthStep =
   | "otp-verification" 
   | "profile-setup";
 
-// Auth context that persists through the flow
+/**
+ * Authentication context that persists through the authentication flow
+ */
 export interface AuthContext {
   email?: string;
   password?: string;
@@ -23,7 +35,9 @@ export interface AuthContext {
   otpToken?: string;
 }
 
-// Auth state shape
+/**
+ * Authentication state shape
+ */
 export interface AuthState {
   mode: AuthMode;
   method: AuthMethod;
@@ -31,7 +45,9 @@ export interface AuthState {
   context: AuthContext;
 }
 
-// Flow configuration defining steps for each mode-method combination
+/**
+ * Flow configuration defining authentication steps for each mode-method combination
+ */
 export const FLOW_CONFIG: Record<string, AuthStep[]> = {
   // Email flows
   "login-email": ["method-selection", "email-input", "password-input"],
@@ -46,7 +62,9 @@ export const FLOW_CONFIG: Record<string, AuthStep[]> = {
   "register-google": ["method-selection"],
 };
 
-// Step metadata for UI display
+/**
+ * Step metadata providing titles and descriptions for each authentication step
+ */
 export const STEP_METADATA: Record<AuthStep, {
   title: (mode: AuthMode, method: AuthMethod, context: AuthContext) => string;
   description: (mode: AuthMode, method: AuthMethod, context: AuthContext) => string;
@@ -86,7 +104,9 @@ export const STEP_METADATA: Record<AuthStep, {
   }
 };
 
-// Reducer actions
+/**
+ * Authentication flow reducer actions
+ */
 export type AuthAction = 
   | { type: "SET_MODE"; mode: AuthMode }
   | { type: "SET_METHOD"; method: AuthMethod }
@@ -96,7 +116,9 @@ export type AuthAction =
   | { type: "UPDATE_CONTEXT"; context: Partial<AuthContext> }
   | { type: "RESET" };
 
-// Initial state
+/**
+ * Initial authentication state
+ */
 const initialState: AuthState = {
   mode: "login",
   method: "email", 
@@ -104,7 +126,13 @@ const initialState: AuthState = {
   context: {}
 };
 
-// Reducer function with config-driven navigation
+/**
+ * Reducer function for auth flow state management with config-driven navigation
+ * 
+ * @param {AuthState} state - Current state
+ * @param {AuthAction} action - Action to perform
+ * @returns {AuthState} New state
+ */
 function authFlowReducer(state: AuthState, action: AuthAction): AuthState {
   switch (action.type) {
     case "SET_MODE":
@@ -174,7 +202,49 @@ function authFlowReducer(state: AuthState, action: AuthAction): AuthState {
   }
 }
 
-// Custom hook for auth flow management
+/**
+ * Hook for managing multi-step authentication flow with support for email, mobile, and Google auth.
+ * Handles navigation between authentication steps, context management, and progress tracking.
+ * 
+ * @returns {object} Authentication flow state and methods
+ * @property {AuthState} state - Current authentication state
+ * @property {AuthMode} mode - Current mode (login/register)
+ * @property {AuthMethod} method - Selected authentication method
+ * @property {AuthStep} step - Current flow step
+ * @property {AuthContext} context - Authentication context data
+ * @property {number} progress - Progress percentage through the flow
+ * @property {string} stepTitle - Title for current step
+ * @property {string} stepDescription - Description for current step
+ * @property {(mode: AuthMode) => void} setMode - Set authentication mode
+ * @property {(method: AuthMethod) => void} setMethod - Set authentication method
+ * @property {() => void} nextStep - Move to next step
+ * @property {() => void} prevStep - Move to previous step
+ * @property {(step: AuthStep) => void} goToStep - Jump to specific step
+ * @property {(context: Partial<AuthContext>) => void} updateContext - Update context
+ * @property {() => void} reset - Reset to initial state
+ * @property {boolean} canGoBack - Whether back navigation is available
+ * 
+ * @example
+ * ```tsx
+ * const {
+ *   mode,
+ *   step,
+ *   progress,
+ *   setMethod,
+ *   nextStep,
+ *   updateContext
+ * } = useAuthFlow();
+ * 
+ * // Select email method
+ * setMethod("email");
+ * 
+ * // Update context with email
+ * updateContext({ email: "user@example.com" });
+ * 
+ * // Move to next step
+ * nextStep();
+ * ```
+ */
 export function useAuthFlow() {
   const [state, dispatch] = useReducer(authFlowReducer, initialState);
   

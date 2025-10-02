@@ -1,4 +1,48 @@
 import { MailService } from '@sendgrid/mail';
+import { 
+  createCommunicationResult, 
+  categorizeError, 
+  type CommunicationResult 
+} from '@shared/communication-types';
+
+// SendGrid error types
+interface SendGridErrorField {
+  message?: string;
+  field?: string;
+  help?: string;
+  error_id?: string;
+}
+
+interface SendGridErrorResponse {
+  errors?: SendGridErrorField[];
+  message?: string;
+  field?: string;
+  help?: string;
+  error_id?: string;
+  error_count?: number;
+  to?: unknown;
+  from?: unknown;
+  personalizations?: unknown;
+  content?: unknown;
+  subject?: unknown;
+  headers?: unknown;
+}
+
+interface SendGridError extends Error {
+  code?: string | number;
+  response?: {
+    status?: number;
+    body?: SendGridErrorResponse;
+  };
+}
+
+interface EmailData {
+  to: string;
+  from: string;
+  subject: string;
+  text?: string;
+  html?: string;
+}
 
 // Referenced from SendGrid integration blueprint
 let mailService: MailService | null = null;
@@ -17,6 +61,47 @@ function initializeMailService() {
   return true;
 }
 
+/**
+ * Sanitize SendGrid error response to prevent sensitive data exposure
+ */
+function sanitizeSendGridError(responseBody: SendGridErrorResponse): Partial<SendGridErrorResponse> {
+  if (!responseBody || typeof responseBody !== 'object') {
+    return { error_id: 'unknown' };
+  }
+
+  // Keep only safe, non-PII error information
+  const sanitized: Partial<SendGridErrorResponse> = {};
+  
+  // Safe fields to include in logs
+  const safeFields: (keyof SendGridErrorField)[] = ['message', 'field', 'help', 'error_id'];
+  
+  // If it's an array of errors (common SendGrid format)
+  if (Array.isArray(responseBody.errors)) {
+    sanitized.errors = responseBody.errors.map((error: SendGridErrorField) => {
+      const safeError: Partial<SendGridErrorField> = {};
+      safeFields.forEach(field => {
+        if (error[field] !== undefined) {
+          safeError[field] = error[field];
+        }
+      });
+      return safeError as SendGridErrorField;
+    });
+  }
+  
+  // Include top-level safe fields
+  if (responseBody.message) sanitized.message = responseBody.message;
+  if (responseBody.field) sanitized.field = responseBody.field;
+  if (responseBody.help) sanitized.help = responseBody.help;
+  if (responseBody.error_id) sanitized.error_id = responseBody.error_id;
+  
+  // Include error count if available
+  if (responseBody.error_count !== undefined) {
+    sanitized.error_count = responseBody.error_count;
+  }
+  
+  return sanitized;
+}
+
 interface EmailParams {
   to: string;
   from: string;
@@ -25,48 +110,56 @@ interface EmailParams {
   html?: string;
 }
 
-export async function sendEmail(params: EmailParams): Promise<boolean> {
+// Main function returns CommunicationResult
+export async function sendEmailV2(params: EmailParams): Promise<CommunicationResult> {
   if (!initializeMailService() || !mailService) {
     console.log("[EMAIL] Service not initialized - skipping email");
-    return false;
+    return createCommunicationResult('email', false, 'Email service not initialized', {
+      errorType: 'service_unavailable',
+      retryable: true
+    });
   }
 
   // Validate email parameters
   if (!params.to || !params.from || !params.subject) {
     console.error(`[EMAIL] Invalid email parameters - to: ${!!params.to}, from: ${!!params.from}, subject: ${!!params.subject}`);
-    return false;
+    return createCommunicationResult('email', false, 'Missing required email parameters', {
+      errorType: 'validation',
+      retryable: false
+    });
   }
 
   // Basic email format validation
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(params.to)) {
     console.error(`[EMAIL] Invalid recipient email format: ${params.to}`);
-    return false;
+    return createCommunicationResult('email', false, 'Invalid recipient email format', {
+      errorType: 'validation',
+      retryable: false
+    });
   }
 
   if (!emailRegex.test(params.from)) {
     console.error(`[EMAIL] Invalid sender email format: ${params.from}`);
-    return false;
+    return createCommunicationResult('email', false, 'Invalid sender email format', {
+      errorType: 'validation',
+      retryable: false
+    });
   }
 
   try {
-    const emailData: any = {
+    const emailData: EmailData = {
       to: params.to,
       from: params.from,
       subject: params.subject,
+      ...(params.text && { text: params.text }),
+      ...(params.html && { html: params.html })
     };
-
-    if (params.text) {
-      emailData.text = params.text;
-    }
-    if (params.html) {
-      emailData.html = params.html;
-    }
 
     console.log(`[EMAIL] Sending email to ${params.to} with subject: "${params.subject}"`);
     
     // Add timeout to prevent hanging email operations
-    const emailPromise = mailService.send(emailData);
+    const emailPromise = mailService.send(emailData as any);
     const timeoutPromise = new Promise((_, reject) => 
       setTimeout(() => reject(new Error('Email send timeout after 15 seconds')), 15000)
     );
@@ -75,20 +168,24 @@ export async function sendEmail(params: EmailParams): Promise<boolean> {
     
     // Log success with more details
     console.log(`[EMAIL] ✅ Successfully sent to ${params.to} - Subject: "${params.subject}" - From: ${params.from}`);
-    return true;
-  } catch (error: any) {
+    return createCommunicationResult('email', true, `Email sent successfully to ${params.to}`, {
+      metadata: { emailId: Array.isArray(result) && result[0]?.headers?.['x-message-id'] }
+    });
+  } catch (error) {
+    const err = error as SendGridError;
     // Enhanced error logging with SendGrid response details
-    const errorMsg = error?.message || 'Unknown error';
-    const statusCode = error?.code || error?.response?.status || 'N/A';
-    const responseBody = error?.response?.body || null;
+    const errorMsg = err.message || 'Unknown error';
+    const statusCode = err.code || err.response?.status || 'N/A';
+    const responseBody = err.response?.body || null;
     
     console.error(`[EMAIL] ❌ Failed to send to ${params.to}`);
     console.error(`[EMAIL] Error: ${errorMsg}`);
     console.error(`[EMAIL] Status Code: ${statusCode}`);
     
     if (responseBody) {
-      // Log SendGrid specific error details (but safely to avoid PII leaks)
-      console.error(`[EMAIL] SendGrid Response: ${JSON.stringify(responseBody, null, 2)}`);
+      // Sanitize SendGrid error response to prevent sensitive data exposure
+      const sanitizedResponse = sanitizeSendGridError(responseBody);
+      console.error(`[EMAIL] SendGrid Response: ${JSON.stringify(sanitizedResponse, null, 2)}`);
     }
     
     // Log common SendGrid issues for debugging
@@ -100,8 +197,21 @@ export async function sendEmail(params: EmailParams): Promise<boolean> {
       console.error(`[EMAIL] 📝 Bad request - check email format and content`);
     }
     
-    return false;
+    // Create standardized error response
+    const errorType = categorizeError(String(statusCode), errorMsg);
+    return createCommunicationResult('email', false, `Failed to send email: ${errorMsg}`, {
+      errorCode: String(statusCode),
+      errorType,
+      retryable: errorType === 'service_unavailable' || errorType === 'network' || errorType === 'unknown',
+      metadata: { statusCode: statusCode !== 'N/A' ? Number(statusCode) : undefined }
+    });
   }
+}
+
+// Backward compatibility wrapper for sendEmail - returns boolean
+export async function sendEmail(params: EmailParams): Promise<boolean> {
+  const result = await sendEmailV2(params);
+  return result.success;
 }
 
 // Email templates for garage notifications
@@ -124,8 +234,9 @@ export class EmailNotificationService {
     setImmediate(async () => {
       try {
         await this.sendAppointmentConfirmation(to, data);
-      } catch (error: any) {
-        console.error(`[EMAIL] Async appointment confirmation failed for ${to}:`, error?.message);
+      } catch (error) {
+        const err = error as Error;
+        console.error(`[EMAIL] Async appointment confirmation failed for ${to}:`, err.message);
       }
     });
   }

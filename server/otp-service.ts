@@ -1,5 +1,10 @@
 import crypto from 'crypto';
 import { getStorage } from './storage';
+import { 
+  createCommunicationResult, 
+  categorizeError, 
+  type CommunicationResult 
+} from '@shared/communication-types';
 
 // Country codes for phone number validation and formatting (India primary + Universal format)
 export const SUPPORTED_COUNTRIES = [
@@ -10,21 +15,25 @@ export const SUPPORTED_COUNTRIES = [
   { code: 'UNIVERSAL', name: 'Other Countries', flag: '🌍' },
 ] as const;
 
-export interface OtpSendResult {
-  success: boolean;
-  message: string;
+// Legacy interfaces for backward compatibility - maintain all legacy fields
+export interface OtpSendResult extends CommunicationResult {
+  // Legacy fields for backward compatibility - guaranteed to be present
   rateLimited?: boolean;
   expiresIn?: number;
   attempts?: number;
   maxAttempts?: number;
+  expired?: boolean;
+  error?: string;
 }
 
-export interface OtpVerifyResult {
-  success: boolean;
-  message: string;
+export interface OtpVerifyResult extends CommunicationResult {
+  // Legacy fields for backward compatibility - guaranteed to be present
+  rateLimited?: boolean;
+  expiresIn?: number;
   attempts?: number;
   maxAttempts?: number;
   expired?: boolean;
+  error?: string;
 }
 
 export class OTPService {
@@ -137,8 +146,9 @@ export class OTPService {
       console.log(`[OTP] SMS sent successfully to ${countryCode}${phone}`);
       console.log(`[OTP] MessageCentral response:`, result);
       return true;
-    } catch (error: any) {
-      console.error(`[OTP] Failed to send SMS to ${countryCode}${phone}:`, error.message);
+    } catch (error) {
+      const err = error as Error;
+      console.error(`[OTP] Failed to send SMS to ${countryCode}${phone}:`, err.message);
       
       // In development, provide fallback even on network errors
       if (!isProduction) {
@@ -171,11 +181,11 @@ export class OTPService {
       const rateLimited = await this.checkRateLimit(phone, countryCode);
       if (rateLimited) {
         console.log(`[OTP] Rate limited: ${countryCode}${phone}`);
-        return {
-          success: false,
-          message: `Too many OTP requests. Please wait before requesting another code.`,
-          rateLimited: true
-        };
+        return createCommunicationResult('otp', false, 'Too many OTP requests. Please wait before requesting another code.', {
+          errorType: 'rate_limit',
+          retryable: true,
+          metadata: { rateLimited: true }
+        });
       }
 
       // Generate OTP and hash it
@@ -205,23 +215,34 @@ export class OTPService {
       const smsSuccess = await this.sendSMS(phone, countryCode, otpCode);
       
       if (!smsSuccess) {
-        return {
-          success: false,
-          message: 'Failed to send OTP. Please try again later.'
-        };
+        return createCommunicationResult('otp', false, 'Failed to send OTP. Please try again later.', {
+          errorType: 'service_unavailable',
+          retryable: true,
+          metadata: { 
+            maxAttempts: this.MAX_ATTEMPTS,
+            expiresIn: this.OTP_EXPIRY_MINUTES * 60
+          }
+        });
       }
 
-      return {
-        success: true,
-        message: `OTP sent to ${countryCode}${phone}. Valid for ${this.OTP_EXPIRY_MINUTES} minutes.`,
-        expiresIn: this.OTP_EXPIRY_MINUTES * 60 // Return expiry time in seconds
-      };
-    } catch (error: any) {
-      console.error(`[OTP] Send error for ${countryCode}${phone}:`, error.message);
-      return {
-        success: false,
-        message: 'Failed to send OTP. Please try again later.'
-      };
+      return createCommunicationResult('otp', true, `OTP sent to ${countryCode}${phone}. Valid for ${this.OTP_EXPIRY_MINUTES} minutes.`, {
+        metadata: { 
+          expiresIn: this.OTP_EXPIRY_MINUTES * 60,
+          maxAttempts: this.MAX_ATTEMPTS
+        }
+      });
+    } catch (error) {
+      const err = error as Error;
+      console.error(`[OTP] Send error for ${countryCode}${phone}:`, err.message);
+      const errorType = categorizeError(undefined, err.message);
+      return createCommunicationResult('otp', false, 'Failed to send OTP. Please try again later.', {
+        errorType,
+        retryable: errorType !== 'validation',
+        metadata: {
+          maxAttempts: this.MAX_ATTEMPTS,
+          expiresIn: this.OTP_EXPIRY_MINUTES * 60
+        }
+      });
     }
   }
 
@@ -236,34 +257,41 @@ export class OTPService {
       const otpRecord = await storage.getActiveOtpVerification(phone, countryCode, purpose);
       
       if (!otpRecord) {
-        return {
-          success: false,
-          message: 'No active OTP found. Please request a new code.'
-        };
-      }
-
-      // Check if expired
-      if (new Date() > otpRecord.expiresAt) {
-        await storage.markOtpAsExpired(otpRecord.id);
-        return {
-          success: false,
-          message: 'OTP has expired. Please request a new code.',
-          expired: true
-        };
+        return createCommunicationResult('otp', false, 'No active OTP found. Please request a new code.', {
+          errorType: 'validation',
+          retryable: false,
+          metadata: {
+            attempts: 0,
+            maxAttempts: this.MAX_ATTEMPTS
+          }
+        });
       }
 
       // Check if max attempts exceeded
       const currentAttempts = otpRecord.attempts ?? 0;
       const maxAttempts = otpRecord.maxAttempts ?? 3;
+
+      // Check if expired
+      if (new Date() > otpRecord.expiresAt) {
+        await storage.markOtpAsExpired(otpRecord.id);
+        return createCommunicationResult('otp', false, 'OTP has expired. Please request a new code.', {
+          errorType: 'validation',
+          retryable: false,
+          metadata: { 
+            expired: true,
+            attempts: currentAttempts,
+            maxAttempts: maxAttempts
+          }
+        });
+      }
       
       if (currentAttempts >= maxAttempts) {
         await storage.markOtpAsExpired(otpRecord.id);
-        return {
-          success: false,
-          message: 'Maximum verification attempts exceeded. Please request a new code.',
-          attempts: currentAttempts,
-          maxAttempts: maxAttempts
-        };
+        return createCommunicationResult('otp', false, 'Maximum verification attempts exceeded. Please request a new code.', {
+          errorType: 'validation',
+          retryable: false,
+          metadata: { attempts: currentAttempts, maxAttempts: maxAttempts }
+        });
       }
 
       // Verify the OTP code
@@ -277,36 +305,37 @@ export class OTPService {
         
         if (remainingAttempts <= 0) {
           await storage.markOtpAsExpired(otpRecord.id);
-          return {
-            success: false,
-            message: 'Invalid OTP. Maximum attempts exceeded. Please request a new code.',
-            attempts: newAttemptCount,
-            maxAttempts: otpRecord.maxAttempts ?? 3
-          };
+          return createCommunicationResult('otp', false, 'Invalid OTP. Maximum attempts exceeded. Please request a new code.', {
+            errorType: 'validation',
+            retryable: false,
+            metadata: { attempts: newAttemptCount, maxAttempts: otpRecord.maxAttempts ?? 3 }
+          });
         }
         
-        return {
-          success: false,
-          message: `Invalid OTP. ${remainingAttempts} attempt${remainingAttempts !== 1 ? 's' : ''} remaining.`,
-          attempts: newAttemptCount,
-          maxAttempts: otpRecord.maxAttempts ?? 3
-        };
+        return createCommunicationResult('otp', false, `Invalid OTP. ${remainingAttempts} attempt${remainingAttempts !== 1 ? 's' : ''} remaining.`, {
+          errorType: 'validation',
+          retryable: false,
+          metadata: { attempts: newAttemptCount, maxAttempts: otpRecord.maxAttempts ?? 3 }
+        });
       }
 
       // Mark as verified
       await storage.markOtpAsVerified(otpRecord.id);
       
       console.log(`[OTP] Successfully verified OTP for ${countryCode}${phone} (${purpose})`);
-      return {
-        success: true,
-        message: 'OTP verified successfully!'
-      };
-    } catch (error: any) {
-      console.error(`[OTP] Verify error for ${countryCode}${phone}:`, error.message);
-      return {
-        success: false,
-        message: 'Failed to verify OTP. Please try again.'
-      };
+      return createCommunicationResult('otp', true, 'OTP verified successfully!');
+    } catch (error) {
+      const err = error as Error;
+      console.error(`[OTP] Verify error for ${countryCode}${phone}:`, err.message);
+      const errorType = categorizeError(undefined, err.message);
+      return createCommunicationResult('otp', false, 'Failed to verify OTP. Please try again.', {
+        errorType,
+        retryable: errorType !== 'validation',
+        metadata: {
+          attempts: 0,
+          maxAttempts: this.MAX_ATTEMPTS
+        }
+      });
     }
   }
 
@@ -318,34 +347,154 @@ export class OTPService {
       const storage = await getStorage();
       const cutoffDate = new Date(Date.now() - (24 * 60 * 60 * 1000)); // 24 hours ago
       await storage.cleanupExpiredOtps(cutoffDate);
-    } catch (error: any) {
-      console.error('[OTP] Cleanup failed:', error.message);
+    } catch (error) {
+      const err = error as Error;
+      console.error('[OTP] Cleanup failed:', err.message);
     }
   }
 
   /**
-   * Validate phone number format
+   * Validate phone number format with enhanced international support
    */
   static validatePhoneNumber(phone: string, countryCode: string): { valid: boolean; message?: string } {
-    // For India - strict 10-digit validation
-    if (countryCode === '+91') {
-      if (!/^[6-9]\d{9}$/.test(phone)) {
-        return { valid: false, message: 'Enter valid 10-digit Indian mobile number starting with 6-9' };
-      }
-    }
-    // For Universal format - basic international validation
-    else {
-      // Validate that countryCode is a proper international format
-      if (!/^\+\d{1,4}$/.test(countryCode)) {
-        return { valid: false, message: 'Enter valid country code (e.g., +1, +44, +86)' };
-      }
-      
-      // Basic phone number validation for international
-      if (!/^\d{7,15}$/.test(phone)) {
-        return { valid: false, message: 'Enter valid phone number (7-15 digits)' };
-      }
+    // Sanitize inputs
+    const cleanPhone = (phone || '').replace(/\D/g, '');
+    const cleanCountryCode = (countryCode || '').trim();
+    
+    // Basic input validation
+    if (!cleanPhone || !cleanCountryCode) {
+      return { valid: false, message: 'Phone number and country code are required' };
     }
 
+    // For India - strict 10-digit validation
+    if (cleanCountryCode === '+91') {
+      if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+        return { valid: false, message: 'Enter valid 10-digit Indian mobile number starting with 6-9' };
+      }
+      return { valid: true };
+    }
+    
+    // For Universal format - enhanced international validation
+    if (cleanCountryCode === 'UNIVERSAL') {
+      return { valid: false, message: 'Please select a specific country code instead of Universal format' };
+    }
+    
+    // Validate country code format for all other countries
+    if (!/^\+\d{1,4}$/.test(cleanCountryCode)) {
+      return { valid: false, message: 'Enter valid country code format (e.g., +1, +44, +86, +971)' };
+    }
+    
+    // Extract numeric country code for validation
+    const numericCountryCode = cleanCountryCode.substring(1);
+    const countryCodeLength = numericCountryCode.length;
+    
+    // Validate country code length (1-4 digits as per ITU-T E.164)
+    if (countryCodeLength < 1 || countryCodeLength > 4) {
+      return { valid: false, message: 'Country code must be 1-4 digits' };
+    }
+    
+    // Enhanced phone number validation for international numbers
+    const phoneLength = cleanPhone.length;
+    
+    // ITU-T E.164 standard: total number (country code + national number) should be max 15 digits
+    const totalLength = countryCodeLength + phoneLength;
+    if (totalLength > 15) {
+      return { valid: false, message: 'Phone number too long (max 15 digits total including country code)' };
+    }
+    
+    if (totalLength < 8) {
+      return { valid: false, message: 'Phone number too short (min 8 digits total including country code)' };
+    }
+    
+    // National number validation (after country code)
+    if (phoneLength < 4 || phoneLength > 14) {
+      return { valid: false, message: 'Phone number must be 4-14 digits (excluding country code)' };
+    }
+    
+    // Reject numbers that are all the same digit or obvious invalid patterns
+    if (/^(\d)\1+$/.test(cleanPhone)) {
+      return { valid: false, message: 'Phone number cannot be all the same digit' };
+    }
+    
+    // Reject numbers starting with 0 for most international formats (except special cases)
+    // Note: Some countries use 0 as a trunk prefix which should be removed before international format
+    if (cleanPhone.startsWith('0') && !this.isValidZeroStartForCountry(numericCountryCode)) {
+      return { valid: false, message: 'Remove leading zero from phone number for international format' };
+    }
+    
+    // Country-specific validation for common cases
+    const validationResult = this.validateCountrySpecificFormat(cleanPhone, numericCountryCode);
+    if (!validationResult.valid) {
+      return validationResult;
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * Check if a country allows phone numbers starting with 0 in international format
+   */
+  private static isValidZeroStartForCountry(countryCode: string): boolean {
+    // Some countries/territories have valid numbers starting with 0 in international format
+    const allowedZeroStartCountries = ['212', '213', '216', '218', '220', '221', '222', '223', '224', '225', '226', '227', '228', '229', '230', '231', '232', '233', '234', '235', '236', '237', '238', '239', '240', '241', '242', '243', '244', '245', '246', '247', '248', '249', '250', '251', '252', '253', '254', '255', '256', '257', '258', '260', '261', '262', '263', '264', '265', '266', '267', '268', '269', '290', '291', '297', '298', '299'];
+    return allowedZeroStartCountries.includes(countryCode);
+  }
+
+  /**
+   * Country-specific phone number format validation
+   */
+  private static validateCountrySpecificFormat(phone: string, countryCode: string): { valid: boolean; message?: string } {
+    // Common country-specific validations
+    switch (countryCode) {
+      case '1': // US/Canada (NANP)
+        if (phone.length !== 10) {
+          return { valid: false, message: 'US/Canada numbers must be exactly 10 digits' };
+        }
+        if (!/^[2-9]\d{2}[2-9]\d{6}$/.test(phone)) {
+          return { valid: false, message: 'Invalid US/Canada phone number format' };
+        }
+        break;
+        
+      case '44': // UK
+        if (phone.length < 10 || phone.length > 11) {
+          return { valid: false, message: 'UK numbers must be 10-11 digits' };
+        }
+        break;
+        
+      case '86': // China
+        if (phone.length !== 11 || !phone.startsWith('1')) {
+          return { valid: false, message: 'China mobile numbers must be 11 digits starting with 1' };
+        }
+        break;
+        
+      case '81': // Japan
+        if (phone.length < 10 || phone.length > 11) {
+          return { valid: false, message: 'Japan numbers must be 10-11 digits' };
+        }
+        break;
+        
+      case '33': // France
+        if (phone.length !== 9) {
+          return { valid: false, message: 'France numbers must be 9 digits (without leading 0)' };
+        }
+        break;
+        
+      case '49': // Germany
+        if (phone.length < 10 || phone.length > 12) {
+          return { valid: false, message: 'Germany numbers must be 10-12 digits' };
+        }
+        break;
+        
+      case '61': // Australia
+        if (phone.length !== 9) {
+          return { valid: false, message: 'Australia mobile numbers must be 9 digits (without leading 0)' };
+        }
+        if (!phone.startsWith('4')) {
+          return { valid: false, message: 'Australia mobile numbers must start with 4' };
+        }
+        break;
+    }
+    
     return { valid: true };
   }
 }

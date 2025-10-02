@@ -1,6 +1,8 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { OTPService } from "./otp-service";
+import { performanceMiddleware } from "./performance-monitor";
 
 // Environment validation and logging
 interface ValidationResult {
@@ -214,10 +216,14 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
+// Performance monitoring middleware - tracks all API requests and collects metrics
+app.use(performanceMiddleware());
+
+// Legacy logging middleware for detailed request/response logging
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
-  let capturedJsonResponse: Record<string, any> | undefined = undefined;
+  let capturedJsonResponse: Record<string, unknown> | undefined = undefined;
 
   const originalResJson = res.json;
   res.json = function (bodyJson, ...args) {
@@ -247,9 +253,10 @@ app.use((req, res, next) => {
 (async () => {
   const server = await registerRoutes(app);
 
-  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-    const status = err.status || err.statusCode || 500;
-    const message = err.message || "Internal Server Error";
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    const error = err as { status?: number; statusCode?: number; message?: string };
+    const status = error.status || error.statusCode || 500;
+    const message = error.message || "Internal Server Error";
 
     res.status(status).json({ message });
     throw err;
@@ -275,5 +282,78 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+    
+    // Start OTP cleanup scheduler after server is running
+    startOTPCleanupScheduler();
   });
 })();
+
+/**
+ * OTP Cleanup Scheduler
+ * Runs cleanup every hour and performs initial cleanup on startup
+ */
+function startOTPCleanupScheduler(): void {
+  const CLEANUP_INTERVAL_HOURS = 1;
+  const CLEANUP_INTERVAL_MS = CLEANUP_INTERVAL_HOURS * 60 * 60 * 1000; // 1 hour in milliseconds
+  
+  console.log(`[OTP_CLEANUP] Starting OTP cleanup scheduler (runs every ${CLEANUP_INTERVAL_HOURS} hour${CLEANUP_INTERVAL_HOURS !== 1 ? 's' : ''})`);
+  
+  // Function to perform cleanup with error handling and logging
+  const performCleanup = async (isStartup: boolean = false): Promise<void> => {
+    const startTime = Date.now();
+    const cleanupType = isStartup ? 'STARTUP' : 'SCHEDULED';
+    
+    try {
+      console.log(`[OTP_CLEANUP] ${cleanupType} cleanup started at ${new Date().toISOString()}`);
+      
+      await OTPService.cleanupExpiredOtps();
+      
+      const duration = Date.now() - startTime;
+      console.log(`[OTP_CLEANUP] ${cleanupType} cleanup completed successfully in ${duration}ms`);
+      
+    } catch (error: unknown) {
+      const duration = Date.now() - startTime;
+      const errorObj = error as Error;
+      console.error(`[OTP_CLEANUP] ${cleanupType} cleanup failed after ${duration}ms:`, {
+        message: errorObj.message,
+        stack: errorObj.stack,
+        timestamp: new Date().toISOString()
+      });
+      
+      // In production, we want to log the error but not crash the application
+      if (process.env.NODE_ENV === 'production') {
+        console.error(`[OTP_CLEANUP] Production error logged - application continues running`);
+      } else {
+        console.warn(`[OTP_CLEANUP] Development mode - cleanup failure is non-critical`);
+      }
+    }
+  };
+  
+  // Perform initial cleanup on startup (with a small delay to ensure database is ready)
+  setTimeout(async () => {
+    await performCleanup(true);
+  }, 2000); // 2 second delay
+  
+  // Schedule regular cleanup every hour
+  const intervalId = setInterval(async () => {
+    await performCleanup(false);
+  }, CLEANUP_INTERVAL_MS);
+  
+  console.log(`[OTP_CLEANUP] Scheduler started successfully - cleanup will run every ${CLEANUP_INTERVAL_HOURS} hour${CLEANUP_INTERVAL_HOURS !== 1 ? 's' : ''}`);
+  console.log(`[OTP_CLEANUP] Initial cleanup will run in 2 seconds`);
+  
+  // Handle graceful shutdown (cleanup interval on process termination)
+  const gracefulShutdown = (signal: string) => {
+    console.log(`[OTP_CLEANUP] Received ${signal}, stopping cleanup scheduler...`);
+    clearInterval(intervalId);
+    console.log(`[OTP_CLEANUP] Cleanup scheduler stopped gracefully`);
+  };
+  
+  // Register shutdown handlers
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  
+  // Store interval ID for potential future use (though not needed for this implementation)
+  // This allows the interval to be cleared if needed programmatically
+  (global as any).__otpCleanupInterval = intervalId;
+}

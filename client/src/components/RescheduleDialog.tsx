@@ -31,14 +31,25 @@ import { CalendarIcon, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Location } from "@shared/schema";
 
+/**
+ * Zod schema for reschedule form validation with future date validation
+ */
 const rescheduleSchema = z.object({
-  dateTime: z.date({ required_error: "Please select a new date and time" }),
-  timeSlot: z.string().min(1, "Please select a time slot"),
+  dateTime: z.date({ required_error: "Please select a new date and time" })
+    .refine((date) => date > new Date(), {
+      message: "New appointment date must be in the future",
+    }),
+  timeSlot: z.string()
+    .min(1, "Please select a time slot")
+    .regex(/^(0[9]|1[0-8]):[0-3]0$/, "Invalid time slot format"),
   locationId: z.string().min(1, "Please select a location"),
 });
 
 type RescheduleData = z.infer<typeof rescheduleSchema>;
 
+/**
+ * Props for the RescheduleDialog component
+ */
 interface RescheduleDialogProps {
   children: React.ReactNode;
   appointmentId: string;
@@ -46,6 +57,28 @@ interface RescheduleDialogProps {
   currentLocationId: string;
 }
 
+/**
+ * Appointment rescheduling dialog for changing appointment date, time, and location.
+ * Allows users to select a new date, time slot, and service location for existing appointments.
+ * 
+ * @param {RescheduleDialogProps} props - Component props
+ * @param {React.ReactNode} props.children - Trigger element for opening the dialog
+ * @param {string} props.appointmentId - ID of the appointment to reschedule
+ * @param {string} props.currentDateTime - Current appointment date and time
+ * @param {string} props.currentLocationId - Current location ID
+ * @returns {JSX.Element} The rendered reschedule dialog
+ * 
+ * @example
+ * ```tsx
+ * <RescheduleDialog
+ *   appointmentId="apt-123"
+ *   currentDateTime="2024-03-15 10:00"
+ *   currentLocationId="loc-1"
+ * >
+ *   <Button>Reschedule</Button>
+ * </RescheduleDialog>
+ * ```
+ */
 export function RescheduleDialog({ 
   children, 
   appointmentId, 
@@ -108,7 +141,7 @@ export function RescheduleDialog({
       setOpen(false);
       form.reset();
     },
-    onError: (error: any) => {
+    onError: (error: Error) => {
       toast({
         title: "Reschedule Failed",
         description: error.message || "Failed to reschedule appointment. Please try again.",
@@ -126,14 +159,15 @@ export function RescheduleDialog({
       <DialogTrigger asChild>
         {children}
       </DialogTrigger>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+      <DialogContent className="w-full max-w-sm md:max-w-lg max-h-[90vh] overflow-y-auto" aria-describedby="reschedule-dialog-description">
         <DialogHeader>
-          <DialogTitle>Reschedule Appointment</DialogTitle>
-          <DialogDescription>
+          <DialogTitle id="reschedule-dialog-title">Reschedule Appointment</DialogTitle>
+          <DialogDescription id="reschedule-dialog-description">
             Select a new date, time, and location for your appointment.
           </DialogDescription>
         </DialogHeader>
 
+        <div className="max-h-[60vh] overflow-y-auto">
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             {/* Date Selection */}
@@ -142,24 +176,27 @@ export function RescheduleDialog({
               name="dateTime"
               render={({ field }) => (
                 <FormItem className="flex flex-col">
-                  <FormLabel>New Appointment Date</FormLabel>
+                  <FormLabel htmlFor="dateTime">New Appointment Date</FormLabel>
                   <Popover>
                     <PopoverTrigger asChild>
                       <FormControl>
                         <Button
                           variant="outline"
                           className={cn(
-                            "pl-3 text-left font-normal",
+                            "w-full sm:w-auto pl-3 text-left font-normal",
                             !field.value && "text-muted-foreground"
                           )}
                           data-testid="button-reschedule-date-picker"
+                          aria-label={field.value ? `Selected date: ${format(field.value, "PPP")}` : "Pick a new appointment date"}
+                          aria-invalid={form.formState.errors.dateTime ? "true" : "false"}
+                          aria-describedby={form.formState.errors.dateTime ? "dateTime-error" : undefined}
                         >
                           {field.value ? (
                             format(field.value, "PPP")
                           ) : (
                             <span>Pick a new date</span>
                           )}
-                          <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                          <CalendarIcon className="ml-auto h-4 w-4 opacity-50" aria-hidden="true" />
                         </Button>
                       </FormControl>
                     </PopoverTrigger>
@@ -174,10 +211,11 @@ export function RescheduleDialog({
                           return date < today;
                         }}
                         initialFocus
+                        aria-label="Choose new appointment date"
                       />
                     </PopoverContent>
                   </Popover>
-                  <FormMessage />
+                  <FormMessage id="dateTime-error" role="alert" />
                 </FormItem>
               )}
             />
@@ -188,10 +226,15 @@ export function RescheduleDialog({
               name="timeSlot"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>New Time Slot</FormLabel>
+                  <FormLabel htmlFor="timeSlot">New Time Slot</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl>
-                      <SelectTrigger data-testid="select-reschedule-time-slot">
+                      <SelectTrigger 
+                        data-testid="select-reschedule-time-slot"
+                        aria-label="Select new time slot"
+                        aria-invalid={form.formState.errors.timeSlot ? "true" : "false"}
+                        aria-describedby={form.formState.errors.timeSlot ? "timeSlot-error" : undefined}
+                      >
                         <SelectValue placeholder="Select a new time" />
                       </SelectTrigger>
                     </FormControl>
@@ -199,14 +242,14 @@ export function RescheduleDialog({
                       {timeSlots.map((time) => (
                         <SelectItem key={time} value={time}>
                           <div className="flex items-center gap-2">
-                            <Clock className="h-4 w-4" />
+                            <Clock className="h-4 w-4" aria-hidden="true" />
                             {time}
                           </div>
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  <FormMessage />
+                  <FormMessage id="timeSlot-error" role="alert" />
                 </FormItem>
               )}
             />
@@ -217,10 +260,15 @@ export function RescheduleDialog({
               name="locationId"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Service Location</FormLabel>
+                  <FormLabel htmlFor="locationId">Service Location</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl>
-                      <SelectTrigger data-testid="select-reschedule-location">
+                      <SelectTrigger 
+                        data-testid="select-reschedule-location"
+                        aria-label="Select service location"
+                        aria-invalid={form.formState.errors.locationId ? "true" : "false"}
+                        aria-describedby={form.formState.errors.locationId ? "locationId-error" : undefined}
+                      >
                         <SelectValue placeholder="Select a location" />
                       </SelectTrigger>
                     </FormControl>
@@ -234,25 +282,27 @@ export function RescheduleDialog({
                       ))}
                     </SelectContent>
                   </Select>
-                  <FormMessage />
+                  <FormMessage id="locationId-error" role="alert" />
                 </FormItem>
               )}
             />
 
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+            <DialogFooter className="flex-col gap-2 sm:flex-row">
+              <Button type="button" variant="outline" onClick={() => setOpen(false)} aria-label="Cancel rescheduling">
                 Cancel
               </Button>
               <Button 
                 type="submit" 
                 disabled={rescheduleAppointmentMutation.isPending}
                 data-testid="button-confirm-reschedule"
+                aria-label={rescheduleAppointmentMutation.isPending ? "Rescheduling appointment, please wait" : "Confirm reschedule"}
               >
                 {rescheduleAppointmentMutation.isPending ? "Rescheduling..." : "Reschedule Appointment"}
               </Button>
             </DialogFooter>
           </form>
         </Form>
+        </div>
       </DialogContent>
     </Dialog>
   );

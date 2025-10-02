@@ -9,6 +9,9 @@ import { ContactDialog } from "./ContactDialog";
 import { format } from "date-fns";
 import type { Car } from "@shared/schema";
 
+/**
+ * Props for the CarCard component
+ */
 interface CarCardProps {
   id: string;
   make: string;
@@ -25,6 +28,31 @@ interface CarCardProps {
   auctionEndTime?: string;
 }
 
+/**
+ * Car display card component for both sale and auction vehicles.
+ * Shows car details, pricing, condition, and action buttons. Supports favorites and integrates
+ * with bid/contact dialogs based on car type (auction vs. sale).
+ * 
+ * @param {CarCardProps} props - Component props
+ * @returns {JSX.Element} The rendered car card
+ * 
+ * @example
+ * ```tsx
+ * <CarCard
+ *   id="car-123"
+ *   make="Maruti"
+ *   model="Swift"
+ *   year={2020}
+ *   price={550000}
+ *   mileage={25000}
+ *   fuelType="Petrol"
+ *   location="Mumbai"
+ *   image="/cars/swift.jpg"
+ *   condition="Excellent"
+ *   isAuction={false}
+ * />
+ * ```
+ */
 export function CarCard({
   id,
   make,
@@ -50,6 +78,16 @@ export function CarCard({
     const favorites = JSON.parse(localStorage.getItem('car-favorites') || '[]');
     setIsFavorited(favorites.includes(id));
   }, [id]);
+
+  // Helper to parse imageUrls from image string
+  const getImageUrls = (imageUrl: string) => {
+    const baseUrl = imageUrl.replace(/\.(jpg|jpeg|png|webp)$/i, '');
+    return {
+      webp: `${baseUrl}.webp`,
+      jpeg: `${baseUrl}.jpg`,
+      fallback: imageUrl
+    };
+  };
 
   const handleAction = () => {
     if (isAuction) {
@@ -97,22 +135,28 @@ export function CarCard({
     }
   };
 
+  const imageUrls = getImageUrls(image);
+
   return (
     <Card className="overflow-hidden hover-elevate">
       <div className="relative">
-        <img 
-          src={image} 
-          alt={`${make} ${model}`}
-          className="w-full h-48 object-cover"
-        />
+        <picture>
+          <source srcSet={imageUrls.webp} type="image/webp" />
+          <img 
+            src={imageUrls.jpeg} 
+            alt={`${make} ${model}`}
+            className="w-full h-48 object-cover"
+          />
+        </picture>
         <Button
           variant="ghost"
           size="icon"
           className="absolute top-2 right-2 bg-white/80 hover:bg-white"
           onClick={handleFavorite}
           data-testid={`button-favorite-${id}`}
+          aria-label={isFavorited ? `Remove ${make} ${model} from favorites` : `Add ${make} ${model} to favorites`}
         >
-          <Heart className={`h-4 w-4 ${isFavorited ? 'fill-red-500 text-red-500' : ''}`} />
+          <Heart className={`h-4 w-4 ${isFavorited ? 'fill-red-500 text-red-500' : ''}`} aria-hidden="true" />
         </Button>
         <Badge className={`absolute top-2 left-2 ${getConditionColor(condition)}`}>
           {condition}
@@ -170,7 +214,7 @@ export function CarCard({
         </div>
       </CardContent>
 
-      <CardFooter className="gap-2">
+      <CardFooter className="flex flex-col gap-2 sm:flex-row">
         <Button 
           className="flex-1" 
           onClick={handleAction}
@@ -181,6 +225,7 @@ export function CarCard({
         {!isAuction && (
           <Button 
             variant="outline" 
+            className="flex-1"
             onClick={handleContactSeller}
             data-testid={`button-contact-${id}`}
           >

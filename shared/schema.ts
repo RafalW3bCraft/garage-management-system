@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, decimal, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, decimal, timestamp, boolean, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -29,7 +29,9 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   // Ensure at least one identifier exists (email or phone)
-  checkIdentifier: sql`CONSTRAINT check_user_identifier CHECK (email IS NOT NULL OR phone IS NOT NULL)`
+  checkIdentifier: sql`CONSTRAINT check_user_identifier CHECK (email IS NOT NULL OR phone IS NOT NULL)`,
+  // Index for role-based filtering (admin vs customer)
+  roleIdx: index("idx_role").on(table.role)
 }));
 
 // Customers table - people who book services
@@ -41,7 +43,10 @@ export const customers = pgTable("customers", {
   phone: text("phone").notNull(),
   countryCode: text("country_code").notNull().default("+91"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Index on userId for user's customer records
+  userIdIdx: index("idx_user_id").on(table.userId)
+}));
 
 // Service locations/branches
 export const locations = pgTable("locations", {
@@ -85,7 +90,17 @@ export const appointments = pgTable("appointments", {
   price: integer("price"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Single column indexes for foreign keys and filtering
+  customerIdIdx: index("idx_customer_id").on(table.customerId),
+  serviceIdIdx: index("idx_service_id").on(table.serviceId),
+  locationIdIdx: index("idx_location_id").on(table.locationId),
+  statusIdx: index("idx_status").on(table.status),
+  dateTimeIdx: index("idx_date_time").on(table.dateTime),
+  // Composite indexes for common query patterns
+  customerStatusIdx: index("idx_customer_status").on(table.customerId, table.status),
+  statusDateTimeIdx: index("idx_status_datetime").on(table.status, table.dateTime)
+}));
 
 // Cars for sale and auction
 export const cars = pgTable("cars", {
@@ -104,7 +119,14 @@ export const cars = pgTable("cars", {
   auctionEndTime: timestamp("auction_end_time"),
   description: text("description"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Index for auction vs sale filtering
+  isAuctionIdx: index("idx_is_auction").on(table.isAuction),
+  // Composite index for active auctions query
+  auctionEndTimeIdx: index("idx_auction_end_time").on(table.isAuction, table.auctionEndTime),
+  // Index for searching by manufacturer
+  makeIdx: index("idx_make").on(table.make)
+}));
 
 // Car auction bids
 export const bids = pgTable("bids", {
@@ -113,7 +135,14 @@ export const bids = pgTable("bids", {
   bidderEmail: text("bidder_email").notNull(), // Match email with customers/users
   bidAmount: integer("bid_amount").notNull(),
   bidTime: timestamp("bid_time").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Index on carId for car's bids
+  carIdIdx: index("idx_car_id").on(table.carId),
+  // Index on bidderEmail for user's bids
+  bidderEmailIdx: index("idx_bidder_email").on(table.bidderEmail),
+  // Composite index for ordered bid history
+  carBidTimeIdx: index("idx_car_bid_time").on(table.carId, table.bidTime)
+}));
 
 // Contact form submissions
 export const contacts = pgTable("contacts", {
@@ -125,7 +154,14 @@ export const contacts = pgTable("contacts", {
   message: text("message").notNull(),
   status: text("status").default("new"), // new, responded, resolved
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Index on status for filtering
+  statusIdx: index("idx_contacts_status").on(table.status),
+  // Index on createdAt for time-based sorting
+  createdAtIdx: index("idx_contacts_created_at").on(table.createdAt),
+  // Composite index for admin contact queue
+  statusCreatedAtIdx: index("idx_contacts_status_created").on(table.status, table.createdAt)
+}));
 
 // OTP verification tracking
 export const otpVerifications = pgTable("otp_verifications", {
@@ -141,7 +177,7 @@ export const otpVerifications = pgTable("otp_verifications", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   // Index for efficient lookups
-  phoneCountryIdx: sql`INDEX idx_phone_country ON otp_verifications(phone, country_code, expires_at)`
+  phoneCountryIdx: index("idx_phone_country").on(table.phone, table.countryCode, table.expiresAt)
 }));
 
 // WhatsApp message tracking
@@ -151,11 +187,58 @@ export const whatsappMessages = pgTable("whatsapp_messages", {
   countryCode: text("country_code"),
   messageType: text("message_type").notNull(), // "appointment_confirmation", "booking_request", "status_update"
   content: text("content").notNull(),
-  status: text("status").notNull().default("sent"), // sent, delivered, read, failed
+  status: text("status").notNull().default("pending"), // pending, sent, delivered, read, failed, retry_failed
   appointmentId: varchar("appointment_id").references(() => appointments.id),
+  messageSid: text("message_sid"), // Twilio message SID for webhook matching
   providerResponse: text("provider_response"), // Store API response for debugging
+  // Retry tracking fields
+  retryCount: integer("retry_count").default(0),
+  maxRetries: integer("max_retries").default(3),
+  lastRetryAt: timestamp("last_retry_at"),
+  nextRetryAt: timestamp("next_retry_at"), // Scheduled next retry time
+  failureReason: text("failure_reason"), // Store last failure reason
   sentAt: timestamp("sent_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Index on status for filtering messages
+  statusIdx: index("idx_whatsapp_status").on(table.status),
+  // Index on appointmentId for appointment messages
+  appointmentIdIdx: index("idx_whatsapp_appointment").on(table.appointmentId),
+  // Index on messageSid for webhook matching
+  messageSidIdx: index("idx_message_sid").on(table.messageSid),
+  // Composite index for retry processing queue
+  statusRetryIdx: index("idx_status_retry").on(table.status, table.nextRetryAt)
+}));
+
+// Admin audit log tracking for security and compliance
+export const adminAuditLogs = pgTable("admin_audit_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  adminUserId: varchar("admin_user_id").notNull().references(() => users.id),
+  action: text("action").notNull(), // "create", "update", "delete", "role_change", "status_update"
+  resource: text("resource").notNull(), // "user", "service", "appointment", "location", "car"
+  resourceId: varchar("resource_id"), // ID of the affected resource
+  oldValue: text("old_value"), // JSON string of previous state (for updates)
+  newValue: text("new_value"), // JSON string of new state
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  additionalInfo: text("additional_info"), // Any extra context
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index for efficient admin activity lookups
+  adminUserIdx: index("idx_admin_user").on(table.adminUserId, table.createdAt),
+  // Index for resource lookups
+  resourceIdx: index("idx_resource").on(table.resource, table.resourceId, table.createdAt)
+}));
+
+// Admin rate limiting storage for persistent rate limits
+export const adminRateLimits = pgTable("admin_rate_limits", {
+  userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  count: integer("count").notNull().default(0),
+  resetTime: timestamp("reset_time").notNull(),
+  lastUpdate: timestamp("last_update").defaultNow().notNull(),
+}, (table) => ({
+  // Index for efficient cleanup of expired entries
+  resetTimeIdx: index("idx_reset_time").on(table.resetTime)
+}));
 
 // Insert schemas for validation
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -227,6 +310,33 @@ export const insertContactSchema = createInsertSchema(contacts).omit({
 
 export const insertLocationSchema = createInsertSchema(locations).omit({
   id: true,
+}).extend({
+  name: z.string()
+    .min(1, "Name is required")
+    .min(3, "Name must be at least 3 characters")
+    .max(100, "Name cannot exceed 100 characters"),
+  address: z.string()
+    .min(1, "Address is required")
+    .min(10, "Address must be at least 10 characters")
+    .max(300, "Address cannot exceed 300 characters"),
+  phone: z.string()
+    .min(1, "Phone is required")
+    .regex(/^[0-9]{7,15}$/, "Phone number must be 7-15 digits"),
+  email: z.string()
+    .min(1, "Email is required")
+    .email("Please enter a valid email address")
+    .toLowerCase(),
+  hours: z.string()
+    .min(1, "Hours are required")
+    .min(5, "Hours must be at least 5 characters (e.g., '9-6')")
+    .max(100, "Hours cannot exceed 100 characters"),
+  rating: z.string()
+    .regex(/^\d(\.\d)?$/, "Rating must be a number between 0.0 and 5.0")
+    .refine((val) => {
+      const num = parseFloat(val);
+      return num >= 0 && num <= 5;
+    }, "Rating must be between 0.0 and 5.0")
+    .default("4.5"),
 });
 
 export const insertBidSchema = createInsertSchema(bids).omit({
@@ -244,7 +354,23 @@ export const insertOtpVerificationSchema = createInsertSchema(otpVerifications).
 export const insertWhatsAppMessageSchema = createInsertSchema(whatsappMessages).omit({
   id: true,
   sentAt: true,
+  retryCount: true,
+  lastRetryAt: true,
+  nextRetryAt: true,
+  failureReason: true,
 });
+
+export const insertAdminAuditLogSchema = createInsertSchema(adminAuditLogs).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertAdminRateLimitSchema = createInsertSchema(adminRateLimits).omit({
+  lastUpdate: true,
+});
+
+// Export the update contact schema
+export type UpdateContactRequest = z.infer<typeof updateContactSchema>;
 
 // Place bid schema with validation
 export const placeBidSchema = z.object({
@@ -326,6 +452,84 @@ export const updateProfileSchema = z.object({
   profileImage: z.string().url("Invalid image URL").optional(),
 });
 
+// Contact status update schema for admin management
+export const updateContactSchema = z.object({
+  status: z.enum(["new", "responded", "resolved"], {
+    errorMap: () => ({ message: "Status must be one of: new, responded, resolved" })
+  })
+});
+
+// WhatsApp messaging schemas for standardized validation
+export const whatsappConfirmationSchema = z.object({
+  phone: z.string()
+    .min(10, "Phone number must be at least 10 digits")
+    .max(15, "Phone number cannot exceed 15 digits")
+    .regex(/^\d+$/, "Phone number must contain only digits"),
+  countryCode: z.string()
+    .regex(/^\+\d{1,4}$/, "Invalid country code format"),
+  appointmentData: z.object({
+    serviceName: z.string().min(1, "Service name is required"),
+    locationName: z.string().min(1, "Location name is required"),
+    dateTime: z.string().min(1, "Date and time is required"),
+    customerName: z.string().min(1, "Customer name is required"),
+    mechanicName: z.string().optional(),
+    estimatedDuration: z.string().min(1, "Estimated duration is required"),
+    price: z.number().positive("Price must be positive").optional()
+  }),
+  appointmentId: z.string().optional()
+});
+
+export const whatsappStatusUpdateSchema = z.object({
+  phone: z.string()
+    .min(10, "Phone number must be at least 10 digits")
+    .max(15, "Phone number cannot exceed 15 digits")
+    .regex(/^\d+$/, "Phone number must contain only digits"),
+  countryCode: z.string()
+    .regex(/^\+\d{1,4}$/, "Invalid country code format"),
+  statusData: z.object({
+    status: z.enum(["confirmed", "in-progress", "completed", "cancelled"], {
+      errorMap: () => ({ message: "Status must be one of: confirmed, in-progress, completed, cancelled" })
+    }),
+    serviceName: z.string().min(1, "Service name is required"),
+    locationName: z.string().min(1, "Location name is required"),
+    dateTime: z.string().min(1, "Date and time is required"),
+    customerName: z.string().min(1, "Customer name is required"),
+    mechanicName: z.string().optional(),
+    notes: z.string().optional()
+  }),
+  appointmentId: z.string().optional()
+});
+
+export const whatsappBidNotificationSchema = z.object({
+  phone: z.string()
+    .min(10, "Phone number must be at least 10 digits")
+    .max(15, "Phone number cannot exceed 15 digits")
+    .regex(/^\d+$/, "Phone number must contain only digits"),
+  countryCode: z.string()
+    .regex(/^\+\d{1,4}$/, "Invalid country code format"),
+  bidData: z.object({
+    carMake: z.string().min(1, "Car make is required"),
+    carModel: z.string().min(1, "Car model is required"),
+    carYear: z.number().int().positive("Car year must be a positive integer"),
+    bidAmount: z.number().int().positive("Bid amount must be positive"),
+    currentHighestBid: z.number().int().positive("Current highest bid must be positive").optional(),
+    auctionEndTime: z.string().min(1, "Auction end time is required"),
+    bidderName: z.string().min(1, "Bidder name is required")
+  })
+});
+
+// WhatsApp webhook validation schema
+export const whatsappWebhookSchema = z.object({
+  MessageSid: z.string().min(1, "MessageSid is required"),
+  MessageStatus: z.enum(["queued", "sent", "delivered", "read", "failed", "undelivered"], {
+    errorMap: () => ({ message: "Invalid MessageStatus value" })
+  }),
+  From: z.string().optional(),
+  To: z.string().optional(),
+  ErrorCode: z.string().optional(),
+  ErrorMessage: z.string().optional()
+});
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -356,6 +560,14 @@ export type InsertOtpVerification = z.infer<typeof insertOtpVerificationSchema>;
 
 export type WhatsAppMessage = typeof whatsappMessages.$inferSelect;
 export type InsertWhatsAppMessage = z.infer<typeof insertWhatsAppMessageSchema>;
+
+// Enhanced WhatsApp status types
+export type WhatsAppMessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed' | 'retry_failed';
+
+export type AdminAuditLog = typeof adminAuditLogs.$inferSelect;
+export type InsertAdminAuditLog = z.infer<typeof insertAdminAuditLogSchema>;
+export type AdminRateLimit = typeof adminRateLimits.$inferSelect;
+export type InsertAdminRateLimit = z.infer<typeof insertAdminRateLimitSchema>;
 
 // Enhanced appointment type with resolved names for frontend display
 export type AppointmentWithDetails = Appointment & {

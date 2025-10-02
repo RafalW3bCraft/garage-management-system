@@ -27,7 +27,12 @@ import {
 } from "lucide-react";
 import type { Service } from "@shared/schema";
 
-// Icon mapping function
+/**
+ * Maps icon names to their corresponding Lucide icon components
+ * 
+ * @param {string | null} iconName - Name of the icon to retrieve
+ * @returns {JSX.Element} The corresponding icon component with default styling
+ */
 const getIconComponent = (iconName: string | null) => {
   const iconMap: Record<string, JSX.Element> = {
     'droplets': <Droplets className="h-6 w-6" />,
@@ -43,6 +48,17 @@ const getIconComponent = (iconName: string | null) => {
   return iconMap[iconName || ''] || <Wrench className="h-6 w-6" />;
 };
 
+/**
+ * Services page component displaying all available automotive services with filtering capabilities.
+ * Features include search, category filtering, price range filtering, and service grid display.
+ * 
+ * @returns {JSX.Element} The rendered services page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/services" component={Services} />
+ * ```
+ */
 export default function Services() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
@@ -114,21 +130,21 @@ export default function Services() {
       {/* Filters */}
       <section className="py-8 border-b">
         <div className="container mx-auto px-4">
-          <div className="flex flex-col lg:flex-row gap-4 items-center">
-            <div className="relative flex-1 max-w-md">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="relative w-full xl:col-span-2">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
               <Input
                 placeholder="Search services..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10"
+                className="pl-10 min-h-11 w-full"
                 data-testid="input-search-services"
               />
             </div>
             
-            <div className="flex gap-4">
+            <div className="w-full">
               <Select value={selectedCategory} onValueChange={setSelectedCategory}>
-                <SelectTrigger className="w-48" data-testid="select-category">
+                <SelectTrigger className="min-h-11 w-full" data-testid="select-category">
                   <SelectValue placeholder="Select category" />
                 </SelectTrigger>
                 <SelectContent>
@@ -139,9 +155,11 @@ export default function Services() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
 
+            <div className="w-full">
               <Select value={priceRange} onValueChange={setPriceRange}>
-                <SelectTrigger className="w-48" data-testid="select-price-range">
+                <SelectTrigger className="min-h-11 w-full" data-testid="select-price-range">
                   <SelectValue placeholder="Select price range" />
                 </SelectTrigger>
                 <SelectContent>
@@ -212,7 +230,7 @@ export default function Services() {
                 </div>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="grid sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredServices.map((service, index) => (
                   <ServiceCard 
                     key={service.id} 

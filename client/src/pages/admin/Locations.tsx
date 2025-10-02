@@ -19,9 +19,23 @@ import { z } from "zod";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
-// Form schema
+/**
+ * Location form data type inferred from Zod schema
+ */
 type LocationFormData = z.infer<typeof insertLocationSchema>;
 
+/**
+ * Admin locations management component for managing service center locations.
+ * Supports creating, editing, and deleting locations with contact information,
+ * operating hours, and rating management.
+ * 
+ * @returns {JSX.Element} The rendered admin locations management page
+ * 
+ * @example
+ * ```tsx
+ * <Route path="/admin/locations" component={AdminLocations} />
+ * ```
+ */
 export default function AdminLocations() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
@@ -291,7 +305,7 @@ export default function AdminLocations() {
                     )}
                   />
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FormField
                       control={form.control}
                       name="phone"
@@ -329,7 +343,7 @@ export default function AdminLocations() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FormField
                       control={form.control}
                       name="hours"
@@ -447,7 +461,7 @@ export default function AdminLocations() {
                     )}
                   />
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FormField
                       control={editForm.control}
                       name="phone"
@@ -485,7 +499,7 @@ export default function AdminLocations() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <FormField
                       control={editForm.control}
                       name="hours"

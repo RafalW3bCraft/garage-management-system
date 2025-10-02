@@ -20,6 +20,10 @@ import {
   type InsertOtpVerification,
   type WhatsAppMessage,
   type InsertWhatsAppMessage,
+  type AdminAuditLog,
+  type InsertAdminAuditLog,
+  type AdminRateLimit,
+  type InsertAdminRateLimit,
   users,
   services,
   appointments,
@@ -29,11 +33,20 @@ import {
   locations,
   bids,
   otpVerifications,
-  whatsappMessages
+  whatsappMessages,
+  adminAuditLogs,
+  adminRateLimits
 } from "@shared/schema";
 import { getDb } from "./db";
 import { eq, and, desc, asc, gte, lte, ne, isNull, or, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
+import { LRUCache } from "lru-cache";
+
+// Database error interface
+interface DatabaseError extends Error {
+  code?: string;
+  constraint?: string;
+}
 
 export interface IStorage {
   // Users
@@ -65,6 +78,7 @@ export interface IStorage {
   // Appointments
   getAllAppointments(): Promise<AppointmentWithDetails[]>;
   getAppointment(id: string): Promise<Appointment | undefined>;
+  getAppointmentWithDetails(id: string): Promise<AppointmentWithDetails | undefined>;
   getAppointmentsByCustomer(customerId: string): Promise<AppointmentWithDetails[]>;
   getAppointmentsByService(serviceId: string): Promise<Appointment[]>;
   createAppointment(appointment: InsertAppointment): Promise<Appointment>;
@@ -85,6 +99,8 @@ export interface IStorage {
   // Contacts
   createContact(contact: InsertContact): Promise<Contact>;
   getAllContacts(): Promise<Contact[]>;
+  updateContact(id: string, updates: Partial<Contact>): Promise<Contact | undefined>;
+  getContactsWithFilter(options: { page?: number; limit?: number; status?: string }): Promise<{ contacts: Contact[]; total: number; hasMore: boolean }>;
   
   // Locations
   getAllLocations(): Promise<Location[]>;
@@ -117,9 +133,43 @@ export interface IStorage {
   // WhatsApp Messages
   logWhatsAppMessage(message: InsertWhatsAppMessage): Promise<WhatsAppMessage>;
   getWhatsAppMessageHistory(phone: string, limit?: number): Promise<WhatsAppMessage[]>;
+  updateWhatsAppMessage(id: string, updates: Partial<WhatsAppMessage>): Promise<boolean>;
+  getWhatsAppMessage(id: string): Promise<WhatsAppMessage | null>;
+  updateWhatsAppMessageStatus(messageSid: string, updates: { status: string; providerResponse?: string }): Promise<boolean>;
+  getWhatsAppMessages(options: { page: number; limit: number; status?: string }): Promise<WhatsAppMessage[]>;
+  
+  // Admin Audit Logs
+  logAdminAction(auditLog: InsertAdminAuditLog): Promise<AdminAuditLog>;
+  getAdminAuditLogs(adminUserId?: string, limit?: number, offset?: number): Promise<AdminAuditLog[]>;
+  getAdminAuditLogsCount(adminUserId?: string): Promise<number>;
+  getResourceAuditLogs(resource: string, resourceId: string, limit?: number): Promise<AdminAuditLog[]>;
+  // Rate limiting storage - atomic operations
+  checkAndIncrementRateLimit(userId: string, windowMs: number): Promise<{ count: number; resetTime: number; withinWindow: boolean }>;
+  cleanupExpiredRateLimits(): Promise<number>;
 }
 
 export class DatabaseStorage implements IStorage {
+  private cache: LRUCache<string, any>;
+
+  constructor() {
+    this.cache = new LRUCache({
+      max: 500,
+      ttl: 1000 * 60 * 5,
+      updateAgeOnGet: false,
+      updateAgeOnHas: false
+    });
+  }
+
+  private invalidateServicesCache(): void {
+    this.cache.delete('all_services');
+    const categoryKeys = Array.from(this.cache.keys()).filter(key => key.startsWith('services_category_'));
+    categoryKeys.forEach(key => this.cache.delete(key));
+  }
+
+  private invalidateLocationsCache(): void {
+    this.cache.delete('all_locations');
+  }
+
   // Users
   async getUser(id: string): Promise<User | undefined> {
     const db = await getDb();
@@ -141,8 +191,43 @@ export class DatabaseStorage implements IStorage {
 
   async createUser(user: InsertUser): Promise<User> {
     const db = await getDb();
-    const result = await db.insert(users).values(user).returning();
-    return result[0];
+    try {
+      const result = await db.insert(users).values(user).returning();
+      return result[0];
+    } catch (error) {
+      const err = error as DatabaseError;
+      // Handle database constraint violations
+      if (err.code === '23505') {
+        // Unique constraint violation
+        if (err.constraint?.includes('email')) {
+          throw {
+            status: 409,
+            message: "A user with this email address already exists."
+          };
+        }
+        if (err.constraint?.includes('phone')) {
+          throw {
+            status: 409,
+            message: "A user with this phone number already exists."
+          };
+        }
+        if (err.constraint?.includes('google')) {
+          throw {
+            status: 409,
+            message: "This Google account is already linked to another user."
+          };
+        }
+      }
+      if (err.code === '23502') {
+        // Not null constraint violation
+        throw {
+          status: 400,
+          message: "Missing required user information. Please provide all required fields."
+        };
+      }
+      // Re-throw other errors to be handled by route handlers
+      throw err;
+    }
   }
 
   async updateUser(id: string, updates: Partial<User>): Promise<User | undefined> {
@@ -184,12 +269,13 @@ export class DatabaseStorage implements IStorage {
       }
       
       return result[0];
-    } catch (error: any) {
+    } catch (error) {
+      const err = error as DatabaseError;
       // Handle unique constraint violations
-      if (error.code === '23505' && error.constraint?.includes('google')) {
+      if (err.code === '23505' && err.constraint?.includes('google')) {
         throw new Error("This Google account is already linked to another user");
       }
-      throw error;
+      throw err;
     }
   }
 
@@ -241,8 +327,17 @@ export class DatabaseStorage implements IStorage {
 
   // Services
   async getAllServices(): Promise<Service[]> {
+    const cacheKey = 'all_services';
+    const cached = this.cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const db = await getDb();
-    return await db.select().from(services).orderBy(asc(services.category), asc(services.title));
+    const result = await db.select().from(services).orderBy(asc(services.category), asc(services.title));
+    
+    this.cache.set(cacheKey, result);
+    return result;
   }
 
   async getService(id: string): Promise<Service | undefined> {
@@ -252,25 +347,63 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getServicesByCategory(category: string): Promise<Service[]> {
+    const cacheKey = `services_category_${category}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const db = await getDb();
-    return await db.select().from(services).where(eq(services.category, category)).orderBy(asc(services.title));
+    const result = await db.select().from(services).where(eq(services.category, category)).orderBy(asc(services.title));
+    
+    this.cache.set(cacheKey, result);
+    return result;
   }
 
   async createService(service: InsertService): Promise<Service> {
     const db = await getDb();
-    const result = await db.insert(services).values(service).returning();
-    return result[0];
+    try {
+      const result = await db.insert(services).values(service).returning();
+      
+      this.invalidateServicesCache();
+      
+      return result[0];
+    } catch (error) {
+      const err = error as DatabaseError;
+      // Handle database constraint violations
+      if (err.code === '23505') {
+        // Unique constraint violation
+        throw {
+          status: 409,
+          message: "A service with this name or identifier already exists."
+        };
+      }
+      if (err.code === '23502') {
+        // Not null constraint violation
+        throw {
+          status: 400,
+          message: "Missing required service information. Please provide all required fields."
+        };
+      }
+      // Re-throw other errors to be handled by route handlers
+      throw err;
+    }
   }
 
   async updateService(id: string, updates: Partial<Service>): Promise<Service | undefined> {
     const db = await getDb();
     const result = await db.update(services).set(updates).where(eq(services.id, id)).returning();
+    
+    this.invalidateServicesCache();
+    
     return result[0];
   }
 
   async deleteService(id: string): Promise<void> {
     const db = await getDb();
     await db.delete(services).where(eq(services.id, id));
+    
+    this.invalidateServicesCache();
   }
 
   // Appointments
@@ -310,6 +443,40 @@ export class DatabaseStorage implements IStorage {
   async getAppointment(id: string): Promise<Appointment | undefined> {
     const db = await getDb();
     const result = await db.select().from(appointments).where(eq(appointments.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getAppointmentWithDetails(id: string): Promise<AppointmentWithDetails | undefined> {
+    const db = await getDb();
+    
+    // Get single appointment with service, location, and customer names resolved
+    const result = await db
+      .select({
+        // Appointment fields
+        id: appointments.id,
+        customerId: appointments.customerId,
+        serviceId: appointments.serviceId,
+        locationId: appointments.locationId,
+        carDetails: appointments.carDetails,
+        dateTime: appointments.dateTime,
+        status: appointments.status,
+        mechanicName: appointments.mechanicName,
+        estimatedDuration: appointments.estimatedDuration,
+        price: appointments.price,
+        notes: appointments.notes,
+        createdAt: appointments.createdAt,
+        // Resolved names
+        serviceName: services.title,
+        locationName: locations.name,
+        customerName: customers.name
+      })
+      .from(appointments)
+      .innerJoin(services, eq(appointments.serviceId, services.id))
+      .innerJoin(locations, eq(appointments.locationId, locations.id))
+      .innerJoin(customers, eq(appointments.customerId, customers.id))
+      .where(eq(appointments.id, id))
+      .limit(1);
+    
     return result[0];
   }
 
@@ -356,21 +523,33 @@ export class DatabaseStorage implements IStorage {
   async createAppointment(appointment: InsertAppointment): Promise<Appointment> {
     const db = await getDb();
     
-    // Check for appointment conflicts before creating
-    const hasConflict = await this.checkAppointmentConflict(
-      appointment.locationId, 
-      new Date(appointment.dateTime)
-    );
-    
-    if (hasConflict) {
-      throw {
-        status: 409,
-        message: "Appointment time conflicts with existing booking. Please choose a different time."
-      };
-    }
-    
-    const result = await db.insert(appointments).values(appointment).returning();
-    return result[0];
+    // Use a database transaction to ensure atomicity
+    return await db.transaction(async (tx) => {
+      const targetDateTime = new Date(appointment.dateTime);
+      const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
+      const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
+      
+      // Check for conflicts within the transaction (ensuring consistency)
+      const conflictingAppointments = await tx.select()
+        .from(appointments)
+        .where(and(
+          eq(appointments.locationId, appointment.locationId),
+          gte(appointments.dateTime, startWindow),
+          lte(appointments.dateTime, endWindow),
+          eq(appointments.status, "confirmed")
+        ));
+      
+      if (conflictingAppointments.length > 0) {
+        throw {
+          status: 409,
+          message: "Appointment time conflicts with existing booking. Please choose a different time."
+        };
+      }
+      
+      // No conflicts found, safe to create appointment
+      const result = await tx.insert(appointments).values(appointment).returning();
+      return result[0];
+    });
   }
 
   async updateAppointmentStatus(id: string, status: string): Promise<Appointment | undefined> {
@@ -381,12 +560,33 @@ export class DatabaseStorage implements IStorage {
       return await this.updateAppointmentStatusWithConflictCheck(id, status);
     }
     
-    // For other status changes, proceed normally
-    const result = await db.update(appointments)
-      .set({ status })
-      .where(eq(appointments.id, id))
-      .returning();
-    return result[0];
+    // Wrap all status updates in transactions for consistency
+    // This ensures atomicity if future enhancements add related data changes
+    return await db.transaction(async (tx) => {
+      // Get current appointment to verify it exists
+      const currentAppointment = await tx.select()
+        .from(appointments)
+        .where(eq(appointments.id, id))
+        .limit(1);
+      
+      if (!currentAppointment[0]) {
+        throw {
+          status: 404,
+          message: "Appointment not found"
+        };
+      }
+      
+      // Update status within transaction
+      const result = await tx.update(appointments)
+        .set({ status })
+        .where(eq(appointments.id, id))
+        .returning();
+      
+      // Future enhancement point: Add related data updates here
+      // For example: notification logs, audit trails, related service updates
+      
+      return result[0];
+    });
   }
 
   async updateAppointmentStatusWithConflictCheck(id: string, status: string): Promise<Appointment | undefined> {
@@ -443,28 +643,40 @@ export class DatabaseStorage implements IStorage {
   async rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined> {
     const db = await getDb();
     
-    // Check for conflicts with the new appointment time (excluding current appointment)
-    const hasConflict = await this.checkAppointmentConflict(
-      locationId, 
-      new Date(dateTime),
-      id  // Exclude current appointment from conflict check
-    );
-    
-    if (hasConflict) {
-      throw {
-        status: 409,
-        message: "Rescheduled time conflicts with existing booking. Please choose a different time."
-      };
-    }
-    
-    const result = await db.update(appointments)
-      .set({ 
-        dateTime: new Date(dateTime),
-        locationId: locationId 
-      })
-      .where(eq(appointments.id, id))
-      .returning();
-    return result[0];
+    // Use a database transaction to ensure atomicity
+    return await db.transaction(async (tx) => {
+      const targetDateTime = new Date(dateTime);
+      const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
+      const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
+      
+      // Check for conflicts within the transaction (ensuring consistency)
+      const conflictingAppointments = await tx.select()
+        .from(appointments)
+        .where(and(
+          eq(appointments.locationId, locationId),
+          gte(appointments.dateTime, startWindow),
+          lte(appointments.dateTime, endWindow),
+          eq(appointments.status, "confirmed"),
+          ne(appointments.id, id) // Exclude current appointment from conflict check
+        ));
+      
+      if (conflictingAppointments.length > 0) {
+        throw {
+          status: 409,
+          message: "Rescheduled time conflicts with existing booking. Please choose a different time."
+        };
+      }
+      
+      // No conflicts found, safe to reschedule appointment
+      const result = await tx.update(appointments)
+        .set({ 
+          dateTime: new Date(dateTime),
+          locationId: locationId 
+        })
+        .where(eq(appointments.id, id))
+        .returning();
+      return result[0];
+    });
   }
 
   async checkAppointmentConflict(locationId: string, dateTime: Date, excludeAppointmentId?: string): Promise<boolean> {
@@ -534,17 +746,59 @@ export class DatabaseStorage implements IStorage {
 
   async updateCar(id: string, updates: Partial<Car>): Promise<Car | undefined> {
     const db = await getDb();
-    const result = await db.update(cars)
-      .set(updates)
-      .where(eq(cars.id, id))
-      .returning();
-    return result[0];
+    try {
+      const result = await db.update(cars)
+        .set(updates)
+        .where(eq(cars.id, id))
+        .returning();
+      return result[0];
+    } catch (error) {
+      const err = error as DatabaseError;
+      // Handle database constraint violations
+      if (err.code === '23505') {
+        // Unique constraint violation
+        throw {
+          status: 409,
+          message: "A car with this registration number or identifier already exists."
+        };
+      }
+      if (err.code === '23503') {
+        // Foreign key constraint violation
+        throw {
+          status: 400,
+          message: "Invalid reference in car data. Please check that all related records exist."
+        };
+      }
+      if (err.code === '23502') {
+        // Not null constraint violation
+        throw {
+          status: 400,
+          message: "Missing required car information. Please provide all required fields."
+        };
+      }
+      // Re-throw other errors to be handled by route handlers
+      throw err;
+    }
   }
 
   async deleteCar(id: string): Promise<boolean> {
     const db = await getDb();
-    const result = await db.delete(cars).where(eq(cars.id, id)).returning();
-    return result.length > 0;
+    try {
+      const result = await db.delete(cars).where(eq(cars.id, id)).returning();
+      return result.length > 0;
+    } catch (error) {
+      const err = error as DatabaseError;
+      // Handle database constraint violations
+      if (err.code === '23503') {
+        // Foreign key constraint violation - car is referenced by other records
+        throw {
+          status: 409,
+          message: "Cannot delete car as it is referenced by other records (appointments, bids, etc.). Please remove related records first."
+        };
+      }
+      // Re-throw other errors to be handled by route handlers
+      throw err;
+    }
   }
 
   // Contacts
@@ -559,10 +813,55 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(contacts).orderBy(desc(contacts.createdAt));
   }
 
+  async updateContact(id: string, updates: Partial<Contact>): Promise<Contact | undefined> {
+    const db = await getDb();
+    const result = await db.update(contacts)
+      .set(updates)
+      .where(eq(contacts.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async getContactsWithFilter(options: { page?: number; limit?: number; status?: string }): Promise<{ contacts: Contact[]; total: number; hasMore: boolean }> {
+    const db = await getDb();
+    const { page = 1, limit = 50, status } = options;
+    const offset = (page - 1) * limit;
+
+    // Build the query with optional status filter
+    const baseQuery = db.select().from(contacts);
+    const query = status ? baseQuery.where(eq(contacts.status, status)) : baseQuery;
+
+    // Get the total count for pagination
+    const totalQuery = db.select({ count: sql<number>`cast(count(*) as integer)` }).from(contacts);
+    const totalWithFilter = status ? totalQuery.where(eq(contacts.status, status)) : totalQuery;
+    const [{ count: total }] = await totalWithFilter;
+
+    // Get the paginated results
+    const contactsResult = await query
+      .orderBy(desc(contacts.createdAt))
+      .offset(offset)
+      .limit(limit);
+
+    return {
+      contacts: contactsResult,
+      total,
+      hasMore: contactsResult.length === limit && offset + limit < total
+    };
+  }
+
   // Locations
   async getAllLocations(): Promise<Location[]> {
+    const cacheKey = 'all_locations';
+    const cached = this.cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const db = await getDb();
-    return await db.select().from(locations).orderBy(asc(locations.name));
+    const result = await db.select().from(locations).orderBy(asc(locations.name));
+    
+    this.cache.set(cacheKey, result);
+    return result;
   }
 
   async getLocation(id: string): Promise<Location | undefined> {
@@ -574,6 +873,9 @@ export class DatabaseStorage implements IStorage {
   async createLocation(location: InsertLocation): Promise<Location> {
     const db = await getDb();
     const result = await db.insert(locations).values(location).returning();
+    
+    this.invalidateLocationsCache();
+    
     return result[0];
   }
 
@@ -583,12 +885,18 @@ export class DatabaseStorage implements IStorage {
       .set(updates)
       .where(eq(locations.id, id))
       .returning();
+    
+    this.invalidateLocationsCache();
+    
     return result[0];
   }
 
   async deleteLocation(id: string): Promise<boolean> {
     const db = await getDb();
     const result = await db.delete(locations).where(eq(locations.id, id));
+    
+    this.invalidateLocationsCache();
+    
     return (result.rowCount ?? 0) > 0;
   }
 
@@ -768,6 +1076,159 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(whatsappMessages.sentAt))
       .limit(limit);
   }
+  
+  // Additional WhatsApp message methods for webhook and admin functionality
+  async updateWhatsAppMessageStatus(messageSid: string, updates: { status: string; providerResponse?: string }): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.update(whatsappMessages)
+      .set({ 
+        status: updates.status,
+        providerResponse: updates.providerResponse || null
+      })
+      .where(eq(whatsappMessages.messageSid, messageSid))
+      .returning();
+    return result.length > 0;
+  }
+  
+  async getWhatsAppMessages(options: { page: number; limit: number; status?: string }): Promise<WhatsAppMessage[]> {
+    const db = await getDb();
+    
+    // Build query with proper TypeScript support
+    const baseQuery = db.select().from(whatsappMessages)
+      .orderBy(desc(whatsappMessages.sentAt))
+      .offset((options.page - 1) * options.limit)
+      .limit(options.limit);
+    
+    if (options.status) {
+      return await baseQuery.where(eq(whatsappMessages.status, options.status));
+    }
+    
+    return await baseQuery;
+  }
+  
+  async getWhatsAppMessage(id: string): Promise<WhatsAppMessage | null> {
+    const db = await getDb();
+    const result = await db.select().from(whatsappMessages)
+      .where(eq(whatsappMessages.id, id))
+      .limit(1);
+    return result[0] || null;
+  }
+  
+  async updateWhatsAppMessage(id: string, updates: Partial<WhatsAppMessage>): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.update(whatsappMessages)
+      .set(updates)
+      .where(eq(whatsappMessages.id, id))
+      .returning();
+    return result.length > 0;
+  }
+  
+  // Admin Audit Logs
+  async logAdminAction(auditLog: InsertAdminAuditLog): Promise<AdminAuditLog> {
+    const db = await getDb();
+    const result = await db.insert(adminAuditLogs).values(auditLog).returning();
+    return result[0];
+  }
+
+  async getAdminAuditLogs(adminUserId?: string, limit: number = 50, offset: number = 0): Promise<AdminAuditLog[]> {
+    const db = await getDb();
+    const query = db.select().from(adminAuditLogs);
+    
+    if (adminUserId) {
+      return await query
+        .where(eq(adminAuditLogs.adminUserId, adminUserId))
+        .orderBy(desc(adminAuditLogs.createdAt))
+        .limit(limit)
+        .offset(offset);
+    }
+    
+    return await query
+      .orderBy(desc(adminAuditLogs.createdAt))
+      .limit(limit)
+      .offset(offset);
+  }
+
+  async getAdminAuditLogsCount(adminUserId?: string): Promise<number> {
+    const db = await getDb();
+    const query = db.select({ count: sql<number>`count(*)` }).from(adminAuditLogs);
+    
+    if (adminUserId) {
+      const result = await query.where(eq(adminAuditLogs.adminUserId, adminUserId));
+      return Number(result[0]?.count || 0);
+    }
+    
+    const result = await query;
+    return Number(result[0]?.count || 0);
+  }
+
+  async getResourceAuditLogs(resource: string, resourceId: string, limit: number = 50): Promise<AdminAuditLog[]> {
+    const db = await getDb();
+    return await db.select().from(adminAuditLogs)
+      .where(and(
+        eq(adminAuditLogs.resource, resource),
+        eq(adminAuditLogs.resourceId, resourceId)
+      ))
+      .orderBy(desc(adminAuditLogs.createdAt))
+      .limit(limit);
+  }
+
+  // Atomic rate limiting storage implementation
+  async checkAndIncrementRateLimit(userId: string, windowMs: number): Promise<{ count: number; resetTime: number; withinWindow: boolean }> {
+    const db = await getDb();
+    const now = Date.now();
+    const newResetTime = new Date(now + windowMs);
+    const nowDate = new Date(now);
+    
+    // Atomic operation: INSERT ON CONFLICT with conditional logic
+    // This handles both increment and window reset in a single atomic operation
+    const result = await db.insert(adminRateLimits)
+      .values({
+        userId,
+        count: 1,
+        resetTime: newResetTime,
+        lastUpdate: nowDate
+      })
+      .onConflictDoUpdate({
+        target: adminRateLimits.userId,
+        set: {
+          // Use CASE to handle window expiry atomically
+          count: sql`CASE 
+            WHEN ${adminRateLimits.resetTime} > ${nowDate} THEN ${adminRateLimits.count} + 1
+            ELSE 1
+          END`,
+          resetTime: sql`CASE 
+            WHEN ${adminRateLimits.resetTime} > ${nowDate} THEN ${adminRateLimits.resetTime}
+            ELSE ${newResetTime}
+          END`,
+          lastUpdate: nowDate
+        }
+      })
+      .returning({
+        count: adminRateLimits.count,
+        resetTime: adminRateLimits.resetTime
+      });
+    
+    const record = result[0];
+    const resetTimeMs = record.resetTime.getTime();
+    const withinWindow = now < resetTimeMs;
+    
+    return {
+      count: record.count,
+      resetTime: resetTimeMs,
+      withinWindow
+    };
+  }
+
+  async cleanupExpiredRateLimits(): Promise<number> {
+    const db = await getDb();
+    const now = new Date();
+    
+    const result = await db.delete(adminRateLimits)
+      .where(lte(adminRateLimits.resetTime, now))
+      .returning({ userId: adminRateLimits.userId });
+    
+    return result.length;
+  }
 }
 
 // MemStorage with sample data for fallback
@@ -779,6 +1240,8 @@ export class MemStorage implements IStorage {
   private cars: Map<string, Car> = new Map();
   private contacts: Map<string, Contact> = new Map();
   private locations: Map<string, Location> = new Map();
+  private auditLogs: Map<string, AdminAuditLog> = new Map();
+  private rateLimits: Map<string, { count: number; resetTime: number }> = new Map();
 
   constructor() {
     this.seedData();
@@ -1175,6 +1638,25 @@ export class MemStorage implements IStorage {
     return this.appointments.get(id);
   }
 
+  async getAppointmentWithDetails(id: string): Promise<AppointmentWithDetails | undefined> {
+    const appointment = this.appointments.get(id);
+    if (!appointment) {
+      return undefined;
+    }
+    
+    // Resolve service, location, and customer names
+    const service = this.services.get(appointment.serviceId);
+    const location = this.locations.get(appointment.locationId);
+    const customer = this.customers.get(appointment.customerId);
+    
+    return {
+      ...appointment,
+      serviceName: service?.title || `Unknown Service (${appointment.serviceId})`,
+      locationName: location?.name || `Unknown Location (${appointment.locationId})`,
+      customerName: customer?.name || `Unknown Customer (${appointment.customerId})`
+    };
+  }
+
   async getAppointmentsByCustomer(customerId: string): Promise<AppointmentWithDetails[]> {
     const customerAppointments = Array.from(this.appointments.values())
       .filter(apt => apt.customerId === customerId)
@@ -1306,6 +1788,38 @@ export class MemStorage implements IStorage {
 
   async getAllContacts(): Promise<Contact[]> {
     return Array.from(this.contacts.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async updateContact(id: string, updates: Partial<Contact>): Promise<Contact | undefined> {
+    const contact = this.contacts.get(id);
+    if (!contact) return undefined;
+    
+    const updatedContact = { ...contact, ...updates };
+    this.contacts.set(id, updatedContact);
+    return updatedContact;
+  }
+
+  async getContactsWithFilter(options: { page?: number; limit?: number; status?: string }): Promise<{ contacts: Contact[]; total: number; hasMore: boolean }> {
+    const { page = 1, limit = 50, status } = options;
+    const offset = (page - 1) * limit;
+
+    // Get all contacts and filter by status if specified
+    let allContacts = Array.from(this.contacts.values());
+    if (status) {
+      allContacts = allContacts.filter(contact => contact.status === status);
+    }
+
+    // Sort by creation date (newest first)
+    allContacts.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+    const total = allContacts.length;
+    const contacts = allContacts.slice(offset, offset + limit);
+
+    return {
+      contacts,
+      total,
+      hasMore: offset + limit < total
+    };
   }
 
   // Locations
@@ -1512,9 +2026,15 @@ export class MemStorage implements IStorage {
       ...message,
       id,
       countryCode: message.countryCode ?? null,
-      status: message.status ?? "sent",
+      status: message.status ?? "pending",
       appointmentId: message.appointmentId ?? null,
+      messageSid: message.messageSid ?? null,
       providerResponse: message.providerResponse ?? null,
+      retryCount: 0,
+      maxRetries: 3,
+      lastRetryAt: null,
+      nextRetryAt: null,
+      failureReason: null,
       sentAt: new Date()
     };
     this.whatsappMessages.set(id, newMessage);
@@ -1526,6 +2046,133 @@ export class MemStorage implements IStorage {
       .filter(msg => msg.phone === phone)
       .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())
       .slice(0, limit);
+  }
+  
+  // Additional WhatsApp message methods for webhook and admin functionality
+  async updateWhatsAppMessageStatus(messageSid: string, updates: { status: string; providerResponse?: string }): Promise<boolean> {
+    for (const [id, message] of Array.from(this.whatsappMessages.entries())) {
+      if (message.messageSid === messageSid) {
+        this.whatsappMessages.set(id, {
+          ...message,
+          status: updates.status,
+          providerResponse: updates.providerResponse || message.providerResponse
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+  
+  async getWhatsAppMessages(options: { page: number; limit: number; status?: string }): Promise<WhatsAppMessage[]> {
+    let messages = Array.from(this.whatsappMessages.values())
+      .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime());
+    
+    if (options.status) {
+      messages = messages.filter(msg => msg.status === options.status);
+    }
+    
+    const start = (options.page - 1) * options.limit;
+    return messages.slice(start, start + options.limit);
+  }
+  
+  async getWhatsAppMessage(id: string): Promise<WhatsAppMessage | null> {
+    return this.whatsappMessages.get(id) || null;
+  }
+  
+  async updateWhatsAppMessage(id: string, updates: Partial<WhatsAppMessage>): Promise<boolean> {
+    const message = this.whatsappMessages.get(id);
+    if (!message) return false;
+    
+    this.whatsappMessages.set(id, { ...message, ...updates });
+    return true;
+  }
+  
+  // Admin Audit Logs
+  private adminAuditLogs: Map<string, AdminAuditLog> = new Map();
+
+  async logAdminAction(auditLog: InsertAdminAuditLog): Promise<AdminAuditLog> {
+    const id = randomUUID();
+    const newAuditLog: AdminAuditLog = {
+      ...auditLog,
+      id,
+      resourceId: auditLog.resourceId ?? null,
+      oldValue: auditLog.oldValue ?? null,
+      newValue: auditLog.newValue ?? null,
+      ipAddress: auditLog.ipAddress ?? null,
+      userAgent: auditLog.userAgent ?? null,
+      additionalInfo: auditLog.additionalInfo ?? null,
+      createdAt: new Date()
+    };
+    this.adminAuditLogs.set(id, newAuditLog);
+    return newAuditLog;
+  }
+
+  async getAdminAuditLogs(adminUserId?: string, limit: number = 50, offset: number = 0): Promise<AdminAuditLog[]> {
+    let logs = Array.from(this.adminAuditLogs.values());
+    
+    if (adminUserId) {
+      logs = logs.filter(log => log.adminUserId === adminUserId);
+    }
+    
+    return logs
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(offset, offset + limit);
+  }
+
+  async getAdminAuditLogsCount(adminUserId?: string): Promise<number> {
+    let logs = Array.from(this.adminAuditLogs.values());
+    
+    if (adminUserId) {
+      logs = logs.filter(log => log.adminUserId === adminUserId);
+    }
+    
+    return logs.length;
+  }
+
+  async getResourceAuditLogs(resource: string, resourceId: string, limit: number = 50): Promise<AdminAuditLog[]> {
+    return Array.from(this.adminAuditLogs.values())
+      .filter(log => log.resource === resource && log.resourceId === resourceId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+
+  // Atomic rate limiting storage implementation
+  async checkAndIncrementRateLimit(userId: string, windowMs: number): Promise<{ count: number; resetTime: number; withinWindow: boolean }> {
+    const now = Date.now();
+    const newResetTime = now + windowMs;
+    
+    const existing = this.rateLimits.get(userId);
+    
+    if (!existing) {
+      // First request - initialize
+      this.rateLimits.set(userId, { count: 1, resetTime: newResetTime });
+      return { count: 1, resetTime: newResetTime, withinWindow: true };
+    }
+    
+    if (now >= existing.resetTime) {
+      // Window expired - reset
+      this.rateLimits.set(userId, { count: 1, resetTime: newResetTime });
+      return { count: 1, resetTime: newResetTime, withinWindow: true };
+    }
+    
+    // Within window - increment
+    const newCount = existing.count + 1;
+    this.rateLimits.set(userId, { count: newCount, resetTime: existing.resetTime });
+    return { count: newCount, resetTime: existing.resetTime, withinWindow: true };
+  }
+
+  async cleanupExpiredRateLimits(): Promise<number> {
+    const now = Date.now();
+    let cleanedCount = 0;
+    
+    for (const [userId, limit] of Array.from(this.rateLimits.entries())) {
+      if (limit.resetTime <= now) {
+        this.rateLimits.delete(userId);
+        cleanedCount++;
+      }
+    }
+    
+    return cleanedCount;
   }
 }
 
