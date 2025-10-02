@@ -79,6 +79,94 @@ function validateEnvironment(): void {
     console.log("- Google OAuth: ⚠ Disabled");
   }
   
+  // Validate WhatsApp/Twilio Configuration
+  const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+  const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+  const twilioWhatsApp = process.env.TWILIO_WHATSAPP_FROM;
+  const hasTwilioSid = !!twilioSid;
+  const hasTwilioToken = !!twilioToken;
+  
+  if (hasTwilioSid && hasTwilioToken) {
+    console.log("- TWILIO_ACCOUNT_SID: ✓ Available");
+    console.log("- TWILIO_AUTH_TOKEN: ✓ Available");
+    console.log(`- TWILIO_WHATSAPP_FROM: ${twilioWhatsApp ? "✓ Available" : "⚠ Missing (using default)"}`);
+    console.log("- WhatsApp Service: ✓ Enabled");
+  } else if (hasTwilioSid || hasTwilioToken) {
+    const missing = hasTwilioSid ? "TWILIO_AUTH_TOKEN" : "TWILIO_ACCOUNT_SID";
+    if (isProduction) {
+      result.errors.push(`WhatsApp service partially configured: ${missing} is missing. Either set both or remove both.`);
+      console.log(`- TWILIO_ACCOUNT_SID: ${hasTwilioSid ? "✓" : "✗"} ${hasTwilioSid ? "Available" : "Missing"}`);
+      console.log(`- TWILIO_AUTH_TOKEN: ${hasTwilioToken ? "✓" : "✗"} ${hasTwilioToken ? "Available" : "Missing"}`);
+      console.log("- WhatsApp Service: ✗ PARTIALLY CONFIGURED (INVALID IN PRODUCTION)");
+    } else {
+      result.warnings.push(`WhatsApp service partially configured: ${missing} is missing. WhatsApp will use mock client.`);
+      console.log(`- TWILIO_ACCOUNT_SID: ${hasTwilioSid ? "✓" : "⚠"} ${hasTwilioSid ? "Available" : "Missing"}`);
+      console.log(`- TWILIO_AUTH_TOKEN: ${hasTwilioToken ? "✓" : "⚠"} ${hasTwilioToken ? "Available" : "Missing"}`);
+      console.log("- WhatsApp Service: ⚠ Mock mode (disabled)");
+    }
+  } else {
+    result.warnings.push("WhatsApp service not configured - notifications will use mock client");
+    console.log("- TWILIO_ACCOUNT_SID: ⚠ Missing (WhatsApp disabled)");
+    console.log("- TWILIO_AUTH_TOKEN: ⚠ Missing (WhatsApp disabled)");
+    console.log("- WhatsApp Service: ⚠ Disabled (mock mode)");
+  }
+  
+  // Validate MessageCentral Configuration for SMS/OTP
+  const messageCentralToken = process.env.MESSAGECENTRAL_AUTH_TOKEN;
+  const messageCentralCustomerId = process.env.MESSAGECENTRAL_CUSTOMER_ID;
+  
+  if (messageCentralToken && messageCentralCustomerId) {
+    console.log("- MESSAGECENTRAL_AUTH_TOKEN: ✓ Available");
+    console.log("- MESSAGECENTRAL_CUSTOMER_ID: ✓ Available");
+    console.log("- SMS/OTP Service: ✓ Enabled");
+  } else if (messageCentralToken || messageCentralCustomerId) {
+    const missing = messageCentralToken ? "MESSAGECENTRAL_CUSTOMER_ID" : "MESSAGECENTRAL_AUTH_TOKEN";
+    if (isProduction) {
+      result.errors.push(`SMS/OTP service partially configured: ${missing} is missing. Either set both or remove both.`);
+      console.log(`- MESSAGECENTRAL_AUTH_TOKEN: ${messageCentralToken ? "✓" : "✗"} ${messageCentralToken ? "Available" : "Missing"}`);
+      console.log(`- MESSAGECENTRAL_CUSTOMER_ID: ${messageCentralCustomerId ? "✓" : "✗"} ${messageCentralCustomerId ? "Available" : "Missing"}`);
+      console.log("- SMS/OTP Service: ✗ PARTIALLY CONFIGURED (INVALID IN PRODUCTION)");
+    } else {
+      result.warnings.push(`SMS/OTP service partially configured: ${missing} is missing. OTP will use mock mode.`);
+      console.log(`- MESSAGECENTRAL_AUTH_TOKEN: ${messageCentralToken ? "✓" : "⚠"} ${messageCentralToken ? "Available" : "Missing"}`);
+      console.log(`- MESSAGECENTRAL_CUSTOMER_ID: ${messageCentralCustomerId ? "✓" : "⚠"} ${messageCentralCustomerId ? "Available" : "Missing"}`);
+      console.log("- SMS/OTP Service: ⚠ Mock mode (disabled)");
+    }
+  } else {
+    result.warnings.push("SMS/OTP service not configured - mobile registration will use mock mode");
+    console.log("- MESSAGECENTRAL_AUTH_TOKEN: ⚠ Missing (SMS/OTP disabled)");
+    console.log("- MESSAGECENTRAL_CUSTOMER_ID: ⚠ Missing (SMS/OTP disabled)");
+    console.log("- SMS/OTP Service: ⚠ Disabled (mock mode)");
+  }
+  
+  // Validate Email Service Configuration (SendGrid)
+  const sendgridKey = process.env.SENDGRID_API_KEY;
+  const sendgridFrom = process.env.SENDGRID_FROM_EMAIL;
+  
+  if (sendgridKey && sendgridFrom) {
+    console.log("- SENDGRID_API_KEY: ✓ Available");
+    console.log("- SENDGRID_FROM_EMAIL: ✓ Available");
+    console.log("- Email Service: ✓ Enabled");
+  } else if (sendgridKey || sendgridFrom) {
+    const missing = sendgridKey ? "SENDGRID_FROM_EMAIL" : "SENDGRID_API_KEY";
+    if (isProduction) {
+      result.errors.push(`Email service partially configured: ${missing} is missing. Either set both or remove both.`);
+      console.log(`- SENDGRID_API_KEY: ${sendgridKey ? "✓" : "✗"} ${sendgridKey ? "Available" : "Missing"}`);
+      console.log(`- SENDGRID_FROM_EMAIL: ${sendgridFrom ? "✓" : "✗"} ${sendgridFrom ? "Available" : "Missing"}`);
+      console.log("- Email Service: ✗ PARTIALLY CONFIGURED (INVALID IN PRODUCTION)");
+    } else {
+      result.warnings.push(`Email service partially configured: ${missing} is missing. Email notifications may fail.`);
+      console.log(`- SENDGRID_API_KEY: ${sendgridKey ? "✓" : "⚠"} ${sendgridKey ? "Available" : "Missing"}`);
+      console.log(`- SENDGRID_FROM_EMAIL: ${sendgridFrom ? "✓" : "⚠"} ${sendgridFrom ? "Available" : "Missing"}`);
+      console.log("- Email Service: ⚠ Partially configured");
+    }
+  } else {
+    result.warnings.push("Email service not configured - email notifications will be disabled");
+    console.log("- SENDGRID_API_KEY: ⚠ Missing (Email disabled)");
+    console.log("- SENDGRID_FROM_EMAIL: ⚠ Missing (Email disabled)");
+    console.log("- Email Service: ⚠ Disabled");
+  }
+  
   // Validate PORT if provided
   const port = process.env.PORT;
   if (port && (isNaN(Number(port)) || Number(port) <= 0)) {
@@ -86,6 +174,13 @@ function validateEnvironment(): void {
     console.log("- PORT: ✗ INVALID (must be positive integer)");
   } else if (port) {
     console.log(`- PORT: ✓ Available (${port})`);
+  }
+  
+  // Admin Setup Reminder (in development only)
+  if (!isProduction) {
+    console.log("\n💡 Admin Setup:");
+    console.log("   To create an admin user, run:");
+    console.log("   ADMIN_EMAIL=admin@yourcompany.com ADMIN_PASSWORD=your_secure_password node scripts/create-admin-user.js");
   }
   
   // Handle validation results

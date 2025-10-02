@@ -8,19 +8,29 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Calendar, Clock, Plus, Loader2 } from "lucide-react";
-import type { AppointmentWithDetails } from "@shared/schema";
+import type { AppointmentWithDetails, Customer } from "@shared/schema";
 
 export default function Appointments() {
   const [activeTab, setActiveTab] = useState("upcoming");
   const { user, isLoading: authLoading } = useAuth();
 
-  // Fetch user's appointments
-  const { data: appointments = [], isLoading, error } = useQuery<AppointmentWithDetails[]>({
-    queryKey: ["/api/appointments/customer", user?.id],
+  // First, get the customer record for the current user
+  const { data: customer, isLoading: customerLoading } = useQuery<Customer>({
+    queryKey: ["/api/customer/by-user", user?.id],
     enabled: !!user?.id, // Only fetch when user is authenticated
+    retry: 1,
+    staleTime: 5 * 60 * 1000 // 5 minutes - customer data changes infrequently
+  });
+
+  // Then fetch user's appointments using the customer ID
+  const { data: appointments = [], isLoading: appointmentsLoading, error } = useQuery<AppointmentWithDetails[]>({
+    queryKey: ["/api/appointments/customer", customer?.id],
+    enabled: !!customer?.id, // Only fetch when we have customer ID
     retry: 3,
     staleTime: 30 * 1000 // 30 seconds
   });
+
+  const isLoading = customerLoading || appointmentsLoading;
 
   const upcomingAppointments = appointments.filter(apt => 
     apt.status === "pending" || apt.status === "confirmed"

@@ -5,6 +5,8 @@ import { Calendar, MapPin, Fuel, Gauge, IndianRupee, Heart } from "lucide-react"
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { BidDialog } from "./BidDialog";
+import { ContactDialog } from "./ContactDialog";
+import { format } from "date-fns";
 import type { Car } from "@shared/schema";
 
 interface CarCardProps {
@@ -41,6 +43,7 @@ export function CarCard({
   const { toast } = useToast();
   const [isFavorited, setIsFavorited] = useState(false);
   const [bidDialogOpen, setBidDialogOpen] = useState(false);
+  const [contactDialogOpen, setContactDialogOpen] = useState(false);
 
   // Load favorites from localStorage on mount
   useEffect(() => {
@@ -82,10 +85,7 @@ export function CarCard({
   };
 
   const handleContactSeller = () => {
-    toast({
-      title: "Contact Seller",
-      description: `Contact functionality coming soon for ${make} ${model}. You can call us at +91-9876543210.`,
-    });
+    setContactDialogOpen(true);
   };
 
   const getConditionColor = (condition: string) => {
@@ -158,12 +158,15 @@ export function CarCard({
             <MapPin className="h-4 w-4 text-muted-foreground" />
             <span>{location}</span>
           </div>
-          {isAuction && auctionEndTime && (
-            <div className="flex items-center gap-2">
-              <Calendar className="h-4 w-4 text-muted-foreground" />
-              <span className="text-xs">Ends {auctionEndTime}</span>
-            </div>
-          )}
+          {isAuction && auctionEndTime && (() => {
+            const dt = new Date(auctionEndTime);
+            return !isNaN(dt.getTime()) ? (
+              <div className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-muted-foreground" />
+                <span className="text-xs">Ends {format(dt, "MMM dd, yyyy")}</span>
+              </div>
+            ) : null;
+          })()}
         </div>
       </CardContent>
 
@@ -208,6 +211,18 @@ export function CarCard({
           } as Car}
           open={bidDialogOpen}
           onOpenChange={setBidDialogOpen}
+        />
+      )}
+
+      {/* Contact Dialog for Non-Auction Cars */}
+      {!isAuction && (
+        <ContactDialog
+          carMake={make}
+          carModel={model}
+          carYear={year}
+          carPrice={price}
+          open={contactDialogOpen}
+          onOpenChange={setContactDialogOpen}
         />
       )}
     </Card>

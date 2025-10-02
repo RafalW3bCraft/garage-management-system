@@ -90,8 +90,14 @@ export function Navigation() {
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem asChild data-testid="menu-profile">
-                    <Link href="/appointments">
+                    <Link href="/profile">
                       <User className="mr-2 h-4 w-4" />
+                      <span>Profile</span>
+                    </Link>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem asChild data-testid="menu-appointments">
+                    <Link href="/appointments">
+                      <Settings className="mr-2 h-4 w-4" />
                       <span>My Appointments</span>
                     </Link>
                   </DropdownMenuItem>
@@ -103,7 +109,7 @@ export function Navigation() {
                   </DropdownMenuItem>
                   <DropdownMenuItem asChild data-testid="menu-services">
                     <Link href="/services">
-                      <Settings className="mr-2 h-4 w-4" />
+                      <Car className="mr-2 h-4 w-4" />
                       <span>Book Service</span>
                     </Link>
                   </DropdownMenuItem>
