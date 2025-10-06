@@ -4,6 +4,42 @@
 
 RonakMotorGarage is a comprehensive full-stack web application designed for automotive service and sales management. The platform serves as a digital solution for garage operations, enabling customers to book services, browse cars for sale, participate in auctions, and manage appointments. The application provides both customer-facing features and administrative capabilities for managing garage operations across multiple locations.
 
+## Recent Changes (October 2025)
+
+**Authentication System Update - OTP Only** (Latest)
+- Restricted authentication to OTP-only (WhatsApp and Email channels)
+- Disabled email/password and Google OAuth authentication methods
+- Users must verify via OTP sent to their phone (WhatsApp default) or email
+- Frontend automatically defaults to mobile OTP authentication flow
+- Backend endpoints return 403 error for email/password login attempts
+
+**Image Upload Enhancement** (Latest)
+- Expanded supported image formats: JPEG, PNG, WebP, GIF, SVG, BMP, TIFF, ICO, AVIF
+- All formats maintain 5MB file size limit for consistent storage management
+- Special handling for SVG files (no resizing, preserved as vector graphics)
+- Enhanced validation for each format type with security checks
+- Admin media library endpoint for uploading branding and site images
+
+**Admin Media Library** (Latest)
+- New POST `/api/admin/media-library/upload` endpoint for admin-only uploads
+- Supports branding assets: logos, banners, icons, gallery images, etc.
+- GET `/api/admin/media-library` endpoint to retrieve uploaded media
+- Full audit logging for all media uploads
+- Filtering by image type, uploader, and active status
+
+**Logo Update**
+- Replaced the generic Wrench icon with the official Ronak Motor logo image
+- Logo now displays the brand's custom automotive-themed design with orange and yellow accent colors
+- Responsive logo sizing maintained across different screen sizes (sm, md, lg)
+
+**Featured Cars Section**
+- Added a new "Featured Cars for Sale" section to the homepage
+- Displays the first 3 cars from the inventory in an attractive grid layout
+- Includes loading states, error handling, and empty state messaging
+- Properly passes through auction status and bid information
+- Integrates seamlessly with existing CarCard component
+- "View All Cars" button directs users to the full cars listing page
+
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
@@ -45,10 +81,12 @@ Preferred communication style: Simple, everyday language.
 - RESTful API design with standardized error handling
 
 **Authentication System**
-- Multi-provider authentication supporting email/password and Google OAuth
-- Passport.js integration for OAuth strategies
+- OTP-only authentication via WhatsApp (default) or Email channels
+- Phone number verification with secure OTP generation and hashing
+- Email/password and Google OAuth authentication disabled
 - Role-based access control (customer/admin roles)
 - Session management with secure cookie configuration
+- Rate limiting and security measures for OTP verification
 
 **Database Layer**
 - PostgreSQL as the primary database for reliability and ACID compliance
@@ -84,12 +122,19 @@ Preferred communication style: Simple, everyday language.
 - Email/password authentication with bcrypt password hashing
 - Google OAuth integration via Passport.js
 - Session-based authentication with secure session management
+- Session timestamp initialization on login for admin session validation
 - Automatic user account linking for OAuth providers
 
 **Authorization Levels**
 - Customer role: Service booking, appointment management, car browsing/bidding
-- Admin role: Full system access, appointment management, service configuration
+- Admin role: Full system access, appointment management, service configuration, audit logging
 - Route-level protection based on authentication status and role
+- Enhanced admin middleware with rate limiting, session validation, and security checks
+
+**Admin Setup** (October 2025)
+- Admin users can be created using `scripts/create-admin-user.js`
+- Default admin credentials: admin@ronakmotor.com (change password after first login)
+- Admin sessions include timestamp validation and IP monitoring for security
 
 ## External Dependencies
 

@@ -174,7 +174,7 @@ export function MobileRegistration({ mode, onSuccess, onBack }: MobileRegistrati
       phone: phoneData.phone,
       countryCode: phoneData.countryCode,
       otpCode: data.otp,
-      mode,
+      purpose: mode === "login" ? "login" : "registration",
     });
   };
 

@@ -13,30 +13,68 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, SlidersHorizontal, Loader2 } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Slider } from "@/components/ui/slider";
+import { Search, SlidersHorizontal, Loader2, ArrowUp, ArrowDown, ChevronDown, X } from "lucide-react";
 import type { Car } from "@shared/schema";
 
-/**
- * Cars page component displaying available cars for sale and auction with filtering capabilities.
- * Features tabbed interface for regular sales and auctions, with filters for brand, price, and fuel type.
- * 
- * @returns {JSX.Element} The rendered cars page
- * 
- * @example
- * ```tsx
- * <Route path="/cars" component={Cars} />
- * ```
- */
 export default function Cars() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedBrand, setSelectedBrand] = useState("all");
   const [priceRange, setPriceRange] = useState("all");
   const [fuelType, setFuelType] = useState("all");
+  
+  const [sortBy, setSortBy] = useState<string>("price");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const [transmission, setTransmission] = useState("all");
+  const [bodyType, setBodyType] = useState("all");
+  const [color, setColor] = useState("all");
+  const [yearMin, setYearMin] = useState("");
+  const [yearMax, setYearMax] = useState("");
+  const [mileageMin, setMileageMin] = useState("");
+  const [mileageMax, setMileageMax] = useState("");
 
-  // Fetch cars data from API
+  const buildQueryString = () => {
+    const params = new URLSearchParams();
+    
+    if (sortBy && sortBy !== "none") params.append("sortBy", sortBy);
+    if (sortOrder) params.append("sortOrder", sortOrder);
+    if (transmission !== "all") params.append("transmission", transmission);
+    if (bodyType !== "all") params.append("bodyType", bodyType);
+    if (color !== "all") params.append("color", color);
+    if (yearMin) params.append("yearMin", yearMin);
+    if (yearMax) params.append("yearMax", yearMax);
+    if (mileageMin) params.append("mileageMin", mileageMin);
+    if (mileageMax) params.append("mileageMax", mileageMax);
+    
+    const queryString = params.toString();
+    return queryString ? `?${queryString}` : "";
+  };
+
   const { data: allCars, isLoading, isError, error, refetch } = useQuery<Car[]>({
-    queryKey: ["/api/cars"],
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    queryKey: [
+      "/api/cars",
+      sortBy,
+      sortOrder,
+      transmission,
+      bodyType,
+      color,
+      yearMin,
+      yearMax,
+      mileageMin,
+      mileageMax,
+    ],
+    queryFn: async () => {
+      const queryString = buildQueryString();
+      const response = await fetch(`/api/cars${queryString}`);
+      if (!response.ok) {
+        throw new Error("Failed to fetch cars");
+      }
+      return response.json();
+    },
+    staleTime: 5 * 60 * 1000,
     retry: 3,
   });
 
@@ -69,6 +107,40 @@ export default function Cars() {
     { value: "hybrid", label: "Hybrid" }
   ];
 
+  const sortFields = [
+    { value: "price", label: "Price" },
+    { value: "year", label: "Year" },
+    { value: "mileage", label: "Mileage" }
+  ];
+
+  const transmissions = [
+    { value: "all", label: "All Transmissions" },
+    { value: "Manual", label: "Manual" },
+    { value: "Automatic", label: "Automatic" },
+    { value: "CVT", label: "CVT" }
+  ];
+
+  const bodyTypes = [
+    { value: "all", label: "All Body Types" },
+    { value: "Sedan", label: "Sedan" },
+    { value: "SUV", label: "SUV" },
+    { value: "Hatchback", label: "Hatchback" },
+    { value: "Coupe", label: "Coupe" },
+    { value: "Wagon", label: "Wagon" }
+  ];
+
+  const colors = [
+    { value: "all", label: "All Colors" },
+    { value: "White", label: "White" },
+    { value: "Black", label: "Black" },
+    { value: "Silver", label: "Silver" },
+    { value: "Gray", label: "Gray" },
+    { value: "Red", label: "Red" },
+    { value: "Blue", label: "Blue" },
+    { value: "Green", label: "Green" },
+    { value: "Brown", label: "Brown" }
+  ];
+
   const filterCars = (cars: Car[]) => {
     return cars.filter(car => {
       const matchesSearch = 
@@ -94,9 +166,46 @@ export default function Cars() {
   const filteredCarsForSale = filterCars(carsForSale);
   const filteredAuctionCars = filterCars(auctionCars);
 
+  const clearAllFilters = () => {
+    setSearchTerm("");
+    setSelectedBrand("all");
+    setPriceRange("all");
+    setFuelType("all");
+    setSortBy("price");
+    setSortOrder("asc");
+    setTransmission("all");
+    setBodyType("all");
+    setColor("all");
+    setYearMin("");
+    setYearMax("");
+    setMileageMin("");
+    setMileageMax("");
+  };
+
+  const hasActiveFilters = () => {
+    return (
+      searchTerm !== "" ||
+      selectedBrand !== "all" ||
+      priceRange !== "all" ||
+      fuelType !== "all" ||
+      transmission !== "all" ||
+      bodyType !== "all" ||
+      color !== "all" ||
+      yearMin !== "" ||
+      yearMax !== "" ||
+      mileageMin !== "" ||
+      mileageMax !== "" ||
+      sortBy !== "price" ||
+      sortOrder !== "asc"
+    );
+  };
+
+  const toggleSortOrder = () => {
+    setSortOrder(prev => prev === "asc" ? "desc" : "asc");
+  };
+
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <section className="py-16 bg-muted/50">
         <div className="container mx-auto px-4">
           <div className="text-center">
@@ -109,7 +218,6 @@ export default function Cars() {
         </div>
       </section>
 
-      {/* Filters */}
       <section className="py-8 border-b">
         <div className="container mx-auto px-4">
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -170,8 +278,167 @@ export default function Cars() {
             </div>
           </div>
 
-          {/* Active Filters */}
-          <div className="flex gap-2 mt-4">
+          <div className="mt-6 space-y-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-muted-foreground">Sort by:</span>
+                <Select value={sortBy} onValueChange={setSortBy}>
+                  <SelectTrigger className="w-[140px]" data-testid="select-sort-by">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sortFields.map(field => (
+                      <SelectItem key={field.value} value={field.value}>
+                        {field.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={toggleSortOrder}
+                  data-testid="button-sort-order"
+                  className="h-10 w-10"
+                >
+                  {sortOrder === "asc" ? (
+                    <ArrowUp className="h-4 w-4" />
+                  ) : (
+                    <ArrowDown className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
+
+              <Button
+                variant="outline"
+                onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                data-testid="button-toggle-filters"
+                className="ml-auto"
+              >
+                <SlidersHorizontal className="h-4 w-4 mr-2" />
+                {showAdvancedFilters ? "Hide" : "Show"} Advanced Filters
+                <ChevronDown className={`h-4 w-4 ml-2 transition-transform ${showAdvancedFilters ? "rotate-180" : ""}`} />
+              </Button>
+
+              {hasActiveFilters() && (
+                <Button
+                  variant="ghost"
+                  onClick={clearAllFilters}
+                  data-testid="button-clear-all"
+                  className="text-destructive hover:text-destructive"
+                >
+                  <X className="h-4 w-4 mr-2" />
+                  Clear All
+                </Button>
+              )}
+            </div>
+
+            <Collapsible open={showAdvancedFilters}>
+              <CollapsibleContent className="space-y-4">
+                <div className="p-4 border rounded-lg bg-muted/30">
+                  <h3 className="text-sm font-semibold mb-4">Advanced Filters</h3>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div>
+                      <label className="text-xs font-medium mb-2 block">Transmission</label>
+                      <Select value={transmission} onValueChange={setTransmission}>
+                        <SelectTrigger data-testid="select-transmission">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {transmissions.map(t => (
+                            <SelectItem key={t.value} value={t.value}>
+                              {t.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium mb-2 block">Body Type</label>
+                      <Select value={bodyType} onValueChange={setBodyType}>
+                        <SelectTrigger data-testid="select-body-type">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {bodyTypes.map(b => (
+                            <SelectItem key={b.value} value={b.value}>
+                              {b.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium mb-2 block">Color</label>
+                      <Select value={color} onValueChange={setColor}>
+                        <SelectTrigger data-testid="select-color">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {colors.map(c => (
+                            <SelectItem key={c.value} value={c.value}>
+                              {c.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium mb-2 block">Year Range</label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="number"
+                          placeholder="Min"
+                          value={yearMin}
+                          onChange={(e) => setYearMin(e.target.value)}
+                          data-testid="input-year-min"
+                          min="1990"
+                          max="2025"
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Max"
+                          value={yearMax}
+                          onChange={(e) => setYearMax(e.target.value)}
+                          data-testid="input-year-max"
+                          min="1990"
+                          max="2025"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium mb-2 block">Mileage Range (km)</label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="number"
+                          placeholder="Min"
+                          value={mileageMin}
+                          onChange={(e) => setMileageMin(e.target.value)}
+                          data-testid="input-mileage-min"
+                          min="0"
+                        />
+                        <Input
+                          type="number"
+                          placeholder="Max"
+                          value={mileageMax}
+                          onChange={(e) => setMileageMax(e.target.value)}
+                          data-testid="input-mileage-max"
+                          min="0"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          </div>
+
+          <div className="flex flex-wrap gap-2 mt-4">
             {selectedBrand !== "all" && (
               <Badge variant="secondary" className="cursor-pointer" onClick={() => setSelectedBrand("all")}>
                 {brands.find(b => b.value === selectedBrand)?.label} ×
@@ -192,11 +459,50 @@ export default function Cars() {
                 "{searchTerm}" ×
               </Badge>
             )}
+            {(sortBy !== "price" || sortOrder !== "asc") && (
+              <Badge variant="secondary" className="cursor-pointer" onClick={() => { setSortBy("price"); setSortOrder("asc"); }}>
+                Sort: {sortFields.find(s => s.value === sortBy)?.label} ({sortOrder === "asc" ? "Low to High" : "High to Low"}) ×
+              </Badge>
+            )}
+            {transmission !== "all" && (
+              <Badge variant="secondary" className="cursor-pointer" onClick={() => setTransmission("all")}>
+                {transmissions.find(t => t.value === transmission)?.label} ×
+              </Badge>
+            )}
+            {bodyType !== "all" && (
+              <Badge variant="secondary" className="cursor-pointer" onClick={() => setBodyType("all")}>
+                {bodyTypes.find(b => b.value === bodyType)?.label} ×
+              </Badge>
+            )}
+            {color !== "all" && (
+              <Badge variant="secondary" className="cursor-pointer" onClick={() => setColor("all")}>
+                {colors.find(c => c.value === color)?.label} ×
+              </Badge>
+            )}
+            {yearMin && (
+              <Badge variant="secondary" className="cursor-pointer" onClick={() => setYearMin("")}>
+                Year Min: {yearMin} ×
+              </Badge>
+            )}
+            {yearMax && (
+              <Badge variant="secondary" className="cursor-pointer" onClick={() => setYearMax("")}>
+                Year Max: {yearMax} ×
+              </Badge>
+            )}
+            {mileageMin && (
+              <Badge variant="secondary" className="cursor-pointer" onClick={() => setMileageMin("")}>
+                Mileage Min: {mileageMin} km ×
+              </Badge>
+            )}
+            {mileageMax && (
+              <Badge variant="secondary" className="cursor-pointer" onClick={() => setMileageMax("")}>
+                Mileage Max: {mileageMax} km ×
+              </Badge>
+            )}
           </div>
         </div>
       </section>
 
-      {/* Cars Tabs */}
       <section className="py-12">
         <div className="container mx-auto px-4">
           <Tabs defaultValue="for-sale" className="w-full">
@@ -240,6 +546,12 @@ export default function Cars() {
                       image={car.image}
                       condition={car.condition as "Excellent" | "Good" | "Fair"}
                       isAuction={false}
+                      description={car.description || undefined}
+                      transmission={car.transmission || undefined}
+                      bodyType={car.bodyType || undefined}
+                      color={car.color || undefined}
+                      numOwners={car.numOwners || undefined}
+                      engineSize={car.engineSize || undefined}
                     />
                   ))}
                 </div>
@@ -251,12 +563,7 @@ export default function Cars() {
                     Try adjusting your search criteria
                   </p>
                   <Button 
-                    onClick={() => {
-                      setSearchTerm("");
-                      setSelectedBrand("all");
-                      setPriceRange("all");
-                      setFuelType("all");
-                    }}
+                    onClick={clearAllFilters}
                     data-testid="button-clear-filters-sale"
                   >
                     Clear All Filters
@@ -310,6 +617,12 @@ export default function Cars() {
                         isAuction={true}
                         currentBid={car.currentBid || undefined}
                         auctionEndTime={formatAuctionEndTime(car.auctionEndTime)}
+                        description={car.description || undefined}
+                        transmission={car.transmission || undefined}
+                        bodyType={car.bodyType || undefined}
+                        color={car.color || undefined}
+                        numOwners={car.numOwners || undefined}
+                        engineSize={car.engineSize || undefined}
                       />
                     );
                   })}
@@ -322,12 +635,7 @@ export default function Cars() {
                     Try adjusting your search criteria or check back later for new auctions
                   </p>
                   <Button 
-                    onClick={() => {
-                      setSearchTerm("");
-                      setSelectedBrand("all");
-                      setPriceRange("all");
-                      setFuelType("all");
-                    }}
+                    onClick={clearAllFilters}
                     data-testid="button-clear-filters-auction"
                   >
                     Clear All Filters
@@ -339,7 +647,6 @@ export default function Cars() {
         </div>
       </section>
 
-      {/* Sell Your Car CTA */}
       <section className="py-16 bg-muted/50">
         <div className="container mx-auto px-4 text-center">
           <h2 className="text-3xl font-bold mb-4">Want to Sell Your Car?</h2>

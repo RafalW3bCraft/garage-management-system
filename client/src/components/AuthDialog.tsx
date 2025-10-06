@@ -27,7 +27,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
-import { Mail, Smartphone, ArrowLeft, User, Chrome } from "lucide-react";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Mail, Smartphone, ArrowLeft, User, Chrome, MessageSquare } from "lucide-react";
 
 // Import our new hooks
 import { useAuthFlow } from "@/hooks/useAuthFlow";
@@ -55,9 +56,11 @@ interface AuthDialogProps {
 }
 
 /**
- * Comprehensive authentication dialog supporting multiple authentication methods.
- * Features email/password, mobile OTP, and Google OAuth authentication flows with
+ * Comprehensive authentication dialog supporting OTP-only authentication.
+ * Features mobile OTP (WhatsApp & Email) authentication flows with
  * smart method selection, preference memory, and seamless multi-step registration.
+ * 
+ * Note: Email/password and Google OAuth have been disabled in favor of OTP-only authentication.
  * 
  * @param {AuthDialogProps} props - Component props
  * @param {React.ReactNode} props.children - Trigger element for opening the dialog
@@ -82,12 +85,11 @@ export function AuthDialog({ children }: AuthDialogProps) {
   // Auth mutations with callbacks for flow management
   const mutations = useAuthMutations({
     onTransition: (nextStep) => {
-      if (nextStep) {
-        flow.goToStep(nextStep);
-        // For OTP, set countdown
-        if (nextStep === "otp-verification") {
-          setOtpCountdown(300); // 5 minutes
-        }
+      if (nextStep && (nextStep as string) === "otp-verification") {
+        flow.goToStep("otp-verification");
+        setOtpCountdown(300); // 5 minutes
+      } else if (nextStep && (nextStep as string) === "profile-setup") {
+        flow.goToStep("profile-setup");
       }
     },
     onComplete: () => {
@@ -117,12 +119,13 @@ export function AuthDialog({ children }: AuthDialogProps) {
     return () => clearInterval(interval);
   }, [otpCountdown]);
   
-  // Pre-select last used method when dialog opens
+  // Pre-select mobile OTP method when dialog opens (OTP-only authentication)
   useEffect(() => {
-    if (open && preferences.lastMethod !== 'google') {
-      flow.setMethod(preferences.lastMethod);
+    if (open) {
+      // Always default to mobile OTP since email/password and Google are disabled
+      flow.setMethod('mobile');
     }
-  }, [open, preferences.lastMethod]);
+  }, [open]);
   
   // Auto-detect country code on mount
   useEffect(() => {
@@ -154,15 +157,15 @@ export function AuthDialog({ children }: AuthDialogProps) {
     }
   }, [open]);
   
-  // Method selection handler
+  // Method selection handler - OTP only
   const handleMethodSelection = (method: "email" | "mobile" | "google") => {
-    preferences.saveMethod(method);
-    
-    if (method === "google") {
-      mutations.googleLogin();
+    // Only mobile OTP is allowed
+    if (method !== "mobile") {
+      console.warn('Only mobile OTP authentication is supported');
       return;
     }
     
+    preferences.saveMethod(method);
     flow.setMethod(method);
   };
   
@@ -183,7 +186,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
       case "password-input":
         if (flow.mode === "login") {
           // Execute login
-          mutations.executeLogin(flow.method, stepData, {
+          mutations.executeLogin(flow.method, { password: stepData.password || "" }, {
             ...flow.context,
             password: stepData.password,
           });
@@ -196,7 +199,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
         
       case "name-input":
         // Complete email registration
-        mutations.executeRegister(flow.method, stepData, {
+        mutations.executeRegister(flow.method, { name: stepData.name || "" }, {
           ...flow.context,
           name: stepData.name,
         });
@@ -207,14 +210,22 @@ export function AuthDialog({ children }: AuthDialogProps) {
         if (stepData.countryCode) {
           preferences.saveCountryCode(stepData.countryCode);
         }
+        
+        const channel = stepData.channel || 'whatsapp';
+        
         flow.updateContext({
+          channel,
           phone: stepData.phone,
           countryCode: stepData.countryCode,
+          email: stepData.email,
         });
+        
         mutations.sendOtp(
-          stepData.phone!,
-          stepData.countryCode!,
-          flow.mode
+          channel,
+          flow.mode,
+          stepData.phone,
+          stepData.countryCode,
+          stepData.email
         );
         break;
         
@@ -230,7 +241,7 @@ export function AuthDialog({ children }: AuthDialogProps) {
         
       case "profile-setup":
         // Complete mobile registration
-        mutations.executeRegister(flow.method, stepData, {
+        mutations.executeRegister(flow.method, { name: stepData.name || "" }, {
           ...flow.context,
           name: stepData.name,
         });
@@ -264,7 +275,45 @@ export function AuthDialog({ children }: AuthDialogProps) {
             <FormItem>
               <FormLabel htmlFor={fieldName}>{config.label}</FormLabel>
               <FormControl>
-                {fieldName === "countryCode" ? (
+                {fieldName === "channel" ? (
+                  <RadioGroup
+                    onValueChange={field.onChange}
+                    value={field.value || 'whatsapp'}
+                    className="flex flex-col gap-3"
+                    data-testid={config.testId}
+                  >
+                    <div className="flex items-center space-x-3 border rounded-lg p-4 cursor-pointer hover:bg-muted/50 transition-colors">
+                      <RadioGroupItem value="whatsapp" id="whatsapp" />
+                      <label
+                        htmlFor="whatsapp"
+                        className="flex-1 flex items-center gap-3 cursor-pointer"
+                      >
+                        <MessageSquare className="w-5 h-5 text-green-600" aria-hidden="true" />
+                        <div>
+                          <div className="font-medium">WhatsApp</div>
+                          <div className="text-xs text-muted-foreground">
+                            Receive OTP via WhatsApp
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+                    <div className="flex items-center space-x-3 border rounded-lg p-4 cursor-pointer hover:bg-muted/50 transition-colors">
+                      <RadioGroupItem value="email" id="email-channel" />
+                      <label
+                        htmlFor="email-channel"
+                        className="flex-1 flex items-center gap-3 cursor-pointer"
+                      >
+                        <Mail className="w-5 h-5 text-blue-600" aria-hidden="true" />
+                        <div>
+                          <div className="font-medium">Email</div>
+                          <div className="text-xs text-muted-foreground">
+                            Receive OTP via email
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+                  </RadioGroup>
+                ) : fieldName === "countryCode" ? (
                   <Select onValueChange={field.onChange} value={field.value}>
                     <SelectTrigger 
                       id={fieldName}
@@ -463,11 +512,20 @@ export function AuthDialog({ children }: AuthDialogProps) {
                 </div>
               )}
               
-              {flow.step === "otp-verification" && flow.context.phone && (
+              {flow.step === "otp-verification" && (flow.context.phone || flow.context.email) && (
                 <div className="text-sm text-muted-foreground">
                   <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
-                    <Smartphone className="w-4 h-4" aria-hidden="true" />
-                    <span>{flow.context.countryCode}{flow.context.phone}</span>
+                    {flow.context.channel === 'email' ? (
+                      <>
+                        <Mail className="w-4 h-4" aria-hidden="true" />
+                        <span>{flow.context.email}</span>
+                      </>
+                    ) : (
+                      <>
+                        <MessageSquare className="w-4 h-4" aria-hidden="true" />
+                        <span>{flow.context.countryCode}{flow.context.phone}</span>
+                      </>
+                    )}
                   </div>
                 </div>
               )}
@@ -475,6 +533,93 @@ export function AuthDialog({ children }: AuthDialogProps) {
               <Form {...authForm.form}>
                 <form onSubmit={authForm.form.handleSubmit(handleFormSubmit)} className="space-y-4">
                   {renderStepFields()}
+                  
+                  {/* Conditional fields for phone-input step based on channel */}
+                  {flow.step === "phone-input" && (
+                    <>
+                      {authForm.form.watch("channel") === "whatsapp" && (
+                        <>
+                          <FormField
+                            control={authForm.form.control}
+                            name="countryCode"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel htmlFor="countryCode">Country</FormLabel>
+                                <FormControl>
+                                  <Select onValueChange={field.onChange} value={field.value}>
+                                    <SelectTrigger 
+                                      id="countryCode"
+                                      data-testid="select-country-code"
+                                      aria-label="Select country code"
+                                    >
+                                      <SelectValue placeholder="Select country" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {COUNTRY_OPTIONS.map((country) => (
+                                        <SelectItem key={country.value} value={country.value}>
+                                          <div className="flex items-center gap-2">
+                                            <span aria-hidden="true">{country.flag}</span>
+                                            <span>{country.label}</span>
+                                            <span className="text-muted-foreground">
+                                              {country.value}
+                                            </span>
+                                          </div>
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </FormControl>
+                                <FormMessage role="alert" />
+                              </FormItem>
+                            )}
+                          />
+                          <FormField
+                            control={authForm.form.control}
+                            name="phone"
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel htmlFor="phone">Phone number</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    id="phone"
+                                    type="tel"
+                                    placeholder="Enter your phone number"
+                                    className="h-12"
+                                    data-testid="input-phone"
+                                    {...field}
+                                  />
+                                </FormControl>
+                                <FormMessage role="alert" />
+                              </FormItem>
+                            )}
+                          />
+                        </>
+                      )}
+                      
+                      {authForm.form.watch("channel") === "email" && (
+                        <FormField
+                          control={authForm.form.control}
+                          name="email"
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel htmlFor="email-otp">Email address</FormLabel>
+                              <FormControl>
+                                <Input
+                                  id="email-otp"
+                                  type="email"
+                                  placeholder="Enter your email"
+                                  className="h-12"
+                                  data-testid="input-email-otp"
+                                  {...field}
+                                />
+                              </FormControl>
+                              <FormMessage role="alert" />
+                            </FormItem>
+                          )}
+                        />
+                      )}
+                    </>
+                  )}
                   
                   {/* OTP Resend and Countdown */}
                   {flow.step === "otp-verification" && (
@@ -486,11 +631,17 @@ export function AuthDialog({ children }: AuthDialogProps) {
                           <Button
                             variant="ghost"
                             className="p-0 h-auto font-normal underline"
-                            onClick={() => mutations.sendOtp(
-                              flow.context.phone!,
-                              flow.context.countryCode!,
-                              flow.mode
-                            )}
+                            onClick={() => {
+                              const channel = flow.context.channel || 'whatsapp';
+                              mutations.sendOtp(
+                                channel,
+                                flow.mode,
+                                flow.context.phone,
+                                flow.context.countryCode,
+                                flow.context.email
+                              );
+                              setOtpCountdown(300);
+                            }}
                             data-testid="button-resend-otp"
                           >
                             Resend code

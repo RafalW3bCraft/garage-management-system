@@ -118,6 +118,12 @@ export const cars = pgTable("cars", {
   currentBid: integer("current_bid"),
   auctionEndTime: timestamp("auction_end_time"),
   description: text("description"),
+  transmission: text("transmission"),
+  numOwners: integer("num_owners"),
+  bodyType: text("body_type"),
+  color: text("color"),
+  engineSize: text("engine_size"),
+  features: text("features"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   // Index for auction vs sale filtering
@@ -126,6 +132,21 @@ export const cars = pgTable("cars", {
   auctionEndTimeIdx: index("idx_auction_end_time").on(table.isAuction, table.auctionEndTime),
   // Index for searching by manufacturer
   makeIdx: index("idx_make").on(table.make)
+}));
+
+// Car images for multiple photos per car
+export const carImages = pgTable("car_images", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  carId: varchar("car_id").notNull().references(() => cars.id, { onDelete: 'cascade', onUpdate: 'cascade' }),
+  imageUrl: text("image_url").notNull(),
+  displayOrder: integer("display_order").notNull().default(0),
+  isPrimary: boolean("is_primary").default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index on carId for car's images
+  carIdIdx: index("idx_car_images_car_id").on(table.carId),
+  // Composite index for ordered image retrieval
+  carIdOrderIdx: index("idx_car_images_car_order").on(table.carId, table.displayOrder)
 }));
 
 // Car auction bids
@@ -168,7 +189,10 @@ export const otpVerifications = pgTable("otp_verifications", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   phone: text("phone").notNull(),
   countryCode: text("country_code").notNull(),
-  otpCodeHash: text("otp_code_hash").notNull(), // Hashed OTP for security
+  channel: text("channel").notNull().default("whatsapp"), // "whatsapp" or "email"
+  email: text("email"), // nullable - used when channel is 'email'
+  otpCodeHash: text("otp_code_hash"), // Hashed OTP for security (nullable for MessageCentral auto-OTP)
+  verificationId: text("verification_id"), // MessageCentral verification ID for auto-OTP
   purpose: text("purpose").notNull(), // "registration", "login", "password_reset"
   verified: boolean("verified").default(false),
   attempts: integer("attempts").default(0),
@@ -240,6 +264,49 @@ export const adminRateLimits = pgTable("admin_rate_limits", {
   resetTimeIdx: index("idx_reset_time").on(table.resetTime)
 }));
 
+// Site settings for branding and configuration
+export const siteSettings = pgTable("site_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  settingKey: text("setting_key").notNull().unique(), // e.g., 'site_logo', 'banner_image', 'favicon'
+  settingValue: text("setting_value").notNull(), // stores image URL or JSON data
+  category: text("category"), // e.g., 'branding', 'seo', 'general'
+  description: text("description"),
+  isPublic: boolean("is_public").default(true), // whether non-admins can read it
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // Unique index on settingKey (already unique constraint above)
+  settingKeyIdx: index("idx_setting_key").on(table.settingKey),
+  // Index on category for filtering
+  categoryIdx: index("idx_category").on(table.category)
+}));
+
+// Media library for admin branding and general media management
+export const mediaLibrary = pgTable("media_library", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  fileName: text("file_name").notNull(),
+  fileUrl: text("file_url").notNull(), // S3/storage URL
+  fileSize: integer("file_size").notNull(), // in bytes
+  mimeType: text("mime_type").notNull(), // image/webp, image/jpeg, image/png
+  imageType: text("image_type").notNull(), // 'logo', 'banner', 'gallery', 'service', 'testimonial', 'icon', 'general'
+  altText: text("alt_text"),
+  caption: text("caption"),
+  width: integer("width"),
+  height: integer("height"),
+  uploadedBy: varchar("uploaded_by").references(() => users.id, { onDelete: 'set null', onUpdate: 'cascade' }),
+  usageCount: integer("usage_count").default(0), // track how many times image is used
+  isActive: boolean("is_active").default(true),
+  tags: text("tags"), // JSON array of tags
+  uploadedAt: timestamp("uploaded_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index on imageType for filtering by type
+  imageTypeIdx: index("idx_image_type").on(table.imageType),
+  // Index on uploadedBy for user's uploads
+  uploadedByIdx: index("idx_uploaded_by").on(table.uploadedBy),
+  // Index on uploadedAt for sorting
+  uploadedAtIdx: index("idx_uploaded_at").on(table.uploadedAt)
+}));
+
 // Insert schemas for validation
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
@@ -298,6 +365,11 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
 });
 
 export const insertCarSchema = createInsertSchema(cars).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertCarImageSchema = createInsertSchema(carImages).omit({
   id: true,
   createdAt: true,
 });
@@ -369,6 +441,17 @@ export const insertAdminRateLimitSchema = createInsertSchema(adminRateLimits).om
   lastUpdate: true,
 });
 
+export const insertSiteSettingSchema = createInsertSchema(siteSettings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMediaLibrarySchema = createInsertSchema(mediaLibrary).omit({
+  id: true,
+  uploadedAt: true,
+});
+
 // Export the update contact schema
 export type UpdateContactRequest = z.infer<typeof updateContactSchema>;
 
@@ -402,7 +485,10 @@ export const sendOtpSchema = z.object({
     .regex(/^\+\d{1,4}$/, "Invalid country code format"),
   purpose: z.enum(["registration", "login", "password_reset"], {
     errorMap: () => ({ message: "Purpose must be registration, login, or password_reset" })
-  })
+  }),
+  channel: z.enum(["whatsapp", "email"], {
+    errorMap: () => ({ message: "Channel must be whatsapp or email" })
+  }).default("whatsapp")
 });
 
 export const verifyOtpSchema = z.object({
@@ -417,7 +503,10 @@ export const verifyOtpSchema = z.object({
     .regex(/^\d{6}$/, "OTP must contain only numbers"),
   purpose: z.enum(["registration", "login", "password_reset"], {
     errorMap: () => ({ message: "Purpose must be registration, login, or password_reset" })
-  })
+  }),
+  channel: z.enum(["whatsapp", "email"], {
+    errorMap: () => ({ message: "Channel must be whatsapp or email" })
+  }).default("whatsapp")
 });
 
 export const mobileRegisterSchema = z.object({
@@ -545,6 +634,9 @@ export type InsertAppointment = z.infer<typeof insertAppointmentSchema>;
 
 export type Car = typeof cars.$inferSelect;
 export type InsertCar = z.infer<typeof insertCarSchema>;
+
+export type CarImage = typeof carImages.$inferSelect;
+export type InsertCarImage = z.infer<typeof insertCarImageSchema>;
 
 export type Contact = typeof contacts.$inferSelect;
 export type InsertContact = z.infer<typeof insertContactSchema>;

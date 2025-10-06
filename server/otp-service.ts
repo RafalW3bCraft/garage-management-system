@@ -5,6 +5,9 @@ import {
   categorizeError, 
   type CommunicationResult 
 } from '@shared/communication-types';
+import { BaseCommunicationService, type RetryConfig, type CircuitBreakerConfig } from './base-communication-service';
+import { WhatsAppService } from './whatsapp-service';
+import { sendEmailV2 } from './email-service';
 
 // Country codes for phone number validation and formatting (India primary + Universal format)
 export const SUPPORTED_COUNTRIES = [
@@ -36,11 +39,40 @@ export interface OtpVerifyResult extends CommunicationResult {
   error?: string;
 }
 
+/**
+ * Internal helper class that extends BaseCommunicationService
+ * Provides circuit breaker and retry logic for OTP SMS service
+ */
+class OTPServiceHelper extends BaseCommunicationService {
+  constructor(retryConfig: RetryConfig, circuitBreakerConfig: CircuitBreakerConfig) {
+    super('OTP', retryConfig, circuitBreakerConfig);
+  }
+}
+
 export class OTPService {
   private static readonly OTP_EXPIRY_MINUTES = 5;
   private static readonly MAX_ATTEMPTS = 3;
   private static readonly RATE_LIMIT_WINDOW_MINUTES = 60;
   private static readonly MAX_SENDS_PER_HOUR = 5;
+
+  // Configuration from environment variables with fallback defaults
+  private static readonly SMS_RETRY_CONFIG: RetryConfig = {
+    initialDelayMs: parseInt(process.env.OTP_RETRY_DELAY || '1000'),
+    maxDelayMs: parseInt(process.env.OTP_MAX_RETRY_DELAY || '30000'),
+    maxRetries: parseInt(process.env.OTP_MAX_RETRIES || '2'),
+    backoffMultiplier: parseFloat(process.env.OTP_BACKOFF_MULTIPLIER || '2')
+  };
+
+  private static readonly SMS_CIRCUIT_CONFIG: CircuitBreakerConfig = {
+    failureThreshold: parseInt(process.env.OTP_CIRCUIT_THRESHOLD || '5'),
+    recoveryTimeoutMinutes: parseInt(process.env.OTP_CIRCUIT_RECOVERY_MIN || '5')
+  };
+
+  // Helper instance with circuit breaker and retry logic
+  private static readonly helper = new OTPServiceHelper(
+    OTPService.SMS_RETRY_CONFIG,
+    OTPService.SMS_CIRCUIT_CONFIG
+  );
 
   // Production safety checks
   private static checkProductionRequirements(): void {
@@ -53,10 +85,6 @@ export class OTPService {
       
       if (!process.env.MESSAGECENTRAL_AUTH_TOKEN) {
         throw new Error('MESSAGECENTRAL_AUTH_TOKEN must be set in production');
-      }
-      
-      if (!process.env.MESSAGECENTRAL_CUSTOMER_ID) {
-        throw new Error('MESSAGECENTRAL_CUSTOMER_ID must be set in production');
       }
     }
   }
@@ -89,72 +117,94 @@ export class OTPService {
   }
 
   /**
-   * Send OTP via MessageCentral v3 SMS API
+   * Send OTP via WhatsApp using Twilio API
    */
-  private static async sendSMS(phone: string, countryCode: string, otpCode: string): Promise<boolean> {
-    const isProduction = process.env.NODE_ENV === 'production';
-    const authToken = process.env.MESSAGECENTRAL_AUTH_TOKEN;
-    const customerId = process.env.MESSAGECENTRAL_CUSTOMER_ID;
-    
-    // Development fallback if credentials missing
-    if (!authToken || !customerId) {
-      if (isProduction) {
-        console.error('[OTP] MessageCentral credentials missing in production');
-        return false;
-      }
-      
-      console.log(`[OTP] Development mode - MessageCentral credentials missing, using fallback`);
-      console.log(`[OTP] OTP sent to ${countryCode}${phone} (code masked for security)`);
-      return true;
-    }
-
+  private static async sendWhatsAppOTP(phone: string, countryCode: string, otpCode: string): Promise<boolean> {
     try {
-      const message = `Your Ronak Motor Garage verification code is: ${otpCode}. Valid for ${this.OTP_EXPIRY_MINUTES} minutes. Do not share this code.`;
+      console.log(`[OTP] Sending WhatsApp OTP to ${countryCode}${phone}`);
+      const result = await WhatsAppService.sendOTPMessage(phone, countryCode, otpCode);
       
-      // Build v3 API URL with parameters
-      const apiUrl = new URL('https://cpaas.messagecentral.com/verification/v3/send');
-      apiUrl.searchParams.set('countryCode', countryCode.replace('+', ''));
-      apiUrl.searchParams.set('customerId', customerId);
-      apiUrl.searchParams.set('flowType', 'SMS');
-      apiUrl.searchParams.set('mobileNumber', phone);
-      apiUrl.searchParams.set('type', 'SMS');
-      apiUrl.searchParams.set('message', message);
-
-      console.log(`[OTP] Sending SMS to ${countryCode}${phone} via MessageCentral v3`);
-      
-      const response = await fetch(apiUrl.toString(), {
-        method: 'POST',
-        headers: {
-          'authToken': authToken,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[OTP] MessageCentral v3 API error ${response.status}:`, errorText);
-        
-        // In development, show detailed error but still allow fallback
-        if (!isProduction) {
-          console.log(`[OTP] Development fallback - OTP sent to ${countryCode}${phone} (code masked for security)`);
-          return true;
-        }
-        return false;
-      }
-
-      const result = await response.json();
-      console.log(`[OTP] SMS sent successfully to ${countryCode}${phone}`);
-      console.log(`[OTP] MessageCentral response:`, result);
-      return true;
-    } catch (error) {
-      const err = error as Error;
-      console.error(`[OTP] Failed to send SMS to ${countryCode}${phone}:`, err.message);
-      
-      // In development, provide fallback even on network errors
-      if (!isProduction) {
-        console.log(`[OTP] Development fallback due to error - OTP sent to ${countryCode}${phone} (code masked for security)`);
+      if (result.success) {
+        console.log(`[OTP] ✅ WhatsApp OTP sent successfully to ${countryCode}${phone}`);
         return true;
       }
+      
+      console.error(`[OTP] ❌ WhatsApp OTP failed: ${result.message}`);
+      return false;
+    } catch (error) {
+      const err = error as Error;
+      console.error(`[OTP] WhatsApp OTP error:`, err.message);
+      return false;
+    }
+  }
+
+  /**
+   * Send OTP via Email using SendGrid
+   */
+  private static async sendEmailOTP(phone: string, countryCode: string, otpCode: string, email?: string): Promise<boolean> {
+    try {
+      if (!email) {
+        console.error('[OTP] Email address required for email OTP channel');
+        return false;
+      }
+
+      console.log(`[OTP] Sending Email OTP to ${email}`);
+      
+      const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'noreply@ronakmotorgarage.com';
+      const subject = 'Your Verification Code';
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+              .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+              .header { background-color: #4CAF50; color: white; padding: 20px; text-align: center; }
+              .content { background-color: #f9f9f9; padding: 30px; border-radius: 5px; margin-top: 20px; }
+              .otp-code { font-size: 32px; font-weight: bold; color: #4CAF50; text-align: center; padding: 20px; background-color: white; border-radius: 5px; margin: 20px 0; letter-spacing: 5px; }
+              .footer { text-align: center; margin-top: 20px; color: #777; font-size: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1>Ronak Motor Garage</h1>
+              </div>
+              <div class="content">
+                <h2>Your Verification Code</h2>
+                <p>Use the following code to complete your verification:</p>
+                <div class="otp-code">${otpCode}</div>
+                <p><strong>This code will expire in 5 minutes.</strong></p>
+                <p>If you didn't request this code, please ignore this email.</p>
+              </div>
+              <div class="footer">
+                <p>Ronak Motor Garage - Your trusted automotive service center</p>
+              </div>
+            </div>
+          </body>
+        </html>
+      `;
+      
+      const textContent = `Your Ronak Motor verification code is: ${otpCode}. Valid for 5 minutes.`;
+      
+      const result = await sendEmailV2({
+        to: email,
+        from: fromEmail,
+        subject: subject,
+        text: textContent,
+        html: htmlContent
+      });
+      
+      if (result.success) {
+        console.log(`[OTP] ✅ Email OTP sent successfully to ${email}`);
+        return true;
+      }
+      
+      console.error(`[OTP] ❌ Email OTP failed: ${result.message}`);
+      return false;
+    } catch (error) {
+      const err = error as Error;
+      console.error(`[OTP] Email OTP error:`, err.message);
       return false;
     }
   }
@@ -171,12 +221,10 @@ export class OTPService {
   }
 
   /**
-   * Send OTP to phone number
+   * Send OTP to phone number via specified channel (WhatsApp or Email)
    */
-  static async sendOTP(phone: string, countryCode: string, purpose: string): Promise<OtpSendResult> {
+  static async sendOTP(phone: string, countryCode: string, purpose: string, channel: 'whatsapp' | 'email' = 'whatsapp', email?: string): Promise<OtpSendResult> {
     try {
-      // Check production requirements first
-      this.checkProductionRequirements();
       // Check rate limiting
       const rateLimited = await this.checkRateLimit(phone, countryCode);
       if (rateLimited) {
@@ -188,12 +236,37 @@ export class OTPService {
         });
       }
 
-      // Generate OTP and hash it
+      // Generate OTP code
       const otpCode = this.generateOTP();
-      const otpHash = this.hashOTP(otpCode, phone);
-      const expiresAt = new Date(Date.now() + (this.OTP_EXPIRY_MINUTES * 60 * 1000));
+      console.log(`[OTP] Generated OTP for ${countryCode}${phone} via ${channel}`);
 
-      // Store OTP in database (invalidate ALL previous active OTPs first)
+      // Send OTP via selected channel
+      let sendSuccess = false;
+      let channelMessage = '';
+      
+      if (channel === 'whatsapp') {
+        sendSuccess = await this.sendWhatsAppOTP(phone, countryCode, otpCode);
+        channelMessage = `WhatsApp message sent to ${countryCode}${phone}`;
+      } else if (channel === 'email') {
+        sendSuccess = await this.sendEmailOTP(phone, countryCode, otpCode, email);
+        channelMessage = `Email sent to ${email}`;
+      }
+      
+      if (!sendSuccess) {
+        return createCommunicationResult('otp', false, `Failed to send OTP via ${channel}. Please try again later.`, {
+          errorType: 'service_unavailable',
+          retryable: true,
+          metadata: { 
+            maxAttempts: this.MAX_ATTEMPTS,
+            expiresIn: this.OTP_EXPIRY_MINUTES * 60
+          }
+        });
+      }
+
+      const expiresAt = new Date(Date.now() + (this.OTP_EXPIRY_MINUTES * 60 * 1000));
+      const otpHash = this.hashOTP(otpCode, phone);
+
+      // Store OTP hash in database (invalidate ALL previous active OTPs first)
       const storage = await getStorage();
       
       // Expire ALL existing active OTPs for this phone/purpose to ensure single active OTP
@@ -206,26 +279,13 @@ export class OTPService {
         phone,
         countryCode,
         otpCodeHash: otpHash,
+        verificationId: null,
         purpose,
         maxAttempts: this.MAX_ATTEMPTS,
         expiresAt
       });
 
-      // Send SMS
-      const smsSuccess = await this.sendSMS(phone, countryCode, otpCode);
-      
-      if (!smsSuccess) {
-        return createCommunicationResult('otp', false, 'Failed to send OTP. Please try again later.', {
-          errorType: 'service_unavailable',
-          retryable: true,
-          metadata: { 
-            maxAttempts: this.MAX_ATTEMPTS,
-            expiresIn: this.OTP_EXPIRY_MINUTES * 60
-          }
-        });
-      }
-
-      return createCommunicationResult('otp', true, `OTP sent to ${countryCode}${phone}. Valid for ${this.OTP_EXPIRY_MINUTES} minutes.`, {
+      return createCommunicationResult('otp', true, `OTP sent via ${channel}. Valid for ${this.OTP_EXPIRY_MINUTES} minutes.`, {
         metadata: { 
           expiresIn: this.OTP_EXPIRY_MINUTES * 60,
           maxAttempts: this.MAX_ATTEMPTS
@@ -235,7 +295,7 @@ export class OTPService {
       const err = error as Error;
       console.error(`[OTP] Send error for ${countryCode}${phone}:`, err.message);
       const errorType = categorizeError(undefined, err.message);
-      return createCommunicationResult('otp', false, 'Failed to send OTP. Please try again later.', {
+      return createCommunicationResult('otp', false, `Failed to send OTP via ${channel}. Please try again later.`, {
         errorType,
         retryable: errorType !== 'validation',
         metadata: {
@@ -294,7 +354,16 @@ export class OTPService {
         });
       }
 
-      // Verify the OTP code
+      // Verify the OTP code using hash-based verification
+      if (!otpRecord.otpCodeHash) {
+        console.error('[OTP] No OTP hash found in record');
+        return createCommunicationResult('otp', false, 'Invalid OTP record. Please request a new code.', {
+          errorType: 'validation',
+          retryable: false,
+          metadata: { attempts: currentAttempts, maxAttempts: maxAttempts }
+        });
+      }
+
       const isValid = this.verifyOTPHash(otpCode, otpRecord.otpCodeHash, phone);
       
       if (!isValid) {

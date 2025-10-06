@@ -7,6 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { BidDialog } from "./BidDialog";
 import { ContactDialog } from "./ContactDialog";
 import { format } from "date-fns";
+import { Link } from "wouter";
 import type { Car } from "@shared/schema";
 
 /**
@@ -26,6 +27,12 @@ interface CarCardProps {
   isAuction?: boolean;
   currentBid?: number;
   auctionEndTime?: string;
+  description?: string;
+  transmission?: string;
+  bodyType?: string;
+  color?: string;
+  numOwners?: number;
+  engineSize?: string;
 }
 
 /**
@@ -66,7 +73,13 @@ export function CarCard({
   condition,
   isAuction = false,
   currentBid,
-  auctionEndTime
+  auctionEndTime,
+  description,
+  transmission,
+  bodyType,
+  color,
+  numOwners,
+  engineSize
 }: CarCardProps) {
   const { toast } = useToast();
   const [isFavorited, setIsFavorited] = useState(false);
@@ -87,17 +100,6 @@ export function CarCard({
       jpeg: `${baseUrl}.jpg`,
       fallback: imageUrl
     };
-  };
-
-  const handleAction = () => {
-    if (isAuction) {
-      setBidDialogOpen(true);
-    } else {
-      toast({
-        title: `${make} ${model} (${year})`,
-        description: `Price: ₹${price.toLocaleString('en-IN')} • Condition: ${condition} • Mileage: ${mileage.toLocaleString()} km • Fuel: ${fuelType} • Location: ${location}`,
-      });
-    }
   };
 
   const handleFavorite = () => {
@@ -188,7 +190,7 @@ export function CarCard({
         </div>
       </CardHeader>
 
-      <CardContent>
+      <CardContent className="space-y-3">
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div className="flex items-center gap-2">
             <Gauge className="h-4 w-4 text-muted-foreground" />
@@ -212,25 +214,48 @@ export function CarCard({
             ) : null;
           })()}
         </div>
+        
+        {(transmission || bodyType) && (
+          <div className="flex gap-2 text-xs text-muted-foreground">
+            {transmission && <Badge variant="secondary">{transmission}</Badge>}
+            {bodyType && <Badge variant="secondary">{bodyType}</Badge>}
+          </div>
+        )}
+
+        {description && (
+          <p className="text-sm text-muted-foreground line-clamp-2">
+            {description}
+          </p>
+        )}
       </CardContent>
 
       <CardFooter className="flex flex-col gap-2 sm:flex-row">
-        <Button 
-          className="flex-1" 
-          onClick={handleAction}
-          data-testid={`button-${isAuction ? 'bid' : 'view'}-${id}`}
-        >
-          {isAuction ? 'Place Bid' : 'View Details'}
-        </Button>
-        {!isAuction && (
+        {isAuction ? (
           <Button 
-            variant="outline" 
-            className="flex-1"
-            onClick={handleContactSeller}
-            data-testid={`button-contact-${id}`}
+            className="flex-1" 
+            onClick={() => setBidDialogOpen(true)}
+            data-testid={`button-bid-${id}`}
           >
-            Contact
+            Place Bid
           </Button>
+        ) : (
+          <>
+            <Button 
+              className="flex-1" 
+              asChild
+              data-testid={`button-view-${id}`}
+            >
+              <Link href={`/cars/${id}`}>View Details</Link>
+            </Button>
+            <Button 
+              variant="outline" 
+              className="flex-1"
+              onClick={handleContactSeller}
+              data-testid={`button-contact-${id}`}
+            >
+              Contact
+            </Button>
+          </>
         )}
       </CardFooter>
 

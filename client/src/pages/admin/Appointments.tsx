@@ -3,12 +3,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, User, MapPin, Wrench } from "lucide-react";
+import { Calendar, Clock, User, MapPin, Wrench, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useErrorHandler } from "@/lib/error-utils";
 import type { AppointmentWithDetails } from "@shared/schema";
 import { format } from "date-fns";
+import { useState } from "react";
 
 /**
  * Admin appointments management component for viewing and updating service appointments.
@@ -26,6 +27,8 @@ export default function AdminAppointments() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
   const { handleMutationError } = useErrorHandler();
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 20;
 
   // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
@@ -40,10 +43,21 @@ export default function AdminAppointments() {
     );
   }
 
-  // Fetch all appointments with details
-  const { data: appointments = [], isLoading, isError, refetch } = useQuery<AppointmentWithDetails[]>({
-    queryKey: ["/api/admin/appointments"],
+  // Fetch appointments with pagination
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["/api/admin/appointments", currentPage, pageSize],
+    queryFn: async () => {
+      const offset = (currentPage - 1) * pageSize;
+      const response = await apiRequest("GET", `/api/admin/appointments?offset=${offset}&limit=${pageSize}`);
+      return response.json();
+    },
   });
+
+  const appointments = data?.appointments || [];
+  const totalCount = data?.total || 0;
+  const totalPages = Math.ceil(totalCount / pageSize);
+  const startIndex = (currentPage - 1) * pageSize + 1;
+  const endIndex = Math.min(currentPage * pageSize, totalCount);
 
   // Status update mutation
   const updateStatusMutation = useMutation({
@@ -115,7 +129,7 @@ export default function AdminAppointments() {
             Manage Appointments
           </h1>
           <p className="text-muted-foreground">
-            {appointments.length} total appointments
+            {totalCount > 0 ? `Showing ${startIndex}-${endIndex} of ${totalCount} appointments` : 'No appointments'}
           </p>
         </div>
         <Link href="/admin">
@@ -133,8 +147,9 @@ export default function AdminAppointments() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4">
-          {appointments.map((appointment) => (
+        <>
+          <div className="grid gap-4">
+            {appointments.map((appointment) => (
             <Card key={appointment.id} className="hover-elevate">
               <CardHeader>
                 <div className="flex justify-between items-start">
@@ -203,7 +218,37 @@ export default function AdminAppointments() {
               </CardContent>
             </Card>
           ))}
-        </div>
+          </div>
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-6">
+              <div className="text-sm text-muted-foreground">
+                Page {currentPage} of {totalPages}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  <ChevronLeft className="h-4 w-4 mr-1" />
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Next
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

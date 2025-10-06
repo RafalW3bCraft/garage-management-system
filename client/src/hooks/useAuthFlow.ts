@@ -32,6 +32,7 @@ export interface AuthContext {
   name?: string;
   phone?: string;
   countryCode?: string;
+  channel?: 'whatsapp' | 'email';
   otpToken?: string;
 }
 
@@ -90,13 +91,20 @@ export const STEP_METADATA: Record<AuthStep, {
     description: () => "This will be displayed on your profile"
   },
   "phone-input": {
-    title: () => "Enter your phone number",
-    description: () => "We'll send you a verification code"
+    title: () => "Choose verification method",
+    description: (_, __, context) => 
+      context.channel === 'email' 
+        ? "We'll send you a verification code via email" 
+        : "We'll send you a verification code via WhatsApp"
   },
   "otp-verification": {
-    title: () => "Verify your phone",
-    description: (_, __, context) => 
-      `Enter the 6-digit code sent to ${context.countryCode}${context.phone}`
+    title: () => "Verify your code",
+    description: (_, __, context) => {
+      if (context.channel === 'email' && context.email) {
+        return `Enter the 6-digit code sent to ${context.email}`;
+      }
+      return `Enter the 6-digit code sent to ${context.countryCode}${context.phone}`;
+    }
   },
   "profile-setup": {
     title: () => "Complete your profile",

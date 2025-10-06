@@ -26,8 +26,10 @@ interface RegisterData {
  * Send OTP mutation data interface
  */
 interface SendOtpData {
-  phone: string;
-  countryCode: string;
+  phone?: string;
+  countryCode?: string;
+  email?: string;
+  channel: 'whatsapp' | 'email';
   purpose: string;
 }
 
@@ -83,7 +85,7 @@ interface AuthMutationCallbacks {
  * @property {object} registerMobileMutation - Mobile registration mutation
  * @property {(method: AuthMethod, data: object, context: AuthContext) => void} executeLogin - Execute login
  * @property {(method: AuthMethod, data: object, context: AuthContext) => void} executeRegister - Execute registration
- * @property {(phone: string, countryCode: string, mode: AuthMode) => void} sendOtp - Send OTP
+ * @property {(channel: 'whatsapp' | 'email', mode: AuthMode, phone?: string, countryCode?: string, email?: string) => void} sendOtp - Send OTP
  * @property {(phone: string, countryCode: string, otpCode: string, mode: AuthMode) => void} verifyOtp - Verify OTP
  * @property {() => void} googleLogin - Initiate Google OAuth
  * @property {boolean} isLoading - Whether any mutation is loading
@@ -186,9 +188,14 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
       return response.json();
     },
     onSuccess: (data, variables) => {
+      const channelText = variables.channel === 'email' ? 'email' : 'WhatsApp';
+      const destination = variables.channel === 'email' 
+        ? variables.email 
+        : `${variables.countryCode}${variables.phone}`;
+      
       handleSuccess(
         "OTP Sent", 
-        `Verification code sent to ${variables.countryCode}${variables.phone}`
+        `Verification code sent via ${channelText} to ${destination}`
       );
       callbacks?.onTransition?.("otp-verification");
     },
@@ -283,10 +290,18 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
     }
   };
   
-  const sendOtp = (phone: string, countryCode: string, mode: AuthMode) => {
+  const sendOtp = (
+    channel: 'whatsapp' | 'email',
+    mode: AuthMode,
+    phone?: string,
+    countryCode?: string,
+    email?: string
+  ) => {
     sendOtpMutation.mutate({
+      channel,
       phone,
       countryCode,
+      email,
       purpose: mode === "login" ? "login" : "registration",
     });
   };

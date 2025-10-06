@@ -5,9 +5,43 @@ import { promises as fs } from 'fs';
 
 // Image configuration with progressive loading support
 export const IMAGE_CONFIG = {
+  // Standard storage limit: 5MB per file for all image types
+  // This ensures consistent storage management across the platform
   maxFileSize: 5 * 1024 * 1024, // 5MB
-  allowedTypes: ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'],
-  allowedExtensions: ['.jpg', '.jpeg', '.png', '.webp'],
+  
+  // Supported image types - comprehensive format support for branding and site images
+  // JPEG/PNG/WebP: Standard web images with good compression
+  // GIF: Animated images and simple graphics
+  // SVG: Vector graphics for logos and icons (no size limit, scalable)
+  // BMP/TIFF: High-quality images for professional photography
+  // ICO: Favicons and small icons
+  // AVIF: Modern format with superior compression
+  allowedTypes: [
+    'image/jpeg', 
+    'image/jpg', 
+    'image/png', 
+    'image/webp',
+    'image/gif',
+    'image/svg+xml',
+    'image/bmp',
+    'image/tiff',
+    'image/x-icon',
+    'image/vnd.microsoft.icon',
+    'image/avif'
+  ],
+  allowedExtensions: [
+    '.jpg', 
+    '.jpeg', 
+    '.png', 
+    '.webp',
+    '.gif',
+    '.svg',
+    '.bmp',
+    '.tiff',
+    '.tif',
+    '.ico',
+    '.avif'
+  ],
   
   // Image dimensions with progressive loading sizes
   profile: {
@@ -72,6 +106,8 @@ export class ImageService {
   /**
    * Process image with WebP conversion for optimal web delivery
    * Generates both WebP (primary) and JPEG (fallback) versions
+   * Supports multiple input formats including GIF, SVG, BMP, TIFF, ICO, AVIF
+   * Preserves animated GIFs and ICO multi-resolution icons
    */
   static async processImage(
     inputPath: string, 
@@ -79,10 +115,55 @@ export class ImageService {
     config: { width: number; height: number; quality: number; webpQuality?: number }
   ): Promise<{ jpeg: string; webp: string }> {
     const webpQuality = config.webpQuality || config.quality;
-    const baseOutputPath = outputPath.replace(/\.(jpg|jpeg|png)$/i, '');
+    const baseOutputPath = outputPath.replace(/\.(jpg|jpeg|png|gif|bmp|tiff|tif|ico|avif|webp)$/i, '');
     const jpegPath = `${baseOutputPath}.jpg`;
     const webpPath = `${baseOutputPath}.webp`;
 
+    // Check file extension for special handling
+    const ext = path.extname(inputPath).toLowerCase();
+    
+    // Special handling for SVG (vector graphics)
+    if (ext === '.svg') {
+      // For SVG, just copy the file as-is (no processing needed for vector graphics)
+      // SVG files are already optimized and don't need resizing
+      const svgPath = `${baseOutputPath}.svg`;
+      await fs.copyFile(inputPath, svgPath);
+      
+      // Return SVG path for both (frontend will handle SVG display)
+      return { jpeg: svgPath, webp: svgPath };
+    }
+    
+    // Special handling for GIF (preserve animations)
+    if (ext === '.gif') {
+      // Check if GIF is animated using Sharp metadata
+      const metadata = await sharp(inputPath).metadata();
+      
+      // If GIF has multiple pages/frames, it's animated - preserve original
+      if (metadata.pages && metadata.pages > 1) {
+        console.log(`[IMAGE] Preserving animated GIF with ${metadata.pages} frames`);
+        const gifPath = `${baseOutputPath}.gif`;
+        await fs.copyFile(inputPath, gifPath);
+        
+        // Return GIF path for both (frontend will use original animated GIF)
+        return { jpeg: gifPath, webp: gifPath };
+      }
+      
+      // Static GIF can be processed normally
+      console.log('[IMAGE] Processing static GIF');
+    }
+    
+    // Special handling for ICO (multi-resolution icons)
+    if (ext === '.ico') {
+      // ICO files contain multiple sizes - preserve original
+      console.log('[IMAGE] Preserving ICO multi-resolution icon');
+      const icoPath = `${baseOutputPath}.ico`;
+      await fs.copyFile(inputPath, icoPath);
+      
+      // Return ICO path for both
+      return { jpeg: icoPath, webp: icoPath };
+    }
+
+    // Standard processing for other raster images (JPEG, PNG, BMP, TIFF, AVIF)
     // Create Sharp instance with resizing
     const sharpInstance = sharp(inputPath)
       .resize(config.width, config.height, {
@@ -136,6 +217,58 @@ export class ImageService {
     outputPath: string
   ): Promise<{ jpeg: string; webp: string }> {
     return await this.processImage(inputPath, outputPath, IMAGE_CONFIG.car);
+  }
+
+  static processImageAsync(
+    inputPath: string,
+    outputPath: string,
+    thumbnailPath: string,
+    config: { width: number; height: number; quality: number; webpQuality?: number },
+    type: 'profile' | 'car',
+    userId?: string
+  ): string {
+    const { imageProcessingQueue } = require('./image-processing-queue');
+    
+    const jobId = imageProcessingQueue.addJob({
+      type,
+      inputPath,
+      outputPath,
+      thumbnailPath,
+      config,
+      userId
+    });
+
+    return jobId;
+  }
+
+  static processProfileImageAsync(
+    inputPath: string,
+    outputPath: string,
+    thumbnailPath: string,
+    userId?: string
+  ): string {
+    return this.processImageAsync(
+      inputPath,
+      outputPath,
+      thumbnailPath,
+      IMAGE_CONFIG.profile,
+      'profile',
+      userId
+    );
+  }
+
+  static processCarImageAsync(
+    inputPath: string,
+    outputPath: string,
+    thumbnailPath: string
+  ): string {
+    return this.processImageAsync(
+      inputPath,
+      outputPath,
+      thumbnailPath,
+      IMAGE_CONFIG.car,
+      'car'
+    );
   }
 
   static async deleteImage(imagePath: string): Promise<{ success: boolean; error?: string }> {
@@ -288,6 +421,26 @@ export class ImageService {
 
   static async validateImage(filePath: string): Promise<boolean> {
     try {
+      const ext = path.extname(filePath).toLowerCase();
+      
+      // Special handling for SVG files
+      if (ext === '.svg') {
+        // Basic SVG validation - check file size and basic structure
+        const stats = await fs.stat(filePath);
+        if (stats.size > IMAGE_CONFIG.maxFileSize) {
+          return false;
+        }
+        
+        // Read first few bytes to check for SVG signature
+        const content = await fs.readFile(filePath, 'utf8');
+        if (!content.includes('<svg') && !content.includes('<?xml')) {
+          return false;
+        }
+        
+        return true;
+      }
+      
+      // For raster images, use Sharp validation
       const metadata = await sharp(filePath).metadata();
       
       // Check if it's a valid image

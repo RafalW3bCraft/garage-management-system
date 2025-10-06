@@ -52,12 +52,28 @@ const nameSchema = z.object({
  * Validation schema for phone input step
  */
 const phoneSchema = z.object({
+  channel: z.enum(['whatsapp', 'email'], {
+    required_error: "Please select a channel",
+  }).default('whatsapp'),
   phone: z
     .string()
     .min(7, "Phone number must be at least 7 digits")
     .max(15, "Phone number cannot exceed 15 digits")
-    .regex(/^[0-9]+$/, "Phone number must contain only digits"),
-  countryCode: z.string().min(1, "Please select a country"),
+    .regex(/^[0-9]+$/, "Phone number must contain only digits")
+    .optional(),
+  countryCode: z.string().min(1, "Please select a country").optional(),
+  email: z.string().email("Please enter a valid email address").optional(),
+}).refine((data) => {
+  if (data.channel === 'whatsapp') {
+    return !!data.phone && !!data.countryCode;
+  }
+  if (data.channel === 'email') {
+    return !!data.email;
+  }
+  return true;
+}, {
+  message: "Please provide the required information for the selected channel",
+  path: ["phone"],
 });
 
 /**
@@ -100,6 +116,7 @@ type AuthFormData = {
   name?: string;
   phone?: string;
   countryCode?: string;
+  channel?: 'whatsapp' | 'email';
   otp?: string;
 };
 
@@ -135,8 +152,10 @@ const getStepDefaultValues = (
       
     case "phone-input":
       return { 
+        channel: 'whatsapp' as const,
         phone: context.phone || "", 
-        countryCode: context.countryCode || defaultCountryCode 
+        countryCode: context.countryCode || defaultCountryCode,
+        email: context.email || ""
       };
       
     case "otp-verification":
@@ -270,9 +289,15 @@ export function useAuthForm(
         type: "text" as const,
         testId: "input-otp",
       },
-    };
+      channel: {
+        label: "Verification method",
+        placeholder: "Select channel",
+        type: "radio" as const,
+        testId: "radio-channel",
+      },
+    } as const;
     
-    return configs[fieldName];
+    return configs[fieldName] as typeof configs[keyof typeof configs] | undefined;
   };
   
   // Get fields that should be rendered for the current step
@@ -291,7 +316,7 @@ export function useAuthForm(
         return ["name"];
         
       case "phone-input":
-        return ["countryCode", "phone"];
+        return ["channel"];
         
       case "otp-verification":
         return ["otp"];
@@ -308,7 +333,7 @@ export function useAuthForm(
     
     fields.forEach(field => {
       if (formData[field] !== undefined) {
-        stepData[field] = formData[field];
+        stepData[field] = formData[field] as any;
       }
     });
     
@@ -317,7 +342,11 @@ export function useAuthForm(
   
   // Get button configuration for the current step
   const getSubmitButtonConfig = () => {
-    const configs = {
+    const configs: Record<AuthStep, { text: string; testId: string }> = {
+      "method-selection": {
+        text: "Continue",
+        testId: "button-continue",
+      },
       "email-input": {
         text: "Continue",
         testId: "button-email-continue",
@@ -344,7 +373,7 @@ export function useAuthForm(
       },
     };
     
-    return configs[step] || { text: "Continue", testId: "button-continue" };
+    return configs[step];
   };
   
   return {

@@ -113,26 +113,28 @@ function validateEnvironment(): void {
     console.log("- WhatsApp Service: ⚠ Disabled (mock mode)");
   }
   
-  // Validate MessageCentral Configuration for SMS/OTP
+  // Validate MessageCentral/OTP Service Configuration
   const messageCentralToken = process.env.MESSAGECENTRAL_AUTH_TOKEN;
-  const messageCentralCustomerId = process.env.MESSAGECENTRAL_CUSTOMER_ID;
+  const messageCentralCustomer = process.env.MESSAGECENTRAL_CUSTOMER_ID;
+  const messageCentralSender = process.env.MESSAGECENTRAL_SENDER_ID;
   
-  if (messageCentralToken && messageCentralCustomerId) {
+  if (messageCentralToken && messageCentralCustomer) {
     console.log("- MESSAGECENTRAL_AUTH_TOKEN: ✓ Available");
     console.log("- MESSAGECENTRAL_CUSTOMER_ID: ✓ Available");
+    console.log(`- MESSAGECENTRAL_SENDER_ID: ${messageCentralSender ? `✓ Available (${messageCentralSender})` : "⚠ Missing (using account default)"}`);
     console.log("- SMS/OTP Service: ✓ Enabled");
-  } else if (messageCentralToken || messageCentralCustomerId) {
+  } else if (messageCentralToken || messageCentralCustomer) {
     const missing = messageCentralToken ? "MESSAGECENTRAL_CUSTOMER_ID" : "MESSAGECENTRAL_AUTH_TOKEN";
     if (isProduction) {
       result.errors.push(`SMS/OTP service partially configured: ${missing} is missing. Either set both or remove both.`);
       console.log(`- MESSAGECENTRAL_AUTH_TOKEN: ${messageCentralToken ? "✓" : "✗"} ${messageCentralToken ? "Available" : "Missing"}`);
-      console.log(`- MESSAGECENTRAL_CUSTOMER_ID: ${messageCentralCustomerId ? "✓" : "✗"} ${messageCentralCustomerId ? "Available" : "Missing"}`);
+      console.log(`- MESSAGECENTRAL_CUSTOMER_ID: ${messageCentralCustomer ? "✓" : "✗"} ${messageCentralCustomer ? "Available" : "Missing"}`);
       console.log("- SMS/OTP Service: ✗ PARTIALLY CONFIGURED (INVALID IN PRODUCTION)");
     } else {
-      result.warnings.push(`SMS/OTP service partially configured: ${missing} is missing. OTP will use mock mode.`);
+      result.warnings.push(`SMS/OTP service partially configured: ${missing} is missing. Mobile registration will use mock mode.`);
       console.log(`- MESSAGECENTRAL_AUTH_TOKEN: ${messageCentralToken ? "✓" : "⚠"} ${messageCentralToken ? "Available" : "Missing"}`);
-      console.log(`- MESSAGECENTRAL_CUSTOMER_ID: ${messageCentralCustomerId ? "✓" : "⚠"} ${messageCentralCustomerId ? "Available" : "Missing"}`);
-      console.log("- SMS/OTP Service: ⚠ Mock mode (disabled)");
+      console.log(`- MESSAGECENTRAL_CUSTOMER_ID: ${messageCentralCustomer ? "✓" : "⚠"} ${messageCentralCustomer ? "Available" : "Missing"}`);
+      console.log("- SMS/OTP Service: ⚠ Disabled (mock mode)");
     }
   } else {
     result.warnings.push("SMS/OTP service not configured - mobile registration will use mock mode");

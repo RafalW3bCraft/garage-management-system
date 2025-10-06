@@ -1,6 +1,7 @@
 import { HeroSection } from "@/components/HeroSection";
 import { ServiceCard } from "@/components/ServiceCard";
 import { StatsCard } from "@/components/StatsCard";
+import { CarCard } from "@/components/CarCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { 
@@ -12,11 +13,12 @@ import {
   IndianRupee, 
   Users,
   Star,
-  CheckCircle
+  CheckCircle,
+  Loader2
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import type { Service } from "@shared/schema";
+import type { Service, Car as CarType } from "@shared/schema";
 
 /**
  * Home page component displaying the landing page with hero section, featured services,
@@ -35,6 +37,15 @@ export default function Home() {
     queryKey: ["/api/services"],
     staleTime: 5 * 60 * 1000, // 5 minutes
   });
+
+  // Fetch cars for sale from API
+  const { data: carsForSale = [], isLoading: carsLoading, error: carsError } = useQuery<CarType[]>({
+    queryKey: ["/api/cars/sale"],
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+
+  // Get featured cars (first 3 cars for sale)
+  const featuredCars = carsForSale.slice(0, 3);
 
   // Get featured services (first 3 services)
   const featuredServices = services.slice(0, 3).map(service => {
@@ -109,6 +120,73 @@ export default function Home() {
               icon={<Star className="h-4 w-4" />}
               description="Customer satisfaction"
             />
+          </div>
+        </div>
+      </section>
+
+      {/* Featured Cars Section */}
+      <section className="py-16">
+        <div className="container mx-auto px-4">
+          <div className="text-center mb-12">
+            <h2 className="text-3xl font-bold mb-4">Featured Cars for Sale</h2>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              Browse our handpicked selection of quality pre-owned vehicles. 
+              Each car is thoroughly inspected and priced competitively.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+            {carsLoading ? (
+              [...Array(3)].map((_, index) => (
+                <Card key={index} className="animate-pulse">
+                  <div className="h-48 bg-muted rounded-t-lg"></div>
+                  <div className="p-6 space-y-4">
+                    <div className="h-4 bg-muted rounded"></div>
+                    <div className="h-4 bg-muted rounded w-3/4"></div>
+                    <div className="h-4 bg-muted rounded w-1/2"></div>
+                  </div>
+                </Card>
+              ))
+            ) : carsError ? (
+              <div className="col-span-3 text-center py-8">
+                <p className="text-muted-foreground">Unable to load featured cars. Please try again later.</p>
+              </div>
+            ) : featuredCars.length > 0 ? (
+              featuredCars.map((car) => (
+                <CarCard 
+                  key={car.id}
+                  id={car.id}
+                  make={car.make}
+                  model={car.model}
+                  year={car.year}
+                  price={car.price}
+                  mileage={car.mileage}
+                  fuelType={car.fuelType}
+                  location={car.location}
+                  image={car.image}
+                  condition={car.condition as "Excellent" | "Good" | "Fair"}
+                  isAuction={car.isAuction || false}
+                  currentBid={car.currentBid || undefined}
+                  auctionEndTime={car.auctionEndTime ? new Date(car.auctionEndTime).toISOString() : undefined}
+                  description={car.description || undefined}
+                  transmission={car.transmission || undefined}
+                  bodyType={car.bodyType || undefined}
+                  color={car.color || undefined}
+                  numOwners={car.numOwners || undefined}
+                  engineSize={car.engineSize || undefined}
+                />
+              ))
+            ) : (
+              <div className="col-span-3 text-center py-8">
+                <p className="text-muted-foreground">No cars available at the moment.</p>
+              </div>
+            )}
+          </div>
+          <div className="text-center">
+            <Button size="lg" asChild>
+              <Link href="/cars" data-testid="link-view-all-cars">
+                View All Cars
+              </Link>
+            </Button>
           </div>
         </div>
       </section>

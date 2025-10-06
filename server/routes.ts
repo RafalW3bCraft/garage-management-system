@@ -2,11 +2,12 @@ import type { Express, Request, Response, NextFunction, RequestHandler } from "e
 import { createServer, type Server } from "http";
 import session from "express-session";
 import express from "express";
-import { getStorage } from "./storage";
+import { getStorage, type CarFilterOptions } from "./storage";
 import { 
   insertServiceSchema,
   insertAppointmentSchema,
   insertCarSchema,
+  insertCarImageSchema,
   insertCustomerSchema,
   insertContactSchema,
   insertLocationSchema,
@@ -927,101 +928,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Apply CSRF protection to all API routes
   app.use('/api', csrfProtection);
 
-  // Authentication Routes
+  // Authentication Routes - DISABLED (OTP-only authentication)
+  // Email/password authentication has been disabled in favor of OTP-only authentication
   app.post("/api/auth/register", async (req, res) => {
-    try {
-      const validatedData = serverRegisterSchema.parse(req.body);
-      const storage = await getStorage();
-
-      // Check if user already exists
-      const existingUser = await storage.getUserByEmail(validatedData.email);
-      if (existingUser) {
-        return sendConflictError(res, "User already exists with this email");
-      }
-
-      // Hash password and create user
-      const hashedPassword = await hashPassword(validatedData.password);
-      const user = await storage.createUser({
-        email: validatedData.email,
-        name: validatedData.name,
-        password: hashedPassword,
-        provider: "email",
-        emailVerified: false
-      });
-
-      // Session fixation mitigation: regenerate session before auto-login after registration
-      req.session.regenerate((err) => {
-        if (err) {
-          console.error("Session regeneration failed during registration:", err);
-          return sendError(res, "Registration successful but session setup failed. Please log in manually.");
-        }
-        
-        // Log the user in immediately after registration
-        req.login(user, (err) => {
-          if (err) {
-            console.error("Login after registration failed:", err);
-            return sendError(res, "Registration successful but failed to log in. Please try logging in manually.");
-          }
-          
-          // Don't return password in response
-          const { password, ...userResponse } = user;
-          return sendResourceCreated(res, userResponse, "Account created and logged in successfully");
-        });
-      });
-    } catch (error) {
-      handleApiError(error, "register user", res);
-    }
+    return sendError(res, "Email/password registration is disabled. Please use OTP authentication.", 403, undefined, "AUTH_METHOD_DISABLED");
   });
 
   app.post("/api/auth/login", async (req, res) => {
-    try {
-      const validatedData = loginSchema.parse(req.body);
-      const storage = await getStorage();
-
-      // Find user by email
-      const user = await storage.getUserByEmail(validatedData.email);
-      if (!user || !user.password) {
-        return sendUnauthorizedError(res, "Invalid email or password");
-      }
-
-      // Verify password
-      const isValidPassword = await verifyPassword(validatedData.password, user.password);
-      if (!isValidPassword) {
-        return sendUnauthorizedError(res, "Invalid email or password");
-      }
-
-      // Session fixation mitigation: regenerate session before login
-      req.session.regenerate((err) => {
-        if (err) {
-          console.error("Session regeneration failed:", err);
-          return sendError(res, "Session setup failed. Please try again.");
-        }
-        
-        // Login user via passport after session regeneration
-        req.login(user, (err) => {
-          if (err) {
-            console.error("Passport login error:", err.message);
-            
-            // More specific login session errors
-            if (err.message?.includes('session')) {
-              return sendError(res, "Session creation failed. Please try again.");
-            }
-            
-            if (err.message?.includes('serialize')) {
-              return sendError(res, "Login processing error. Please clear your cookies and try again.");
-            }
-            
-            return sendError(res, "Login failed. Please try again later.");
-          }
-          
-          const { password, ...userResponse } = user;
-          return sendSuccess(res, userResponse, "Login successful");
-        });
-      });
-    } catch (error) {
-      // unified-error-handler
-      handleApiError(error, "log in", res);
-    }
+    return sendError(res, "Email/password login is disabled. Please use OTP authentication.", 403, undefined, "AUTH_METHOD_DISABLED");
   });
 
   app.post("/api/auth/logout", asyncRoute("logout", async (req: Request, res: Response) => {
@@ -1033,63 +947,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   }));
 
-  // Google OAuth routes
+  // Google OAuth routes - DISABLED (OTP-only authentication)
   app.get("/api/auth/google", asyncRoute("initiate Google OAuth", async (req: Request, res: Response, next: NextFunction) => {
-    // Generate CSRF-protected state parameter for OAuth flow
-    const state = crypto.randomBytes(32).toString('hex');
-    req.session.oauthState = state;
-    
-    passport.authenticate("google", {
-      scope: ["profile", "email"],
-      state: state
-    })(req, res, next);
+    return res.redirect("/login?error=oauth_disabled");
   }));
 
-  app.get("/api/auth/google/callback", 
-    (req, res, next) => {
-      // Validate state parameter to prevent CSRF attacks
-      const receivedState = req.query.state;
-      const storedState = req.session.oauthState;
-      
-      if (!receivedState || !storedState || receivedState !== storedState) {
-        console.error(`[OAuth] State parameter validation failed. Received: ${receivedState}, Stored: ${storedState}`);
-        return res.redirect("/login?error=oauth_security_failed");
-      }
-      
-      // Clear the state from session after validation
-      delete req.session.oauthState;
-      
-      console.log(`[OAuth] State parameter validation passed`);
-      next();
-    },
-    passport.authenticate("google", { failureRedirect: "/login?error=oauth_failed" }),
-    (req, res) => {
-      // Session fixation mitigation: regenerate session after successful OAuth authentication
-      req.session.regenerate((err) => {
-        if (err) {
-          console.error("Session regeneration failed after Google OAuth:", err);
-          return res.redirect("/login?error=session_failed");
-        }
-        
-        // Re-establish the user in the session after regeneration
-        if (req.user) {
-          req.login(req.user, (loginErr) => {
-            if (loginErr) {
-              console.error("Re-login after session regeneration failed:", loginErr);
-              return res.redirect("/login?error=session_failed");
-            }
-            
-            console.log(`[OAuth] Session regenerated successfully for user: ${(req.user as any).email}`);
-            // Successful authentication, redirect to dashboard or home
-            res.redirect("/?login=success");
-          });
-        } else {
-          console.error("No user found after OAuth authentication");
-          res.redirect("/login?error=oauth_failed");
-        }
-      });
-    }
-  );
+  app.get("/api/auth/google/callback", asyncRoute("Google OAuth callback", async (req: Request, res: Response) => {
+    return res.redirect("/login?error=oauth_disabled");
+  }));
 
   // Get current user
   app.get("/api/auth/me", asyncRoute("get current user", async (req: Request, res: Response) => {
@@ -1101,14 +966,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }));
 
-  // Get available auth providers
+  // Get available auth providers - OTP only
   app.get("/api/auth/providers", asyncRoute("get auth providers", async (req: Request, res: Response) => {
-    const providers = ["email"]; // Email auth is always available
-    
-    // Check if Google OAuth is configured
-    if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
-      providers.push("google");
-    }
+    // Only OTP authentication is available (WhatsApp and Email)
+    const providers = ["mobile"];
     
     return sendSuccess(res, { providers });
   }));
@@ -1122,17 +983,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
     }
 
-    const { phone, countryCode, purpose } = validationResult.data;
-    const result = await OTPService.sendOTP(phone, countryCode, purpose);
+    const { phone, countryCode, purpose, channel } = validationResult.data;
+    const email = req.body.email; // Optional email for email channel
+    
+    // Validate email is provided for email channel
+    if (channel === 'email' && !email) {
+      return sendValidationError(res, "Email address is required for email OTP channel", []);
+    }
+    
+    const result = await OTPService.sendOTP(phone, countryCode, purpose, channel, email);
     
     if (result.success) {
+      const channelMessage = channel === 'whatsapp' 
+        ? `OTP sent via WhatsApp to ${countryCode}${phone}`
+        : `OTP sent via email to ${email}`;
+      
       return sendSuccess(res, {
-        expiresIn: result.expiresIn
-      }, "OTP sent successfully");
+        expiresIn: result.expiresIn,
+        channel: channel
+      }, channelMessage);
     } else {
       return sendError(res, result.message, 400, undefined, "OTP_SEND_FAILED", {
         attempts: result.attempts,
-        maxAttempts: result.maxAttempts
+        maxAttempts: result.maxAttempts,
+        channel: channel
       });
     }
   }));
@@ -1145,7 +1019,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
     }
 
-    const { phone, countryCode, otpCode, purpose } = validationResult.data;
+    const { phone, countryCode, otpCode, purpose, channel } = validationResult.data;
     const storage = await getStorage();
 
     // Verify OTP with the correct purpose
@@ -1191,6 +1065,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             
             return sendError(res, "Login failed. Please try again later.", 500, undefined, "LOGIN_FAILED");
           }
+          
+          // Initialize session timestamp for admin middleware
+          req.session.createdAt = Date.now();
           
           const { password, ...userResponse } = user;
           return sendSuccess(res, { user: userResponse }, "Login successful");
@@ -1260,6 +1137,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return sendError(res, "Registration completed but login failed. Please try logging in.", 500, undefined, "LOGIN_FAILED");
           }
         
+        // Initialize session timestamp for admin middleware
+        req.session.createdAt = Date.now();
+        
         // Send welcome WhatsApp message for new registrations
         try {
           if (user!.phone && user!.countryCode) {
@@ -1318,6 +1198,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.error("Login after mobile registration failed:", err);
             return sendError(res, "Account created but login failed. Please try logging in.", 500, undefined, "LOGIN_FAILED");
           }
+        
+        // Initialize session timestamp for admin middleware
+        req.session.createdAt = Date.now();
         
         // Send welcome WhatsApp message for new registrations
         try {
@@ -1640,6 +1523,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     resource: "admin_area"
   });
 
+  // Helper function to safely capture entity snapshot for audit logging
+  // Excludes sensitive fields like passwords and OTP codes
+  function captureEntitySnapshot(entity: any): Record<string, any> {
+    if (!entity || typeof entity !== 'object') {
+      return {};
+    }
+    
+    const { password, otpCodeHash, ...safe } = entity;
+    return safe;
+  }
+
   // Helper function to log admin actions
   const logAdminAction = async (req: Request, res: Response, additionalData?: Record<string, unknown>) => {
     if (!req.adminContext) return;
@@ -1678,12 +1572,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const offset = parseInt(req.query.offset as string) || 0;
     const limit = parseInt(req.query.limit as string) || 100;
     
-    const users = await storage.getAllUsers(offset, limit);
+    const [users, totalCount] = await Promise.all([
+      storage.getAllUsers(offset, limit),
+      storage.getUserCount()
+    ]);
+    
     // Remove passwords from response for security
     const safeUsers = users.map(({ password, ...user }) => user);
     
     res.json({ 
       users: safeUsers,
+      total: totalCount,
       offset,
       limit,
       hasMore: users.length === limit
@@ -2216,12 +2115,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Log successful service creation
         await logAdminAction(req, res, {
           resourceId: service.id,
-          additionalInfo: JSON.stringify({
-            action: "create",
-            serviceName: service.title,
-            category: service.category,
-            price: service.price
-          })
+          newValue: captureEntitySnapshot(service),
+          additionalInfo: 'Service created successfully'
         });
         
         // Invalidate service caches after successful creation
@@ -2289,15 +2184,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Log successful service update
         await logAdminAction(req, res, {
           resourceId: id,
-          additionalInfo: JSON.stringify({
-            action: "update",
-            oldData: {
-              name: existingService.title,
-              price: existingService.price,
-              category: existingService.category
-            },
-            newData: validatedData
-          })
+          oldValue: captureEntitySnapshot(existingService),
+          newValue: captureEntitySnapshot(updatedService),
+          additionalInfo: 'Service updated successfully'
         });
         
         // Invalidate service caches after successful update
@@ -2369,14 +2258,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Log successful service deletion
         await logAdminAction(req, res, {
           resourceId: id,
-          additionalInfo: JSON.stringify({
-            action: "delete",
-            deletedService: {
-              name: existingService.title,
-              category: existingService.category,
-              price: existingService.price
-            }
-          })
+          oldValue: captureEntitySnapshot(existingService),
+          additionalInfo: 'Service deleted successfully'
         });
         
         // Invalidate service caches after successful deletion
@@ -2477,8 +2360,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin Routes - must be defined before other appointment routes
   app.get("/api/admin/appointments", requireAdmin, asyncRoute("fetch all appointments for admin", async (req: Request, res: Response) => {
     const storage = await getStorage();
-    const appointments = await storage.getAllAppointments();
-    res.json(appointments);
+    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = parseInt(req.query.limit as string) || 100;
+    
+    const [appointments, totalCount] = await Promise.all([
+      storage.getAllAppointments(offset, limit),
+      storage.getAppointmentCount()
+    ]);
+    
+    res.json({
+      appointments,
+      total: totalCount,
+      offset,
+      limit,
+      hasMore: appointments.length === limit
+    });
   }));
 
   app.patch("/api/admin/appointments/:id/status", 
@@ -2554,12 +2450,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Log successful status change
         await logAdminAction(req, res, {
           resourceId: id,
-          additionalInfo: JSON.stringify({
-            action: "status_update",
-            oldStatus,
-            newStatus: status,
-            appointmentId: id
-          })
+          oldValue: { status: oldStatus },
+          newValue: { status: status },
+          additionalInfo: `Appointment status changed from ${oldStatus} to ${status}`
         });
         
         res.json({ 
@@ -2991,6 +2884,86 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Cars API
   app.get("/api/cars", async (req, res) => {
     try {
+      const offset = parseInt(req.query.offset as string);
+      const limit = parseInt(req.query.limit as string);
+      
+      const filters: CarFilterOptions = {};
+      
+      if (req.query.transmission) {
+        filters.transmission = req.query.transmission as string;
+      }
+      
+      if (req.query.bodyType) {
+        filters.bodyType = req.query.bodyType as string;
+      }
+      
+      if (req.query.color) {
+        filters.color = req.query.color as string;
+      }
+      
+      if (req.query.yearMin) {
+        const yearMin = parseInt(req.query.yearMin as string);
+        if (!isNaN(yearMin)) {
+          filters.yearMin = yearMin;
+        }
+      }
+      
+      if (req.query.yearMax) {
+        const yearMax = parseInt(req.query.yearMax as string);
+        if (!isNaN(yearMax)) {
+          filters.yearMax = yearMax;
+        }
+      }
+      
+      if (req.query.mileageMin) {
+        const mileageMin = parseInt(req.query.mileageMin as string);
+        if (!isNaN(mileageMin)) {
+          filters.mileageMin = mileageMin;
+        }
+      }
+      
+      if (req.query.mileageMax) {
+        const mileageMax = parseInt(req.query.mileageMax as string);
+        if (!isNaN(mileageMax)) {
+          filters.mileageMax = mileageMax;
+        }
+      }
+      
+      if (req.query.sortBy && ['price', 'year', 'mileage'].includes(req.query.sortBy as string)) {
+        filters.sortBy = req.query.sortBy as 'price' | 'year' | 'mileage';
+      }
+      
+      if (req.query.sortOrder && ['asc', 'desc'].includes(req.query.sortOrder as string)) {
+        filters.sortOrder = req.query.sortOrder as 'asc' | 'desc';
+      }
+      
+      const hasFilters = Object.keys(filters).length > 0;
+      
+      // If pagination parameters or filters are provided, bypass cache and fetch filtered/sorted data
+      if (!isNaN(offset) && !isNaN(limit)) {
+        const storage = await getStorage();
+        const [cars, totalCount] = await Promise.all([
+          storage.getAllCars(offset, limit, hasFilters ? filters : undefined),
+          storage.getCarCount(hasFilters ? filters : undefined)
+        ]);
+        
+        return res.json({
+          cars,
+          total: totalCount,
+          offset,
+          limit,
+          hasMore: cars.length === limit
+        });
+      }
+      
+      // If only filters/sorting but no pagination, fetch all filtered cars
+      if (hasFilters) {
+        const storage = await getStorage();
+        const cars = await storage.getAllCars(0, 100, filters);
+        return res.json(cars);
+      }
+      
+      // Default behavior: use cached data for all cars (for public listing)
       const result = await getCachedCars();
       
       if (!result.success) {
@@ -3046,6 +3019,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const validatedData = insertCarSchema.parse(req.body);
       const car = await storage.createCar(validatedData);
       
+      // Log successful car creation
+      await logAdminAction(req, res, {
+        resourceId: car.id,
+        newValue: captureEntitySnapshot(car),
+        additionalInfo: 'Car created successfully'
+      });
+      
       // Invalidate car caches after successful creation
       cacheManager.invalidateCarCaches(car.id);
       
@@ -3058,6 +3038,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
   });
+
+  // Car image endpoints
+  app.post("/api/cars/:id/images", requireAdmin, asyncRoute("upload car image", async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const storage = await getStorage();
+    
+    // Validate the car exists first
+    const car = await storage.getCar(id);
+    if (!car) {
+      return sendNotFoundError(res, "Car not found");
+    }
+    
+    // Validate the request body
+    const validatedData = insertCarImageSchema.parse({
+      carId: id,
+      ...req.body
+    });
+    
+    // Create the car image
+    const carImage = await storage.createCarImage(validatedData);
+    
+    // Invalidate car caches after successful image upload
+    cacheManager.invalidateCarCaches(id);
+    
+    sendResourceCreated(res, carImage, "Car image uploaded successfully");
+  }));
+
+  app.delete("/api/cars/images/:imageId", requireAdmin, asyncRoute("delete car image", async (req: Request, res: Response) => {
+    const { imageId } = req.params;
+    const storage = await getStorage();
+    
+    // Delete the car image by ID
+    await storage.deleteCarImage(imageId);
+    
+    // Invalidate car caches
+    cacheManager.invalidateCarCaches();
+    
+    sendResourceDeleted(res, "Car image deleted successfully");
+  }));
 
   // Bid endpoints - RE-ENABLED
   app.post("/api/cars/:carId/bids", requireAuth, async (req, res) => {
@@ -3237,6 +3256,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const validatedData = insertLocationSchema.parse(req.body);
       const location = await storage.createLocation(validatedData);
       
+      // Log successful location creation
+      await logAdminAction(req, res, {
+        resourceId: location.id,
+        newValue: captureEntitySnapshot(location),
+        additionalInfo: 'Location created successfully'
+      });
+      
       // Invalidate location caches after successful creation
       cacheManager.invalidateLocationCaches(location.id);
       
@@ -3266,6 +3292,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     const updatedLocation = await storage.updateLocation(id, validatedData);
     
+    // Log successful location update
+    await logAdminAction(req, res, {
+      resourceId: id,
+      oldValue: captureEntitySnapshot(existingLocation),
+      newValue: captureEntitySnapshot(updatedLocation),
+      additionalInfo: 'Location updated successfully'
+    });
+    
     // Invalidate location caches after successful update
     cacheManager.invalidateLocationCaches(id);
     
@@ -3293,6 +3327,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     
     await storage.deleteLocation(id);
     
+    // Log successful location deletion
+    await logAdminAction(req, res, {
+      resourceId: id,
+      oldValue: captureEntitySnapshot(existingLocation),
+      additionalInfo: 'Location deleted successfully'
+    });
+    
     // Invalidate location caches after successful deletion
     cacheManager.invalidateLocationCaches(id);
     
@@ -3303,7 +3344,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Upload profile image
   app.post("/api/upload/profile", requireAuth, profileUpload.single('profileImage'), asyncRoute("upload profile image", async (req: Request, res: Response) => {
-    const storage = await getStorage();
     const user = req.user;
     
     if (!req.file) {
@@ -3323,31 +3363,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid image file. Please upload a valid image." });
       }
 
-      // Process the image - generates both WebP and JPEG
-      const processedImages = await ImageService.processProfileImage(inputPath, outputPath);
-      const thumbnails = await ImageService.createThumbnail(processedImages.jpeg, thumbnailPath);
+      // Queue image processing in background
+      const jobId = ImageService.processProfileImageAsync(
+        inputPath,
+        outputPath,
+        thumbnailPath,
+        user.id
+      );
 
-      // Update user profile with JPEG URL (backward compatible)
-      const imageUrl = ImageService.generateImageUrl(filename, 'profiles');
-      const imageUrls = ImageService.generateImageUrls(filename, 'profiles');
-      await storage.updateUser(user.id, { profileImage: imageUrl });
-
-      // Clean up original uploaded file
-      await ImageService.deleteImage(inputPath);
-
+      // Return immediately with placeholder
+      const placeholderUrl = `/uploads/profiles/processing-placeholder.jpg`;
+      
       res.json({ 
-        message: "Profile image uploaded successfully",
-        imageUrl: imageUrl,
-        imageUrls: imageUrls // Include WebP and JPEG URLs for frontend
+        processing: true,
+        jobId,
+        message: "Image upload successful, processing in background",
+        imageUrl: placeholderUrl
       });
     } catch (error) {
-      // Clean up files on error
+      // Clean up file on error
       await ImageService.deleteImage(inputPath);
-      await ImageService.deleteImage(`${outputPath}.jpg`);
-      await ImageService.deleteImage(`${outputPath}.webp`);
-      await ImageService.deleteImage(`${thumbnailPath}.jpg`);
-      await ImageService.deleteImage(`${thumbnailPath}.webp`);
-      // Don't throw - let asyncRoute handle error properly
       console.error('Profile image upload error:', error);
       return res.status(500).json({
         message: 'Profile image upload failed. Please try again later.'
@@ -3374,35 +3409,76 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid image file. Please upload a valid image." });
       }
 
-      // Process the image - generates both WebP and JPEG
-      const processedImages = await ImageService.processCarImage(inputPath, outputPath);
-      const thumbnails = await ImageService.createThumbnail(processedImages.jpeg, thumbnailPath);
+      // Queue image processing in background
+      const jobId = ImageService.processCarImageAsync(
+        inputPath,
+        outputPath,
+        thumbnailPath
+      );
 
-      // Clean up original uploaded file
-      await ImageService.deleteImage(inputPath);
-
-      const imageUrl = ImageService.generateImageUrl(filename, 'cars');
-      const imageUrls = ImageService.generateImageUrls(filename, 'cars');
+      // Return immediately with placeholder
+      const placeholderUrl = `/uploads/cars/processing-placeholder.jpg`;
       
       res.json({ 
-        message: "Car image uploaded successfully",
-        imageUrl: imageUrl,
-        imageUrls: imageUrls, // Include WebP and JPEG URLs for frontend
+        processing: true,
+        jobId,
+        message: "Image upload successful, processing in background",
+        imageUrl: placeholderUrl,
         filename: filename
       });
     } catch (error) {
-      // Clean up files on error
+      // Clean up file on error
       await ImageService.deleteImage(inputPath);
-      await ImageService.deleteImage(`${outputPath}.jpg`);
-      await ImageService.deleteImage(`${outputPath}.webp`);
-      await ImageService.deleteImage(`${thumbnailPath}.jpg`);
-      await ImageService.deleteImage(`${thumbnailPath}.webp`);
-      // Don't throw - let asyncRoute handle error properly
       console.error('Car image upload error:', error);
       return res.status(500).json({
         message: 'Car image upload failed. Please try again later.'
       });
     }
+  }));
+
+  // Get job status
+  app.get("/api/upload/status/:jobId", requireAuth, asyncRoute("get job status", async (req: Request, res: Response) => {
+    const { jobId } = req.params;
+    const { imageProcessingQueue } = require('./image-processing-queue');
+    
+    const job = imageProcessingQueue.getJobStatus(jobId);
+    
+    if (!job) {
+      return res.status(404).json({ 
+        message: "Job not found" 
+      });
+    }
+
+    const response: {
+      jobId: string;
+      status: string;
+      processing: boolean;
+      message?: string;
+      imageUrl?: string;
+      imageUrls?: { webp: string; jpeg: string; fallback: string };
+      thumbnailUrls?: { webp: string; jpeg: string; fallback: string };
+      error?: string;
+    } = {
+      jobId: job.id,
+      status: job.status,
+      processing: job.status === 'pending' || job.status === 'processing'
+    };
+
+    if (job.status === 'completed' && job.result) {
+      response.message = 'Image processing completed successfully';
+      response.imageUrl = job.result.imageUrl;
+      response.imageUrls = job.result.imageUrls;
+      if (job.result.thumbnailUrls) {
+        response.thumbnailUrls = job.result.thumbnailUrls;
+      }
+    } else if (job.status === 'failed') {
+      response.message = 'Image processing failed';
+      response.error = job.error || 'Unknown error';
+    } else {
+      response.message = `Image processing ${job.status}`;
+    }
+
+    res.json(response);
   }));
 
   // Replace profile image - PUT /api/upload/profile/replace/:filename
@@ -3518,6 +3594,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const imageUrl = ImageService.generateImageUrl(newFilename, 'cars');
       await storage.updateCar(carWithImage.id, { image: imageUrl });
 
+      // Log successful car image replacement
+      await logAdminAction(req, res, {
+        resourceId: carWithImage.id,
+        oldValue: { filename: filename, type: 'car' },
+        newValue: { filename: newFilename, type: 'car' },
+        additionalInfo: 'Car image replaced successfully'
+      });
+
       // Clean up original uploaded file
       await ImageService.deleteImage(inputPath);
 
@@ -3602,6 +3686,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Delete image files
       const imagePath = path.join('public/uploads/cars', filename);
       const deleteResult = await ImageService.deleteImageWithThumbnail(imagePath, 'cars');
+
+      // Log successful car image deletion
+      await logAdminAction(req, res, {
+        resourceId: carWithImage.id,
+        oldValue: { filename: filename, type: 'car' },
+        additionalInfo: 'Car image deleted successfully'
+      });
 
       // Update car's image field to a placeholder or null - for this implementation, we'll keep the old image URL
       // In a real-world scenario, you might want to set it to a default placeholder image
@@ -3732,6 +3823,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(500).json({ message: "Failed to delete appointment" });
     }
 
+    // Log admin action if user is admin
+    if (user.role === "admin") {
+      await logAdminAction(req, res, {
+        resourceId: id,
+        oldValue: captureEntitySnapshot(appointment),
+        additionalInfo: 'Appointment deleted successfully'
+      });
+    }
+
     res.status(204).send();
   }));
 
@@ -3754,6 +3854,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (!updatedCar) {
       return res.status(500).json({ message: "Failed to update car" });
     }
+
+    // Log successful car update
+    await logAdminAction(req, res, {
+      resourceId: id,
+      oldValue: captureEntitySnapshot(existingCar),
+      newValue: captureEntitySnapshot(updatedCar),
+      additionalInfo: 'Car updated successfully'
+    });
 
     // Invalidate car caches after successful update
     cacheManager.invalidateCarCaches(id);
@@ -3802,6 +3910,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`Successfully cleaned up images for car ${id}`);
         }
       }
+
+      // Log successful car deletion
+      await logAdminAction(req, res, {
+        resourceId: id,
+        oldValue: captureEntitySnapshot(existingCar),
+        additionalInfo: 'Car deleted successfully'
+      });
 
       // Invalidate car caches after successful deletion
       cacheManager.invalidateCarCaches(id);
@@ -4260,6 +4375,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       });
     }))
+  );
+
+  // Media Library Admin API - Upload branding and site images
+  app.post("/api/admin/media-library/upload",
+    createEnhancedAdminMiddleware({
+      action: "create",
+      resource: "media_library",
+      rateLimit: 20
+    }),
+    profileUpload.single('image'),
+    asyncRoute("upload media library image", async (req: Request, res: Response) => {
+      if (!req.file) {
+        return sendValidationError(res, "No image file uploaded", []);
+      }
+
+      const { imageType, altText, caption, tags, isActive } = req.body;
+      
+      // Validate imageType
+      const validImageTypes = ['logo', 'banner', 'icon', 'gallery', 'service', 'testimonial', 'general'];
+      if (!imageType || !validImageTypes.includes(imageType)) {
+        return sendValidationError(res, `Image type must be one of: ${validImageTypes.join(', ')}`, []);
+      }
+
+      try {
+        const storage = await getStorage();
+        const uploadedBy = req.user!.id;
+        
+        // Validate image
+        const isValid = await ImageService.validateImage(req.file.path);
+        if (!isValid) {
+          await fs.unlink(req.file.path);
+          return sendValidationError(res, "Invalid image file or dimensions", []);
+        }
+
+        // Process image
+        const ext = path.extname(req.file.filename).toLowerCase();
+        let fileUrl = `/uploads/profiles/${req.file.filename}`;
+        let width, height;
+        
+        if (ext !== '.svg') {
+          const metadata = await sharp(req.file.path).metadata();
+          width = metadata.width;
+          height = metadata.height;
+        }
+
+        // Create media library record
+        const mediaImage = await storage.createMediaLibraryImage({
+          fileName: req.file.filename,
+          fileUrl,
+          fileSize: req.file.size,
+          mimeType: req.file.mimetype,
+          imageType,
+          altText: altText || null,
+          caption: caption || null,
+          width: width || null,
+          height: height || null,
+          uploadedBy,
+          tags: tags || null,
+          isActive: isActive === 'true' || isActive === true || isActive === undefined
+        });
+
+        await logAdminAction(req, res, {
+          resourceId: mediaImage.id,
+          additionalInfo: JSON.stringify({
+            action: "upload_media_library_image",
+            imageType,
+            fileName: req.file.filename,
+            fileSize: req.file.size
+          })
+        });
+
+        return sendResourceCreated(res, mediaImage, "Media image uploaded successfully");
+      } catch (error) {
+        if (req.file) {
+          await fs.unlink(req.file.path).catch(err => console.error('Failed to delete file:', err));
+        }
+        handleApiError(error, "upload media library image", res);
+      }
+    })
+  );
+
+  // Get all media library images
+  app.get("/api/admin/media-library",
+    requireAdmin,
+    asyncRoute("get media library images", async (req: Request, res: Response) => {
+      const storage = await getStorage();
+      const { imageType, uploadedBy, isActive } = req.query;
+      
+      const filters: any = {};
+      if (imageType) filters.imageType = imageType as string;
+      if (uploadedBy) filters.uploadedBy = uploadedBy as string;
+      if (isActive !== undefined) filters.isActive = isActive === 'true';
+      
+      const images = await storage.getAllMediaLibraryImages(filters);
+      
+      return sendSuccess(res, images);
+    })
   );
 
   const httpServer = createServer(app);

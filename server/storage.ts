@@ -8,6 +8,8 @@ import {
   type AppointmentWithDetails,
   type Car,
   type InsertCar,
+  type CarImage,
+  type InsertCarImage,
   type Customer,
   type InsertCustomer,
   type Contact,
@@ -24,10 +26,15 @@ import {
   type InsertAdminAuditLog,
   type AdminRateLimit,
   type InsertAdminRateLimit,
+  type SiteSetting,
+  type InsertSiteSetting,
+  type MediaLibrary,
+  type InsertMediaLibrary,
   users,
   services,
   appointments,
   cars,
+  carImages,
   customers,
   contacts,
   locations,
@@ -35,7 +42,9 @@ import {
   otpVerifications,
   whatsappMessages,
   adminAuditLogs,
-  adminRateLimits
+  adminRateLimits,
+  siteSettings,
+  mediaLibrary
 } from "@shared/schema";
 import { getDb } from "./db";
 import { eq, and, desc, asc, gte, lte, ne, isNull, or, sql } from "drizzle-orm";
@@ -46,6 +55,19 @@ import { LRUCache } from "lru-cache";
 interface DatabaseError extends Error {
   code?: string;
   constraint?: string;
+}
+
+// Car filter and sort options
+export interface CarFilterOptions {
+  transmission?: string;
+  bodyType?: string;
+  color?: string;
+  yearMin?: number;
+  yearMax?: number;
+  mileageMin?: number;
+  mileageMax?: number;
+  sortBy?: 'price' | 'year' | 'mileage';
+  sortOrder?: 'asc' | 'desc';
 }
 
 export interface IStorage {
@@ -76,7 +98,8 @@ export interface IStorage {
   deleteService(id: string): Promise<void>;
   
   // Appointments
-  getAllAppointments(): Promise<AppointmentWithDetails[]>;
+  getAllAppointments(offset?: number, limit?: number): Promise<AppointmentWithDetails[]>;
+  getAppointmentCount(): Promise<number>;
   getAppointment(id: string): Promise<Appointment | undefined>;
   getAppointmentWithDetails(id: string): Promise<AppointmentWithDetails | undefined>;
   getAppointmentsByCustomer(customerId: string): Promise<AppointmentWithDetails[]>;
@@ -88,13 +111,21 @@ export interface IStorage {
   deleteAppointment(id: string): Promise<boolean>;
   
   // Cars
-  getAllCars(): Promise<Car[]>;
+  getAllCars(offset?: number, limit?: number, filters?: CarFilterOptions): Promise<Car[]>;
+  getCarCount(filters?: CarFilterOptions): Promise<number>;
   getCar(id: string): Promise<Car | undefined>;
   getCarsForSale(): Promise<Car[]>;
   getAuctionCars(): Promise<Car[]>;
   createCar(car: InsertCar): Promise<Car>;
   updateCar(id: string, updates: Partial<Car>): Promise<Car | undefined>;
   deleteCar(id: string): Promise<boolean>;
+  
+  // Car Images
+  getCarImages(carId: string): Promise<CarImage[]>;
+  createCarImage(data: InsertCarImage): Promise<CarImage>;
+  deleteCarImage(id: string): Promise<void>;
+  updateCarImageOrder(id: string, displayOrder: number): Promise<void>;
+  setCarImagePrimary(carId: string, imageId: string): Promise<void>;
   
   // Contacts
   createContact(contact: InsertContact): Promise<Contact>;
@@ -146,6 +177,19 @@ export interface IStorage {
   // Rate limiting storage - atomic operations
   checkAndIncrementRateLimit(userId: string, windowMs: number): Promise<{ count: number; resetTime: number; withinWindow: boolean }>;
   cleanupExpiredRateLimits(): Promise<number>;
+
+  // Site Settings
+  getAllSiteSettings(): Promise<SiteSetting[]>;
+  getSiteSettingByKey(key: string): Promise<SiteSetting | undefined>;
+  updateSiteSetting(key: string, value: string, category?: string, description?: string): Promise<SiteSetting>;
+
+  // Media Library
+  getAllMediaLibraryImages(filters?: { imageType?: string; uploadedBy?: string; isActive?: boolean }): Promise<MediaLibrary[]>;
+  getMediaLibraryImageById(id: string): Promise<MediaLibrary | undefined>;
+  createMediaLibraryImage(data: InsertMediaLibrary): Promise<MediaLibrary>;
+  updateMediaLibraryImage(id: string, data: Partial<MediaLibrary>): Promise<MediaLibrary | undefined>;
+  deleteMediaLibraryImage(id: string): Promise<boolean>;
+  incrementMediaUsageCount(id: string): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -407,7 +451,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Appointments
-  async getAllAppointments(): Promise<AppointmentWithDetails[]> {
+  async getAllAppointments(offset: number = 0, limit: number = 100): Promise<AppointmentWithDetails[]> {
     const db = await getDb();
     
     // Get all appointments with service, location, and customer names resolved
@@ -435,9 +479,17 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(services, eq(appointments.serviceId, services.id))
       .innerJoin(locations, eq(appointments.locationId, locations.id))
       .innerJoin(customers, eq(appointments.customerId, customers.id))
-      .orderBy(desc(appointments.createdAt));
+      .orderBy(desc(appointments.createdAt))
+      .offset(offset)
+      .limit(limit);
     
     return result;
+  }
+
+  async getAppointmentCount(): Promise<number> {
+    const db = await getDb();
+    const result = await db.select({ count: sql<number>`cast(count(*) as integer)` }).from(appointments);
+    return result[0].count;
   }
 
   async getAppointment(id: string): Promise<Appointment | undefined> {
@@ -713,15 +765,119 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Cars
-  async getAllCars(): Promise<Car[]> {
+  async getAllCars(offset: number = 0, limit: number = 100, filters?: CarFilterOptions): Promise<Car[]> {
     const db = await getDb();
-    return await db.select().from(cars).orderBy(desc(cars.createdAt));
+    
+    const whereConditions: any[] = [];
+    
+    if (filters?.transmission) {
+      whereConditions.push(eq(cars.transmission, filters.transmission));
+    }
+    
+    if (filters?.bodyType) {
+      whereConditions.push(eq(cars.bodyType, filters.bodyType));
+    }
+    
+    if (filters?.color) {
+      whereConditions.push(eq(cars.color, filters.color));
+    }
+    
+    if (filters?.yearMin !== undefined) {
+      whereConditions.push(gte(cars.year, filters.yearMin));
+    }
+    
+    if (filters?.yearMax !== undefined) {
+      whereConditions.push(lte(cars.year, filters.yearMax));
+    }
+    
+    if (filters?.mileageMin !== undefined) {
+      whereConditions.push(gte(cars.mileage, filters.mileageMin));
+    }
+    
+    if (filters?.mileageMax !== undefined) {
+      whereConditions.push(lte(cars.mileage, filters.mileageMax));
+    }
+    
+    let query = db.select().from(cars);
+    
+    if (whereConditions.length > 0) {
+      query = query.where(and(...whereConditions)) as any;
+    }
+    
+    if (filters?.sortBy) {
+      const sortColumn = filters.sortBy === 'price' ? cars.price : 
+                        filters.sortBy === 'year' ? cars.year : 
+                        cars.mileage;
+      const sortFunction = filters.sortOrder === 'desc' ? desc : asc;
+      query = query.orderBy(sortFunction(sortColumn)) as any;
+    } else {
+      query = query.orderBy(desc(cars.createdAt)) as any;
+    }
+    
+    return await query.offset(offset).limit(limit);
+  }
+
+  async getCarCount(filters?: CarFilterOptions): Promise<number> {
+    const db = await getDb();
+    
+    const whereConditions: any[] = [];
+    
+    if (filters?.transmission) {
+      whereConditions.push(eq(cars.transmission, filters.transmission));
+    }
+    
+    if (filters?.bodyType) {
+      whereConditions.push(eq(cars.bodyType, filters.bodyType));
+    }
+    
+    if (filters?.color) {
+      whereConditions.push(eq(cars.color, filters.color));
+    }
+    
+    if (filters?.yearMin !== undefined) {
+      whereConditions.push(gte(cars.year, filters.yearMin));
+    }
+    
+    if (filters?.yearMax !== undefined) {
+      whereConditions.push(lte(cars.year, filters.yearMax));
+    }
+    
+    if (filters?.mileageMin !== undefined) {
+      whereConditions.push(gte(cars.mileage, filters.mileageMin));
+    }
+    
+    if (filters?.mileageMax !== undefined) {
+      whereConditions.push(lte(cars.mileage, filters.mileageMax));
+    }
+    
+    let query = db.select({ count: sql<number>`cast(count(*) as integer)` }).from(cars);
+    
+    if (whereConditions.length > 0) {
+      query = query.where(and(...whereConditions)) as any;
+    }
+    
+    const result = await query;
+    return result[0].count;
   }
 
   async getCar(id: string): Promise<Car | undefined> {
     const db = await getDb();
     const result = await db.select().from(cars).where(eq(cars.id, id)).limit(1);
-    return result[0];
+    const car = result[0];
+    
+    if (!car) {
+      return undefined;
+    }
+    
+    const images = await db.select()
+      .from(carImages)
+      .where(eq(carImages.carId, id))
+      .orderBy(asc(carImages.displayOrder));
+    
+    return {
+      ...car,
+      images
+    } as any;
   }
 
   async getCarsForSale(): Promise<Car[]> {
@@ -799,6 +955,68 @@ export class DatabaseStorage implements IStorage {
       // Re-throw other errors to be handled by route handlers
       throw err;
     }
+  }
+
+  // Car Images
+  async getCarImages(carId: string): Promise<CarImage[]> {
+    const db = await getDb();
+    const images = await db.select()
+      .from(carImages)
+      .where(eq(carImages.carId, carId))
+      .orderBy(asc(carImages.displayOrder));
+    return images;
+  }
+
+  async createCarImage(data: InsertCarImage): Promise<CarImage> {
+    const db = await getDb();
+    try {
+      const result = await db.insert(carImages).values(data).returning();
+      return result[0];
+    } catch (error) {
+      const err = error as DatabaseError;
+      if (err.code === '23503') {
+        throw {
+          status: 400,
+          message: "Invalid car ID. The car does not exist."
+        };
+      }
+      if (err.code === '23502') {
+        throw {
+          status: 400,
+          message: "Missing required car image information. Please provide all required fields."
+        };
+      }
+      throw err;
+    }
+  }
+
+  async deleteCarImage(id: string): Promise<void> {
+    const db = await getDb();
+    await db.delete(carImages).where(eq(carImages.id, id));
+  }
+
+  async updateCarImageOrder(id: string, displayOrder: number): Promise<void> {
+    const db = await getDb();
+    await db.update(carImages)
+      .set({ displayOrder })
+      .where(eq(carImages.id, id));
+  }
+
+  async setCarImagePrimary(carId: string, imageId: string): Promise<void> {
+    const db = await getDb();
+    
+    await db.transaction(async (tx) => {
+      await tx.update(carImages)
+        .set({ isPrimary: false })
+        .where(eq(carImages.carId, carId));
+      
+      await tx.update(carImages)
+        .set({ isPrimary: true })
+        .where(and(
+          eq(carImages.carId, carId),
+          eq(carImages.id, imageId)
+        ));
+    });
   }
 
   // Contacts
@@ -1238,6 +1456,7 @@ export class MemStorage implements IStorage {
   private services: Map<string, Service> = new Map();
   private appointments: Map<string, Appointment> = new Map();
   private cars: Map<string, Car> = new Map();
+  private carImages: Map<string, CarImage> = new Map();
   private contacts: Map<string, Contact> = new Map();
   private locations: Map<string, Location> = new Map();
   private auditLogs: Map<string, AdminAuditLog> = new Map();
@@ -1312,6 +1531,12 @@ export class MemStorage implements IStorage {
         currentBid: null,
         auctionEndTime: null,
         description: "Well-maintained Swift with full service history",
+        transmission: null,
+        numOwners: null,
+        bodyType: null,
+        color: null,
+        engineSize: null,
+        features: null,
         createdAt: new Date()
       },
       {
@@ -1329,6 +1554,12 @@ export class MemStorage implements IStorage {
         currentBid: null,
         auctionEndTime: null,
         description: "Popular SUV with excellent fuel efficiency",
+        transmission: null,
+        numOwners: null,
+        bodyType: null,
+        color: null,
+        engineSize: null,
+        features: null,
         createdAt: new Date()
       },
       {
@@ -1346,6 +1577,12 @@ export class MemStorage implements IStorage {
         currentBid: null,
         auctionEndTime: null,
         description: "Electric SUV with modern features",
+        transmission: null,
+        numOwners: null,
+        bodyType: null,
+        color: null,
+        engineSize: null,
+        features: null,
         createdAt: new Date()
       },
       {
@@ -1363,6 +1600,12 @@ export class MemStorage implements IStorage {
         currentBid: null,
         auctionEndTime: null,
         description: "Reliable sedan with excellent comfort",
+        transmission: null,
+        numOwners: null,
+        bodyType: null,
+        color: null,
+        engineSize: null,
+        features: null,
         createdAt: new Date()
       },
       {
@@ -1380,6 +1623,12 @@ export class MemStorage implements IStorage {
         currentBid: null,
         auctionEndTime: null,
         description: "Spacious 7-seater SUV",
+        transmission: null,
+        numOwners: null,
+        bodyType: null,
+        color: null,
+        engineSize: null,
+        features: null,
         createdAt: new Date()
       },
       // Auction cars
@@ -1398,6 +1647,12 @@ export class MemStorage implements IStorage {
         currentBid: 1650000,
         auctionEndTime: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days from now
         description: "Luxury sedan with premium features",
+        transmission: null,
+        numOwners: null,
+        bodyType: null,
+        color: null,
+        engineSize: null,
+        features: null,
         createdAt: new Date()
       },
       {
@@ -1415,6 +1670,12 @@ export class MemStorage implements IStorage {
         currentBid: 720000,
         auctionEndTime: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000), // 1 day from now
         description: "Compact SUV perfect for city driving",
+        transmission: null,
+        numOwners: null,
+        bodyType: null,
+        color: null,
+        engineSize: null,
+        features: null,
         createdAt: new Date()
       },
       {
@@ -1432,6 +1693,12 @@ export class MemStorage implements IStorage {
         currentBid: 1580000,
         auctionEndTime: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000), // 5 days from now
         description: "Reliable MPV with excellent build quality",
+        transmission: null,
+        numOwners: null,
+        bodyType: null,
+        color: null,
+        engineSize: null,
+        features: null,
         createdAt: new Date()
       }
     ];
@@ -1738,8 +2005,54 @@ export class MemStorage implements IStorage {
   }
 
   // Cars
-  async getAllCars(): Promise<Car[]> {
-    return Array.from(this.cars.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  async getAllCars(offset: number = 0, limit: number = 100, filters?: CarFilterOptions): Promise<Car[]> {
+    let carsArray = Array.from(this.cars.values());
+    
+    if (filters) {
+      if (filters.transmission) {
+        carsArray = carsArray.filter(car => car.transmission === filters.transmission);
+      }
+      
+      if (filters.bodyType) {
+        carsArray = carsArray.filter(car => car.bodyType === filters.bodyType);
+      }
+      
+      if (filters.color) {
+        carsArray = carsArray.filter(car => car.color === filters.color);
+      }
+      
+      if (filters.yearMin !== undefined) {
+        carsArray = carsArray.filter(car => car.year >= filters.yearMin!);
+      }
+      
+      if (filters.yearMax !== undefined) {
+        carsArray = carsArray.filter(car => car.year <= filters.yearMax!);
+      }
+      
+      if (filters.mileageMin !== undefined) {
+        carsArray = carsArray.filter(car => car.mileage >= filters.mileageMin!);
+      }
+      
+      if (filters.mileageMax !== undefined) {
+        carsArray = carsArray.filter(car => car.mileage <= filters.mileageMax!);
+      }
+      
+      if (filters.sortBy) {
+        const sortField = filters.sortBy;
+        const sortOrder = filters.sortOrder === 'desc' ? -1 : 1;
+        carsArray.sort((a, b) => {
+          const aVal = a[sortField];
+          const bVal = b[sortField];
+          return sortOrder * (aVal > bVal ? 1 : aVal < bVal ? -1 : 0);
+        });
+      } else {
+        carsArray.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      }
+    } else {
+      carsArray.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    }
+    
+    return carsArray.slice(offset, offset + limit);
   }
 
   async getCar(id: string): Promise<Car | undefined> {
@@ -1760,7 +2073,7 @@ export class MemStorage implements IStorage {
 
   async createCar(car: InsertCar): Promise<Car> {
     const id = randomUUID();
-    const newCar: Car = { ...car, id, createdAt: new Date(), description: car.description ?? null, isAuction: car.isAuction ?? false, currentBid: car.currentBid ?? null, auctionEndTime: car.auctionEndTime ?? null };
+    const newCar: Car = { ...car, id, createdAt: new Date(), description: car.description ?? null, isAuction: car.isAuction ?? false, currentBid: car.currentBid ?? null, auctionEndTime: car.auctionEndTime ?? null, transmission: car.transmission ?? null, numOwners: car.numOwners ?? null, bodyType: car.bodyType ?? null, color: car.color ?? null, engineSize: car.engineSize ?? null, features: car.features ?? null };
     this.cars.set(id, newCar);
     return newCar;
   }
@@ -1776,6 +2089,91 @@ export class MemStorage implements IStorage {
 
   async deleteCar(id: string): Promise<boolean> {
     return this.cars.delete(id);
+  }
+
+  async getCarCount(filters?: CarFilterOptions): Promise<number> {
+    if (!filters) {
+      return this.cars.size;
+    }
+    
+    let carsArray = Array.from(this.cars.values());
+    
+    if (filters.transmission) {
+      carsArray = carsArray.filter(car => car.transmission === filters.transmission);
+    }
+    
+    if (filters.bodyType) {
+      carsArray = carsArray.filter(car => car.bodyType === filters.bodyType);
+    }
+    
+    if (filters.color) {
+      carsArray = carsArray.filter(car => car.color === filters.color);
+    }
+    
+    if (filters.yearMin !== undefined) {
+      carsArray = carsArray.filter(car => car.year >= filters.yearMin!);
+    }
+    
+    if (filters.yearMax !== undefined) {
+      carsArray = carsArray.filter(car => car.year <= filters.yearMax!);
+    }
+    
+    if (filters.mileageMin !== undefined) {
+      carsArray = carsArray.filter(car => car.mileage >= filters.mileageMin!);
+    }
+    
+    if (filters.mileageMax !== undefined) {
+      carsArray = carsArray.filter(car => car.mileage <= filters.mileageMax!);
+    }
+    
+    return carsArray.length;
+  }
+
+  async getAppointmentCount(): Promise<number> {
+    return this.appointments.size;
+  }
+
+  // Car Images
+  async getCarImages(carId: string): Promise<CarImage[]> {
+    return Array.from(this.carImages.values())
+      .filter(img => img.carId === carId)
+      .sort((a, b) => a.displayOrder - b.displayOrder);
+  }
+
+  async createCarImage(data: InsertCarImage): Promise<CarImage> {
+    const id = randomUUID();
+    const newImage: CarImage = { 
+      ...data, 
+      id, 
+      createdAt: new Date(),
+      displayOrder: data.displayOrder ?? 0,
+      isPrimary: data.isPrimary ?? false
+    };
+    this.carImages.set(id, newImage);
+    return newImage;
+  }
+
+  async deleteCarImage(id: string): Promise<void> {
+    this.carImages.delete(id);
+  }
+
+  async updateCarImageOrder(id: string, displayOrder: number): Promise<void> {
+    const image = this.carImages.get(id);
+    if (image) {
+      this.carImages.set(id, { ...image, displayOrder });
+    }
+  }
+
+  async setCarImagePrimary(carId: string, imageId: string): Promise<void> {
+    const carImagesList = Array.from(this.carImages.values()).filter(img => img.carId === carId);
+    
+    carImagesList.forEach(img => {
+      if (img.id === imageId) {
+        this.carImages.set(img.id, { ...img, isPrimary: true });
+      } else {
+        this.carImages.set(img.id, { ...img, isPrimary: false });
+      }
+    });
   }
 
   // Contacts
@@ -1926,6 +2324,8 @@ export class MemStorage implements IStorage {
       verified: false,
       attempts: 0,
       maxAttempts: otp.maxAttempts ?? 3,
+      otpCodeHash: otp.otpCodeHash ?? null,
+      verificationId: otp.verificationId ?? null,
       createdAt: new Date()
     };
     this.otpVerifications.set(id, newOtp);
@@ -2173,6 +2573,108 @@ export class MemStorage implements IStorage {
     }
     
     return cleanedCount;
+  }
+
+  async getAllSiteSettings(): Promise<SiteSetting[]> {
+    const db = await getDb();
+    const result = await db.select().from(siteSettings).orderBy(asc(siteSettings.category), asc(siteSettings.settingKey));
+    return result;
+  }
+
+  async getSiteSettingByKey(key: string): Promise<SiteSetting | undefined> {
+    const db = await getDb();
+    const result = await db.select().from(siteSettings).where(eq(siteSettings.settingKey, key)).limit(1);
+    return result[0];
+  }
+
+  async updateSiteSetting(key: string, value: string, category?: string, description?: string): Promise<SiteSetting> {
+    const db = await getDb();
+    const existing = await this.getSiteSettingByKey(key);
+    
+    if (existing) {
+      const updates: Partial<SiteSetting> = {
+        settingValue: value,
+        updatedAt: new Date()
+      };
+      if (category !== undefined) updates.category = category;
+      if (description !== undefined) updates.description = description;
+      
+      const result = await db.update(siteSettings)
+        .set(updates)
+        .where(eq(siteSettings.settingKey, key))
+        .returning();
+      return result[0];
+    } else {
+      const newSetting: InsertSiteSetting = {
+        settingKey: key,
+        settingValue: value,
+        category: category || null,
+        description: description || null
+      };
+      const result = await db.insert(siteSettings).values(newSetting).returning();
+      return result[0];
+    }
+  }
+
+  async getAllMediaLibraryImages(filters?: { imageType?: string; uploadedBy?: string; isActive?: boolean }): Promise<MediaLibrary[]> {
+    const db = await getDb();
+    const conditions = [];
+    
+    if (filters?.imageType) {
+      conditions.push(eq(mediaLibrary.imageType, filters.imageType));
+    }
+    if (filters?.uploadedBy) {
+      conditions.push(eq(mediaLibrary.uploadedBy, filters.uploadedBy));
+    }
+    if (filters?.isActive !== undefined) {
+      conditions.push(eq(mediaLibrary.isActive, filters.isActive));
+    }
+    
+    const query = conditions.length > 0
+      ? db.select().from(mediaLibrary).where(and(...conditions))
+      : db.select().from(mediaLibrary);
+    
+    const result = await query.orderBy(desc(mediaLibrary.uploadedAt));
+    return result;
+  }
+
+  async getMediaLibraryImageById(id: string): Promise<MediaLibrary | undefined> {
+    const db = await getDb();
+    const result = await db.select().from(mediaLibrary).where(eq(mediaLibrary.id, id)).limit(1);
+    return result[0];
+  }
+
+  async createMediaLibraryImage(data: InsertMediaLibrary): Promise<MediaLibrary> {
+    const db = await getDb();
+    const result = await db.insert(mediaLibrary).values(data).returning();
+    return result[0];
+  }
+
+  async updateMediaLibraryImage(id: string, data: Partial<MediaLibrary>): Promise<MediaLibrary | undefined> {
+    const db = await getDb();
+    const result = await db.update(mediaLibrary)
+      .set(data)
+      .where(eq(mediaLibrary.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteMediaLibraryImage(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.delete(mediaLibrary).where(eq(mediaLibrary.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async incrementMediaUsageCount(id: string): Promise<boolean> {
+    const db = await getDb();
+    const image = await this.getMediaLibraryImageById(id);
+    if (!image) return false;
+    
+    const result = await db.update(mediaLibrary)
+      .set({ usageCount: (image.usageCount || 0) + 1 })
+      .where(eq(mediaLibrary.id, id))
+      .returning();
+    return result.length > 0;
   }
 }
 

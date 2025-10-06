@@ -12,7 +12,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Car, Plus, Edit, Trash2, Filter, Calendar, DollarSign, Eye } from "lucide-react";
+import { Car, Plus, Edit, Trash2, Filter, Calendar, DollarSign, Eye, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useErrorHandler } from "@/lib/error-utils";
@@ -104,6 +104,8 @@ export default function AdminCars() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingCar, setEditingCar] = useState<CarType | null>(null);
   const [viewingBids, setViewingBids] = useState<CarType | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 20;
 
   // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
@@ -118,10 +120,21 @@ export default function AdminCars() {
     );
   }
 
-  // Fetch all cars
-  const { data: cars = [], isLoading, isError, refetch } = useQuery<CarType[]>({
-    queryKey: ["/api/cars"],
+  // Fetch cars with pagination
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: ["/api/cars", currentPage, pageSize],
+    queryFn: async () => {
+      const offset = (currentPage - 1) * pageSize;
+      const response = await apiRequest("GET", `/api/cars?offset=${offset}&limit=${pageSize}`);
+      return response.json();
+    },
   });
+
+  const cars = data?.cars || [];
+  const totalCount = data?.total || 0;
+  const totalPages = Math.ceil(totalCount / pageSize);
+  const startIndex = (currentPage - 1) * pageSize + 1;
+  const endIndex = Math.min(currentPage * pageSize, totalCount);
 
   // Fetch bids for a specific car when viewing bids
   const { data: bids = [], isLoading: bidsLoading } = useQuery<Bid[]>({
@@ -328,7 +341,8 @@ export default function AdminCars() {
             Manage Cars
           </h1>
           <p className="text-muted-foreground">
-            {cars.length} total cars • {stats.carsForSale} for sale • {stats.auctionCars} auction cars
+            {totalCount > 0 ? `Showing ${startIndex}-${endIndex} of ${totalCount} cars` : 'No cars'}
+            {cars.length > 0 && ` • ${stats.carsForSale} for sale • ${stats.auctionCars} auction on this page`}
           </p>
         </div>
         <div className="flex gap-2">
@@ -1136,6 +1150,35 @@ export default function AdminCars() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-6">
+          <div className="text-sm text-muted-foreground">
+            Page {currentPage} of {totalPages}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+            >
+              <ChevronLeft className="h-4 w-4 mr-1" />
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Next
+              <ChevronRight className="h-4 w-4 ml-1" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

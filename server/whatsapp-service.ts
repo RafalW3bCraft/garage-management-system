@@ -6,6 +6,7 @@ import {
   isErrorRetryable,
   type CommunicationResult 
 } from '@shared/communication-types';
+import { BaseCommunicationService, type RetryConfig, type CircuitBreakerConfig } from './base-communication-service';
 import { OTPService } from './otp-service';
 import { sendEmailV2 } from './email-service';
 
@@ -43,7 +44,8 @@ export type WhatsAppMessageType =
   | 'booking_request'
   | 'status_update'
   | 'bid_notification'
-  | 'welcome_message';
+  | 'welcome_message'
+  | 'otp';
 
 // Legacy interface for backward compatibility - use CommunicationResult instead
 export interface WhatsAppSendResult extends CommunicationResult {
@@ -89,130 +91,12 @@ export interface ServiceProviderBookingData {
 }
 
 /**
- * Circuit breaker states
+ * Internal helper class that extends BaseCommunicationService
+ * Used for composition to maintain backward compatibility with static interface
  */
-enum CircuitState {
-  CLOSED = 'CLOSED',     // Normal operation
-  OPEN = 'OPEN',         // Fast-failing, not attempting requests
-  HALF_OPEN = 'HALF_OPEN' // Testing if service recovered
-}
-
-/**
- * Circuit breaker for WhatsApp service
- * 
- * Implements circuit breaker pattern with proper HALF_OPEN state handling:
- * - CLOSED: Normal operation, all requests allowed
- * - OPEN: Fast-failing, no requests allowed (waits for recovery timeout)
- * - HALF_OPEN: Testing recovery with limited probe requests
- */
-class CircuitBreaker {
-  private state: CircuitState = CircuitState.CLOSED;
-  private failureCount: number = 0;
-  private lastFailureTime: number = 0;
-  private readonly failureThreshold: number;
-  private readonly recoveryTimeout: number; // milliseconds
-  private readonly halfOpenMaxAttempts: number = 1;
-  private halfOpenAttemptCount: number = 0; // Atomic counter for HALF_OPEN attempts
-  
-  constructor(failureThreshold: number, recoveryTimeoutMinutes: number) {
-    this.failureThreshold = failureThreshold;
-    this.recoveryTimeout = recoveryTimeoutMinutes * 60 * 1000;
-  }
-  
-  /**
-   * Check if request should be allowed
-   * 
-   * CRITICAL FIX: Properly enforces halfOpenMaxAttempts limit in HALF_OPEN state
-   * to prevent failure storm when testing service recovery
-   */
-  canAttempt(): boolean {
-    if (this.state === CircuitState.CLOSED) {
-      return true;
-    }
-    
-    if (this.state === CircuitState.OPEN) {
-      // Check if enough time has passed to try again
-      if (Date.now() - this.lastFailureTime >= this.recoveryTimeout) {
-        console.log('[WhatsApp] 🔄 Circuit breaker transitioning to HALF_OPEN - testing service recovery');
-        this.state = CircuitState.HALF_OPEN;
-        this.halfOpenAttemptCount = 0; // Reset counter when entering HALF_OPEN
-        return true;
-      }
-      return false;
-    }
-    
-    // HALF_OPEN state - enforce limited probe attempts
-    if (this.halfOpenAttemptCount >= this.halfOpenMaxAttempts) {
-      console.log(`[WhatsApp] 🚫 Circuit breaker HALF_OPEN - max probe attempts (${this.halfOpenMaxAttempts}) reached, rejecting request`);
-      return false;
-    }
-    
-    this.halfOpenAttemptCount++;
-    console.log(`[WhatsApp] 🔍 Circuit breaker HALF_OPEN - allowing probe request ${this.halfOpenAttemptCount}/${this.halfOpenMaxAttempts}`);
-    return true;
-  }
-  
-  /**
-   * Record successful request
-   * 
-   * CRITICAL FIX: Resets halfOpenAttemptCount when transitioning to CLOSED
-   */
-  recordSuccess(): void {
-    if (this.state === CircuitState.HALF_OPEN) {
-      console.log('[WhatsApp] ✅ Circuit breaker CLOSED - service recovered');
-    }
-    this.state = CircuitState.CLOSED;
-    this.failureCount = 0;
-    this.lastFailureTime = 0;
-    this.halfOpenAttemptCount = 0; // Reset counter when entering CLOSED
-  }
-  
-  /**
-   * Record failed request
-   * 
-   * CRITICAL FIX: Resets halfOpenAttemptCount when transitioning back to OPEN
-   */
-  recordFailure(): void {
-    this.failureCount++;
-    this.lastFailureTime = Date.now();
-    
-    if (this.state === CircuitState.HALF_OPEN) {
-      console.log('[WhatsApp] ⚠️ Circuit breaker reopening - service still unavailable');
-      this.state = CircuitState.OPEN;
-      this.halfOpenAttemptCount = 0; // Reset counter when transitioning to OPEN
-      return;
-    }
-    
-    if (this.failureCount >= this.failureThreshold) {
-      console.log(`[WhatsApp] 🚨 Circuit breaker OPEN - ${this.failureCount} consecutive failures detected`);
-      console.log(`[WhatsApp] ⏰ Will retry in ${this.recoveryTimeout / 60000} minutes`);
-      this.state = CircuitState.OPEN;
-    }
-  }
-  
-  /**
-   * Get current circuit state
-   */
-  getState(): CircuitState {
-    return this.state;
-  }
-  
-  /**
-   * Get failure count
-   */
-  getFailureCount(): number {
-    return this.failureCount;
-  }
-  
-  /**
-   * Reset circuit breaker (for testing or manual recovery)
-   */
-  reset(): void {
-    console.log('[WhatsApp] 🔄 Circuit breaker manually reset');
-    this.state = CircuitState.CLOSED;
-    this.failureCount = 0;
-    this.lastFailureTime = 0;
-    this.halfOpenAttemptCount = 0; // Reset counter on manual reset
+class WhatsAppServiceHelper extends BaseCommunicationService {
+  constructor(retryConfig: RetryConfig, circuitBreakerConfig: CircuitBreakerConfig) {
+    super('WhatsApp', retryConfig, circuitBreakerConfig);
   }
 }
 
@@ -235,99 +119,19 @@ export class WhatsAppService {
   private static readonly ENABLE_SMS_FALLBACK = process.env.WHATSAPP_ENABLE_SMS_FALLBACK === 'true'; // default false (not yet implemented)
   private static readonly ENABLE_EMAIL_FALLBACK = process.env.WHATSAPP_ENABLE_EMAIL_FALLBACK !== 'false'; // default true
   
-  // In-memory circuit breaker instance
-  private static circuitBreaker = new CircuitBreaker(
-    WhatsAppService.CIRCUIT_FAILURE_THRESHOLD,
-    WhatsAppService.CIRCUIT_RECOVERY_MINUTES
-  );
-  
-  /**
-   * Calculate exponential backoff delay
-   * 
-   * @param attempt - Current attempt number (1-indexed)
-   * @returns Delay in milliseconds
-   */
-  private static calculateBackoffDelay(attempt: number): number {
-    const delay = this.INITIAL_RETRY_DELAY * Math.pow(this.BACKOFF_MULTIPLIER, attempt - 1);
-    return Math.min(delay, this.MAX_RETRY_DELAY);
-  }
-  
-  /**
-   * Sleep utility for retry delays
-   * 
-   * @param ms - Milliseconds to sleep
-   */
-  private static sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-  
-  /**
-   * Check if error is retryable using standardized error classification
-   * 
-   * @param error - Error to check
-   * @returns True if error is retryable
-   */
-  private static isRetryableError(error: TwilioError | Error): boolean {
-    if (!('code' in error) && !error.message) return true;
-    
-    const errorCode = String('code' in error ? error.code || '' : '');
-    const errorMessage = String(error.message || '');
-    const errorType = categorizeError(errorCode, errorMessage);
-    
-    return isErrorRetryable(errorType, errorCode);
-  }
-  
-  /**
-   * Simplified retry wrapper with exponential backoff
-   * Removed database updates from retry loop for better separation of concerns
-   * 
-   * @param operation - Async operation to retry
-   * @param operationName - Name for logging
-   * @param maxRetries - Maximum number of retries
-   * @returns Result object with success status, result/error, and attempt count
-   */
-  private static async retryWithBackoff<T>(
-    operation: () => Promise<T>,
-    operationName: string,
-    maxRetries: number = this.MAX_RETRIES
-  ): Promise<{ result?: T; success: boolean; error?: TwilioError | Error; attempts: number }> {
-    let lastError: TwilioError | Error | undefined;
-    
-    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
-      try {
-        const result = await operation();
-        
-        if (attempt > 1) {
-          console.log(`[WhatsApp] ✅ ${operationName} succeeded on attempt ${attempt}`);
-        }
-        
-        return { result, success: true, attempts: attempt };
-      } catch (error) {
-        lastError = error as TwilioError;
-        
-        console.error(`[WhatsApp] ❌ ${operationName} failed on attempt ${attempt}/${maxRetries + 1}: ${lastError.message}`);
-        
-        // Check if error is non-retryable - stop immediately
-        if (!this.isRetryableError(lastError)) {
-          console.log(`[WhatsApp] 🚫 Error is not retryable (${String((lastError as any).code)}), stopping retries`);
-          break;
-        }
-        
-        // Check if we've exceeded max retries
-        if (attempt > maxRetries) {
-          console.log(`[WhatsApp] 🛑 Max retries (${maxRetries}) exceeded for ${operationName}`);
-          break;
-        }
-        
-        // Calculate delay and wait before retry
-        const delay = this.calculateBackoffDelay(attempt);
-        console.log(`[WhatsApp] ⏳ Retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries + 1})`);
-        await this.sleep(delay);
-      }
+  // Helper instance with circuit breaker and retry logic
+  private static readonly helper = new WhatsAppServiceHelper(
+    {
+      initialDelayMs: WhatsAppService.INITIAL_RETRY_DELAY,
+      maxDelayMs: WhatsAppService.MAX_RETRY_DELAY,
+      maxRetries: WhatsAppService.MAX_RETRIES,
+      backoffMultiplier: WhatsAppService.BACKOFF_MULTIPLIER
+    },
+    {
+      failureThreshold: WhatsAppService.CIRCUIT_FAILURE_THRESHOLD,
+      recoveryTimeoutMinutes: WhatsAppService.CIRCUIT_RECOVERY_MINUTES
     }
-    
-    return { success: false, error: lastError, attempts: maxRetries + 1 };
-  }
+  );
   
   /**
    * Production safety checks for required environment variables
@@ -545,6 +349,13 @@ Need help? Just reply to this message!
   }
 
   /**
+   * Generate OTP verification message
+   */
+  private static generateOTPMessage(otpCode: string): string {
+    return `Your Ronak Motor verification code is: ${otpCode}. Valid for 5 minutes.`;
+  }
+
+  /**
    * Generate service provider booking notification message
    */
   private static generateServiceProviderBookingMessage(data: ServiceProviderBookingData): string {
@@ -718,8 +529,8 @@ Please prepare for this service appointment. Contact the customer if you need an
     const nationalNumber = fullNumber.substring(countryCode.length);
     
     // Check circuit breaker before attempting
-    if (!this.circuitBreaker.canAttempt()) {
-      const state = this.circuitBreaker.getState();
+    if (!this.helper['circuitBreaker'].canAttempt()) {
+      const state = this.helper['circuitBreaker'].getState();
       console.log(`[WhatsApp] ⚡ Circuit breaker is ${state} - fast failing without retry`);
       
       // Attempt fallback immediately
@@ -776,17 +587,11 @@ Please prepare for this service appointment. Contact the customer if you need an
     
     // Attempt to send with retries
     const operationName = `send ${messageType} to ${to}`;
-    const { result, success, error, attempts } = await this.retryWithBackoff(
+    const { result, success, error, attempts } = await this.helper['executeWithProtection'](
       () => this.sendMessageCore(to, message, messageType, appointmentId),
-      operationName
+      operationName,
+      { skipCircuitBreaker: true }
     );
-    
-    // Update circuit breaker based on result
-    if (success) {
-      this.circuitBreaker.recordSuccess();
-    } else {
-      this.circuitBreaker.recordFailure();
-    }
     
     // Update database with final result
     if (messageId) {
@@ -802,13 +607,13 @@ Please prepare for this service appointment. Contact the customer if you need an
               sid: result.sid, 
               status: result.status,
               totalAttempts: attempts,
-              circuitBreakerState: this.circuitBreaker.getState()
+              circuitBreakerState: this.helper['circuitBreaker'].getState()
             })
           });
         } else {
           const twilioError = error as TwilioError;
           await storage.updateWhatsAppMessage(messageId, {
-            status: this.isRetryableError(twilioError) ? 'retry_failed' : 'failed',
+            status: this.helper['isRetryableError'](twilioError) ? 'retry_failed' : 'failed',
             retryCount: attempts - 1,
             lastRetryAt: new Date(),
             failureReason: twilioError.message,
@@ -816,7 +621,7 @@ Please prepare for this service appointment. Contact the customer if you need an
               error: twilioError.message,
               code: (twilioError as any).code,
               totalAttempts: attempts,
-              circuitBreakerState: this.circuitBreaker.getState()
+              circuitBreakerState: this.helper['circuitBreaker'].getState()
             })
           });
         }
@@ -1032,6 +837,19 @@ Please prepare for this service appointment. Contact the customer if you need an
   }
 
   /**
+   * Send OTP verification code via WhatsApp
+   */
+  static async sendOTPMessage(
+    phone: string,
+    countryCode: string,
+    otpCode: string
+  ): Promise<WhatsAppSendResult> {
+    const whatsappNumber = this.formatWhatsAppNumber(phone, countryCode);
+    const message = this.generateOTPMessage(otpCode);
+    return this.sendMessage(whatsappNumber, message, 'otp');
+  }
+
+  /**
    * Validate phone number format for WhatsApp
    */
   static validatePhoneNumber(phone: string, countryCode: string): { valid: boolean; message?: string } {
@@ -1054,8 +872,8 @@ Please prepare for this service appointment. Contact the customer if you need an
     recoveryMinutes: number;
   } {
     return {
-      state: this.circuitBreaker.getState(),
-      failureCount: this.circuitBreaker.getFailureCount(),
+      state: this.helper['circuitBreaker'].getState(),
+      failureCount: this.helper['circuitBreaker'].getFailureCount(),
       threshold: this.CIRCUIT_FAILURE_THRESHOLD,
       recoveryMinutes: this.CIRCUIT_RECOVERY_MINUTES
     };
@@ -1065,6 +883,6 @@ Please prepare for this service appointment. Contact the customer if you need an
    * Manually reset circuit breaker (for admin/debugging)
    */
   static resetCircuitBreaker(): void {
-    this.circuitBreaker.reset();
+    this.helper.resetCircuitBreaker();
   }
 }

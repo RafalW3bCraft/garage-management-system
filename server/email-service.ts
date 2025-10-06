@@ -4,6 +4,7 @@ import {
   categorizeError, 
   type CommunicationResult 
 } from '@shared/communication-types';
+import { BaseCommunicationService, type RetryConfig, type CircuitBreakerConfig } from './base-communication-service';
 
 // SendGrid error types
 interface SendGridErrorField {
@@ -110,6 +111,57 @@ interface EmailParams {
   html?: string;
 }
 
+/**
+ * Internal helper class that extends BaseCommunicationService
+ * Provides circuit breaker and retry logic for email service
+ */
+class EmailServiceHelper extends BaseCommunicationService {
+  constructor(retryConfig: RetryConfig, circuitBreakerConfig: CircuitBreakerConfig) {
+    super('EMAIL', retryConfig, circuitBreakerConfig);
+  }
+}
+
+// Configuration from environment variables with fallback defaults
+const EMAIL_RETRY_CONFIG: RetryConfig = {
+  initialDelayMs: parseInt(process.env.EMAIL_RETRY_DELAY || '1000'),
+  maxDelayMs: parseInt(process.env.EMAIL_MAX_RETRY_DELAY || '30000'),
+  maxRetries: parseInt(process.env.EMAIL_MAX_RETRIES || '2'),
+  backoffMultiplier: parseFloat(process.env.EMAIL_BACKOFF_MULTIPLIER || '2')
+};
+
+const EMAIL_CIRCUIT_CONFIG: CircuitBreakerConfig = {
+  failureThreshold: parseInt(process.env.EMAIL_CIRCUIT_THRESHOLD || '5'),
+  recoveryTimeoutMinutes: parseInt(process.env.EMAIL_CIRCUIT_RECOVERY_MIN || '5')
+};
+
+// Helper instance with circuit breaker and retry logic
+const emailHelper = new EmailServiceHelper(EMAIL_RETRY_CONFIG, EMAIL_CIRCUIT_CONFIG);
+
+/**
+ * Core email sending function (for internal use with retry wrapper)
+ */
+async function sendEmailCore(params: EmailParams): Promise<any> {
+  const emailData: EmailData = {
+    to: params.to,
+    from: params.from,
+    subject: params.subject,
+    ...(params.text && { text: params.text }),
+    ...(params.html && { html: params.html })
+  };
+
+  console.log(`[EMAIL] Sending email to ${params.to} with subject: "${params.subject}"`);
+  
+  const emailPromise = mailService!.send(emailData as any);
+  const timeoutPromise = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error('Email send timeout after 15 seconds')), 15000)
+  );
+
+  const result = await Promise.race([emailPromise, timeoutPromise]);
+  
+  console.log(`[EMAIL] ✅ Successfully sent to ${params.to} - Subject: "${params.subject}" - From: ${params.from}`);
+  return result;
+}
+
 // Main function returns CommunicationResult
 export async function sendEmailV2(params: EmailParams): Promise<CommunicationResult> {
   if (!initializeMailService() || !mailService) {
@@ -147,65 +199,56 @@ export async function sendEmailV2(params: EmailParams): Promise<CommunicationRes
     });
   }
 
-  try {
-    const emailData: EmailData = {
-      to: params.to,
-      from: params.from,
-      subject: params.subject,
-      ...(params.text && { text: params.text }),
-      ...(params.html && { html: params.html })
-    };
+  const operationName = `send email to ${params.to}`;
+  const { result, success, error, attempts } = await emailHelper['executeWithProtection'](
+    () => sendEmailCore(params),
+    operationName
+  );
 
-    console.log(`[EMAIL] Sending email to ${params.to} with subject: "${params.subject}"`);
-    
-    // Add timeout to prevent hanging email operations
-    const emailPromise = mailService.send(emailData as any);
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Email send timeout after 15 seconds')), 15000)
-    );
-
-    const result = await Promise.race([emailPromise, timeoutPromise]);
-    
-    // Log success with more details
-    console.log(`[EMAIL] ✅ Successfully sent to ${params.to} - Subject: "${params.subject}" - From: ${params.from}`);
+  if (success && result) {
     return createCommunicationResult('email', true, `Email sent successfully to ${params.to}`, {
+      retryCount: attempts - 1,
+      totalAttempts: attempts,
       metadata: { emailId: Array.isArray(result) && result[0]?.headers?.['x-message-id'] }
     });
-  } catch (error) {
-    const err = error as SendGridError;
-    // Enhanced error logging with SendGrid response details
-    const errorMsg = err.message || 'Unknown error';
-    const statusCode = err.code || err.response?.status || 'N/A';
-    const responseBody = err.response?.body || null;
-    
-    console.error(`[EMAIL] ❌ Failed to send to ${params.to}`);
-    console.error(`[EMAIL] Error: ${errorMsg}`);
-    console.error(`[EMAIL] Status Code: ${statusCode}`);
-    
-    if (responseBody) {
-      // Sanitize SendGrid error response to prevent sensitive data exposure
-      const sanitizedResponse = sanitizeSendGridError(responseBody);
-      console.error(`[EMAIL] SendGrid Response: ${JSON.stringify(sanitizedResponse, null, 2)}`);
-    }
-    
-    // Log common SendGrid issues for debugging
-    if (statusCode === 401) {
-      console.error(`[EMAIL] 🔑 Authentication failed - check SENDGRID_API_KEY`);
-    } else if (statusCode === 403) {
-      console.error(`[EMAIL] 🚫 Forbidden - sender email may not be verified in SendGrid`);
-    } else if (statusCode === 400) {
-      console.error(`[EMAIL] 📝 Bad request - check email format and content`);
-    }
-    
-    // Create standardized error response
-    const errorType = categorizeError(String(statusCode), errorMsg);
-    return createCommunicationResult('email', false, `Failed to send email: ${errorMsg}`, {
-      errorCode: String(statusCode),
-      errorType,
-      retryable: errorType === 'service_unavailable' || errorType === 'network' || errorType === 'unknown',
-      metadata: { statusCode: statusCode !== 'N/A' ? Number(statusCode) : undefined }
-    });
   }
+
+  const err = error as SendGridError;
+  const errorMsg = err?.message || 'Unknown error';
+  const statusCode = err?.code || err?.response?.status || 'N/A';
+  const responseBody = err?.response?.body || null;
+  
+  console.error(`[EMAIL] ❌ Failed to send to ${params.to} after ${attempts} attempts`);
+  console.error(`[EMAIL] Error: ${errorMsg}`);
+  console.error(`[EMAIL] Status Code: ${statusCode}`);
+  
+  if (responseBody) {
+    const sanitizedResponse = sanitizeSendGridError(responseBody);
+    console.error(`[EMAIL] SendGrid Response: ${JSON.stringify(sanitizedResponse, null, 2)}`);
+  }
+  
+  if (statusCode === 401) {
+    console.error(`[EMAIL] 🔑 Authentication failed - check SENDGRID_API_KEY`);
+  } else if (statusCode === 403) {
+    console.error(`[EMAIL] 🚫 Forbidden - sender email may not be verified in SendGrid`);
+  } else if (statusCode === 400) {
+    console.error(`[EMAIL] 📝 Bad request - check email format and content`);
+  }
+  
+  const errorType = categorizeError(String(statusCode), errorMsg);
+  const circuitBreakerOpen = !emailHelper['circuitBreaker'].canAttempt();
+  
+  return createCommunicationResult('email', false, `Failed to send email: ${errorMsg}`, {
+    errorCode: String(statusCode),
+    errorType,
+    retryable: errorType === 'service_unavailable' || errorType === 'network' || errorType === 'unknown',
+    retryCount: attempts - 1,
+    totalAttempts: attempts,
+    metadata: { 
+      statusCode: statusCode !== 'N/A' ? Number(statusCode) : undefined,
+      circuitBreakerOpen
+    }
+  });
 }
 
 // Backward compatibility wrapper for sendEmail - returns boolean

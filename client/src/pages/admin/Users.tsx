@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
-import { Users, Search, Eye, Mail, Phone, MapPin, Calendar, Shield, User, UserCheck } from "lucide-react";
+import { Users, Search, Eye, Mail, Phone, MapPin, Calendar, Shield, User, UserCheck, ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "wouter";
 import type { User as UserType } from "@shared/schema";
 import { useState, useMemo } from "react";
@@ -65,6 +65,8 @@ export default function AdminUsers() {
   const [providerFilter, setProviderFilter] = useState<string>("all");
   const [viewingUser, setViewingUser] = useState<UserType | null>(null);
   const [changingRoleUser, setChangingRoleUser] = useState<UserType | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 50;
 
   // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
@@ -79,10 +81,21 @@ export default function AdminUsers() {
     );
   }
 
-  // Fetch all users
-  const { data: users = [], isLoading, isError } = useQuery<UserType[]>({
-    queryKey: ["/api/admin/users"],
+  // Fetch users with pagination
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ["/api/admin/users", currentPage, pageSize],
+    queryFn: async () => {
+      const offset = (currentPage - 1) * pageSize;
+      const response = await apiRequest("GET", `/api/admin/users?offset=${offset}&limit=${pageSize}`);
+      return response.json();
+    },
   });
+
+  const users = data?.users || [];
+  const totalCount = data?.total || 0;
+  const totalPages = Math.ceil(totalCount / pageSize);
+  const startIndex = (currentPage - 1) * pageSize + 1;
+  const endIndex = Math.min(currentPage * pageSize, totalCount);
 
   // Update user role mutation
   const updateUserRoleMutation = useMutation({
@@ -216,7 +229,8 @@ export default function AdminUsers() {
             Manage Users
           </h1>
           <p className="text-muted-foreground">
-            {users.length} total users • {filteredUsers.length} displayed
+            {totalCount > 0 ? `Showing ${startIndex}-${endIndex} of ${totalCount} users` : 'No users'}
+            {filteredUsers.length !== users.length && ` • ${filteredUsers.length} filtered`}
           </p>
         </div>
         <div className="flex gap-2">
@@ -730,6 +744,35 @@ export default function AdminUsers() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-6">
+          <div className="text-sm text-muted-foreground">
+            Page {currentPage} of {totalPages}
+          </div>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+            >
+              <ChevronLeft className="h-4 w-4 mr-1" />
+              Previous
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Next
+              <ChevronRight className="h-4 w-4 ml-1" />
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   );
