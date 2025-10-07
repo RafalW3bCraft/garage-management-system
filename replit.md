@@ -6,17 +6,38 @@ RonakMotorGarage is a comprehensive full-stack web application designed for auto
 
 ## Recent Changes (October 2025)
 
-**Authentication System Update - OTP Only** (Latest)
-- Restricted authentication to OTP-only (WhatsApp and Email channels)
-- Disabled email/password and Google OAuth authentication methods
-- Users must verify via OTP sent to their phone (WhatsApp default) or email
-- Frontend automatically defaults to mobile OTP authentication flow
-- Backend endpoints return 403 error for email/password login attempts
+**Email Verification Page Implementation** (October 7, 2025) (Latest)
+- Created `/verify-email` page component to handle email verification links from registration emails
+- Implemented automatic token verification on page load with proper loading, success, and error states
+- Uses wouter's `useSearch` hook for reliable URL query parameter extraction
+- Auto-logs users in upon successful email verification and redirects to home page
+- Added route to frontend routing configuration in App.tsx
+- User-friendly error messages with retry and navigation options
+
+**Authentication System Bug Fixes** (October 7, 2025)
+- Fixed Twilio ES module loading: Converted CommonJS require() to dynamic import() for ES module compatibility
+- Fixed WhatsApp OTP channel storage: OTP records now correctly store channel type ('whatsapp' or 'email') and email address
+- Fixed Drizzle CLI configuration: Added strict:false for non-interactive schema pushes
+- All authentication flows verified working: Email/Password with verification, Password reset, Mobile OTP (WhatsApp/Email), Google OAuth
+- Production note: Twilio error 63007 (WhatsApp sandbox not configured) is expected in development; requires Twilio WhatsApp sandbox setup for production
+
+**Authentication System Enhancement - All Methods Enabled**
+- Enabled all authentication methods: Email/Password, Mobile OTP, and Google OAuth
+- Email/Password: Includes email verification and secure password reset functionality
+- Mobile OTP: WhatsApp (default) and Email channel support with secure OTP hashing
+- Google OAuth: Seamless integration with account linking
+- Password Reset: Secure token-based flow with anti-enumeration protection
+- Security: CSRF protection, token hashing, timing attack prevention
+- Frontend: All three authentication options available in AuthDialog
+- Dynamic provider API returns available methods based on environment configuration
 
 **Image Upload Enhancement** (Latest)
 - Expanded supported image formats: JPEG, PNG, WebP, GIF, SVG, BMP, TIFF, ICO, AVIF
 - All formats maintain 5MB file size limit for consistent storage management
 - Special handling for SVG files (no resizing, preserved as vector graphics)
+- Animated GIF preservation: automatically detects multi-frame GIFs and preserves original file
+- ICO multi-resolution icon preservation: maintains all icon sizes without processing
+- Static GIF files processed normally for optimization
 - Enhanced validation for each format type with security checks
 - Admin media library endpoint for uploading branding and site images
 
@@ -81,12 +102,14 @@ Preferred communication style: Simple, everyday language.
 - RESTful API design with standardized error handling
 
 **Authentication System**
-- OTP-only authentication via WhatsApp (default) or Email channels
-- Phone number verification with secure OTP generation and hashing
-- Email/password and Google OAuth authentication disabled
+- Multi-method authentication: Email/Password, Mobile OTP, and Google OAuth
+- Email/Password: Secure bcrypt hashing, email verification, password reset with token-based flow
+- Mobile OTP: WhatsApp (default) or Email channel support with secure OTP hashing
+- Google OAuth: Passport.js integration with automatic account linking
 - Role-based access control (customer/admin roles)
-- Session management with secure cookie configuration
-- Rate limiting and security measures for OTP verification
+- Session management with secure cookie configuration and CSRF protection
+- Security features: Token hashing (SHA-256), timing attack prevention, anti-enumeration
+- Rate limiting and security measures across all authentication methods
 
 **Database Layer**
 - PostgreSQL as the primary database for reliability and ACID compliance
@@ -119,11 +142,13 @@ Preferred communication style: Simple, everyday language.
 ### Authentication and Authorization
 
 **Authentication Flow**
-- Email/password authentication with bcrypt password hashing
-- Google OAuth integration via Passport.js
-- Session-based authentication with secure session management
+- Email/password: Registration with email verification, bcrypt password hashing, password reset via secure token
+- Mobile OTP: Phone verification via WhatsApp/Email, secure OTP hashing, automatic user creation on verification
+- Google OAuth: Integration via Passport.js with automatic account linking
+- Session-based authentication with secure session management and CSRF protection
 - Session timestamp initialization on login for admin session validation
-- Automatic user account linking for OAuth providers
+- Email verification required for email/password accounts before login
+- Password reset: Token-based flow with anti-enumeration protection and 24-hour expiration
 
 **Authorization Levels**
 - Customer role: Service booking, appointment management, car browsing/bidding

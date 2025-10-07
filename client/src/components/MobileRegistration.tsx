@@ -163,6 +163,7 @@ export function MobileRegistration({ mode, onSuccess, onBack }: MobileRegistrati
       phone: data.phone,
       countryCode: data.countryCode,
       purpose: mode === "login" ? "login" : "registration",
+      channel: "whatsapp",
     });
   };
 
@@ -196,6 +197,7 @@ export function MobileRegistration({ mode, onSuccess, onBack }: MobileRegistrati
         phone: phoneData.phone,
         countryCode: phoneData.countryCode,
         purpose: mode === "login" ? "login" : "registration",
+        channel: "whatsapp",
       });
     }
   };

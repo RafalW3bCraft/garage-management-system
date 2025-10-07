@@ -101,7 +101,7 @@ class WhatsAppServiceHelper extends BaseCommunicationService {
 }
 
 export class WhatsAppService {
-  private static readonly TWILIO_PHONE = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
+  private static readonly TWILIO_PHONE = process.env.TWILIO_WHATSAPP_NUMBER || 'whatsapp:+14155238886';
   
   // Configuration from environment variables with fallback defaults
   private static readonly INITIAL_RETRY_DELAY = parseInt(process.env.WHATSAPP_RETRY_DELAY || '1000'); // ms
@@ -153,28 +153,41 @@ export class WhatsAppService {
   /**
    * Initialize Twilio client
    */
-  private static getTwilioClient(): TwilioClient {
+  private static async getTwilioClient(): Promise<TwilioClient> {
+    console.log('[WhatsApp] 🔧 Initializing Twilio client...');
+    
     this.checkProductionRequirements();
+    
+    const hasSID = !!process.env.TWILIO_ACCOUNT_SID;
+    const hasToken = !!process.env.TWILIO_AUTH_TOKEN;
+    const sidPreview = process.env.TWILIO_ACCOUNT_SID ? `${process.env.TWILIO_ACCOUNT_SID.substring(0, 6)}...` : 'NOT_SET';
+    
+    console.log(`[WhatsApp] 📋 Twilio credentials status: SID=${hasSID ? 'SET' : 'NOT_SET'} (${sidPreview}), Token=${hasToken ? 'SET' : 'NOT_SET'}`);
     
     // In development, return a mock client for testing
     if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
-      console.log('[WhatsApp] Development mode - returning mock client');
+      console.log('[WhatsApp] ⚠️ Development mode - returning mock client (no credentials)');
       return {
         messages: {
           create: async (options: TwilioMessageOptions): Promise<TwilioMessageResponse> => {
-            console.log(`[WhatsApp] Mock message sent to ${options.to}: ${options.body}`);
+            console.log(`[WhatsApp] 📱 Mock message sent to ${options.to}: ${options.body}`);
             return { sid: 'mock_' + Date.now() };
           }
         }
       };
     }
 
-    // Use dynamic import to avoid issues if twilio package isn't installed
+    // Use dynamic import for ES module compatibility
     try {
-      const twilio = require('twilio');
-      return twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN) as TwilioClient;
+      console.log('[WhatsApp] 📦 Loading Twilio package...');
+      const { default: twilio } = await import('twilio');
+      const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN) as unknown as TwilioClient;
+      console.log('[WhatsApp] ✅ Twilio client initialized successfully');
+      return client;
     } catch (error) {
-      console.error('[WhatsApp] Twilio package not found. Install with: npm install twilio');
+      const err = error as Error;
+      console.error(`[WhatsApp] ❌ Twilio initialization failed: ${err.message}`);
+      console.error('[WhatsApp] 📦 Twilio package not found. Install with: npm install twilio');
       throw new Error('Twilio package not installed');
     }
   }
@@ -232,28 +245,45 @@ export class WhatsAppService {
    * Format phone number to E.164 format for WhatsApp (international standard)
    */
   private static formatWhatsAppNumber(phone: string, countryCode: string): string {
+    console.log(`[WhatsApp] 📞 Formatting phone number - Input: phone="${phone}", countryCode="${countryCode}"`);
+    
     if (!phone || !countryCode) {
-      throw new Error('Phone number and country code are required');
+      const error = 'Phone number and country code are required';
+      console.error(`[WhatsApp] ❌ Validation failed: ${error}`);
+      throw new Error(error);
     }
 
     const cleanCountryCode = countryCode.replace(/\D/g, '');
+    console.log(`[WhatsApp] 🔧 Clean country code: "${cleanCountryCode}"`);
+    
     const normalizedPhone = this.normalizePhone(phone, countryCode);
+    console.log(`[WhatsApp] 🔧 Normalized phone: "${normalizedPhone}"`);
     
     if (!normalizedPhone || normalizedPhone.length < 6 || normalizedPhone.length > 14) {
-      throw new Error('Invalid phone number length (must be 6-14 digits after normalization)');
+      const error = 'Invalid phone number length (must be 6-14 digits after normalization)';
+      console.error(`[WhatsApp] ❌ Validation failed: ${error} - Got ${normalizedPhone?.length || 0} digits`);
+      throw new Error(error);
     }
     
     if (!cleanCountryCode || cleanCountryCode.length === 0) {
-      throw new Error('Invalid country code');
+      const error = 'Invalid country code';
+      console.error(`[WhatsApp] ❌ Validation failed: ${error}`);
+      throw new Error(error);
     }
     
     const fullNumber = cleanCountryCode + normalizedPhone;
+    console.log(`[WhatsApp] 🔧 Full E.164 number: "+${fullNumber}"`);
     
     if (fullNumber.length < 8 || fullNumber.length > 15) {
-      throw new Error(`Invalid E.164 phone number length: ${fullNumber.length} digits (must be 8-15)`);
+      const error = `Invalid E.164 phone number length: ${fullNumber.length} digits (must be 8-15)`;
+      console.error(`[WhatsApp] ❌ Validation failed: ${error}`);
+      throw new Error(error);
     }
     
-    return `whatsapp:+${fullNumber}`;
+    const formattedNumber = `whatsapp:+${fullNumber}`;
+    console.log(`[WhatsApp] ✅ Formatted WhatsApp number: "${formattedNumber}"`);
+    
+    return formattedNumber;
   }
 
   /**
@@ -390,7 +420,18 @@ Please prepare for this service appointment. Contact the customer if you need an
     messageType: WhatsAppMessageType,
     appointmentId?: string
   ): Promise<TwilioMessageResponse> {
-    const client = this.getTwilioClient();
+    console.log(`[WhatsApp] 📤 Sending ${messageType} message...`);
+    console.log(`[WhatsApp] 📋 Message parameters:`);
+    console.log(`[WhatsApp]    - To: ${to}`);
+    console.log(`[WhatsApp]    - From: ${this.TWILIO_PHONE}`);
+    console.log(`[WhatsApp]    - Message type: ${messageType}`);
+    console.log(`[WhatsApp]    - Message length: ${message.length} chars`);
+    console.log(`[WhatsApp]    - Message preview: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
+    if (appointmentId) {
+      console.log(`[WhatsApp]    - Appointment ID: ${appointmentId}`);
+    }
+    
+    const client = await this.getTwilioClient();
     
     const messageParams = {
       body: message,
@@ -398,11 +439,29 @@ Please prepare for this service appointment. Contact the customer if you need an
       to: to
     };
     
-    const result = await client.messages.create(messageParams);
+    console.log(`[WhatsApp] 🚀 Calling Twilio API with params:`, JSON.stringify(messageParams, null, 2));
     
-    console.log(`[WhatsApp] ✅ Message sent successfully to ${to} (SID: ${result.sid})`);
-    
-    return result;
+    try {
+      const result = await client.messages.create(messageParams);
+      
+      console.log(`[WhatsApp] ✅ Message sent successfully!`);
+      console.log(`[WhatsApp] 📋 Twilio response:`);
+      console.log(`[WhatsApp]    - SID: ${result.sid}`);
+      console.log(`[WhatsApp]    - Status: ${result.status || 'N/A'}`);
+      console.log(`[WhatsApp]    - Direction: ${result.direction || 'N/A'}`);
+      console.log(`[WhatsApp]    - Price: ${result.price || 'N/A'}`);
+      
+      return result;
+    } catch (error) {
+      const twilioError = error as TwilioError;
+      console.error(`[WhatsApp] ❌ Twilio API error occurred:`);
+      console.error(`[WhatsApp]    - Error message: ${twilioError.message}`);
+      console.error(`[WhatsApp]    - Error code: ${twilioError.code || 'N/A'}`);
+      console.error(`[WhatsApp]    - HTTP status: ${twilioError.status || 'N/A'}`);
+      console.error(`[WhatsApp]    - More info: ${twilioError.moreInfo || 'N/A'}`);
+      console.error(`[WhatsApp]    - Full error:`, JSON.stringify(twilioError, null, 2));
+      throw error;
+    }
   }
 
   /**
@@ -844,8 +903,28 @@ Please prepare for this service appointment. Contact the customer if you need an
     countryCode: string,
     otpCode: string
   ): Promise<WhatsAppSendResult> {
+    console.log(`[WhatsApp] 🔐 Initiating OTP message send...`);
+    console.log(`[WhatsApp] 📋 OTP Details:`);
+    console.log(`[WhatsApp]    - Phone: ${phone}`);
+    console.log(`[WhatsApp]    - Country Code: ${countryCode}`);
+    console.log(`[WhatsApp]    - OTP Code: ${otpCode.substring(0, 2)}****`);
+    
+    // Validate and log TWILIO_WHATSAPP_NUMBER configuration
+    console.log(`[WhatsApp] 📞 TWILIO_WHATSAPP_NUMBER configuration:`);
+    console.log(`[WhatsApp]    - Value: ${this.TWILIO_PHONE}`);
+    console.log(`[WhatsApp]    - Format valid: ${this.TWILIO_PHONE.startsWith('whatsapp:+')}`);
+    
+    if (!this.TWILIO_PHONE.startsWith('whatsapp:+')) {
+      console.error(`[WhatsApp] ❌ TWILIO_WHATSAPP_NUMBER has invalid format!`);
+      console.error(`[WhatsApp]    - Expected format: whatsapp:+14155238886`);
+      console.error(`[WhatsApp]    - Actual value: ${this.TWILIO_PHONE}`);
+    }
+    
     const whatsappNumber = this.formatWhatsAppNumber(phone, countryCode);
     const message = this.generateOTPMessage(otpCode);
+    
+    console.log(`[WhatsApp] 📨 Generated OTP message: "${message}"`);
+    
     return this.sendMessage(whatsappNumber, message, 'otp');
   }
 

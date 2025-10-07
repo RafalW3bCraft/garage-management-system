@@ -52,7 +52,7 @@ openssl rand -base64 32
 ```bash
 TWILIO_ACCOUNT_SID="your_twilio_account_sid"
 TWILIO_AUTH_TOKEN="your_twilio_auth_token"
-TWILIO_WHATSAPP_FROM="whatsapp:+14155238886"  # Optional: uses default if not set
+TWILIO_WHATSAPP_NUMBER="whatsapp:+14155238886"  # Optional: uses default if not set
 ```
 
 **Optional configuration (Advanced):**
@@ -86,7 +86,7 @@ WHATSAPP_ENABLE_EMAIL_FALLBACK="true"      # Enable email fallback (default: tru
    - Go to WhatsApp Sandbox in Twilio Console
    - Enable the sandbox
    - Send the join code to your WhatsApp number (e.g., "join [code]")
-   - Use the sandbox number for TWILIO_WHATSAPP_FROM
+   - Use the sandbox number for TWILIO_WHATSAPP_NUMBER
 5. **For production:** Apply for WhatsApp Business API access
 
 **Phone number format:** 
@@ -110,7 +110,7 @@ OTP_SECRET="your_generated_32_character_secret"
 # WhatsApp Service  
 TWILIO_ACCOUNT_SID="your_account_sid_here"
 TWILIO_AUTH_TOKEN="your_auth_token_here"
-TWILIO_WHATSAPP_FROM="whatsapp:+your_whatsapp_number"
+TWILIO_WHATSAPP_NUMBER="whatsapp:+your_whatsapp_number"
 ```
 
 ### Step 2: Restart Application

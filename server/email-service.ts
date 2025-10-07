@@ -103,6 +103,76 @@ function sanitizeSendGridError(responseBody: SendGridErrorResponse): Partial<Sen
   return sanitized;
 }
 
+/**
+ * Check if a 403 error is specifically about sender verification
+ * by inspecting the SendGrid response body
+ */
+function isSenderVerificationError(responseBody: SendGridErrorResponse | null): boolean {
+  if (!responseBody) {
+    return false;
+  }
+
+  // Keywords that indicate sender verification issues
+  const verificationKeywords = [
+    'sender identity',
+    'verified',
+    'verify',
+    'from address',
+    'sender authentication',
+    'single sender verification',
+    'domain authentication'
+  ];
+
+  // Check errors array
+  if (Array.isArray(responseBody.errors)) {
+    for (const error of responseBody.errors) {
+      // Check if the field is "from" (sender email field)
+      if (error.field === 'from') {
+        return true;
+      }
+
+      // Check if error message contains verification-related keywords
+      if (error.message) {
+        const messageLower = error.message.toLowerCase();
+        if (verificationKeywords.some(keyword => messageLower.includes(keyword))) {
+          return true;
+        }
+      }
+
+      // Check help text for verification keywords
+      if (error.help) {
+        const helpLower = error.help.toLowerCase();
+        if (verificationKeywords.some(keyword => helpLower.includes(keyword))) {
+          return true;
+        }
+      }
+    }
+  }
+
+  // Check top-level message field
+  if (responseBody.message) {
+    const messageLower = responseBody.message.toLowerCase();
+    if (verificationKeywords.some(keyword => messageLower.includes(keyword))) {
+      return true;
+    }
+  }
+
+  // Check top-level field
+  if (responseBody.field === 'from') {
+    return true;
+  }
+
+  // Check top-level help text
+  if (responseBody.help) {
+    const helpLower = responseBody.help.toLowerCase();
+    if (verificationKeywords.some(keyword => helpLower.includes(keyword))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 interface EmailParams {
   to: string;
   from: string;
@@ -227,27 +297,68 @@ export async function sendEmailV2(params: EmailParams): Promise<CommunicationRes
     console.error(`[EMAIL] SendGrid Response: ${JSON.stringify(sanitizedResponse, null, 2)}`);
   }
   
+  let userFacingMessage = `Failed to send email: ${errorMsg}`;
+  
   if (statusCode === 401) {
     console.error(`[EMAIL] 🔑 Authentication failed - check SENDGRID_API_KEY`);
+    userFacingMessage = 'Email service authentication failed. Please check your SendGrid API key configuration.';
   } else if (statusCode === 403) {
-    console.error(`[EMAIL] 🚫 Forbidden - sender email may not be verified in SendGrid`);
+    const isSenderVerification = isSenderVerificationError(responseBody);
+    
+    if (isSenderVerification) {
+      const senderEmail = params.from;
+      const sendgridVerificationUrl = 'https://app.sendgrid.com/settings/sender_auth/senders';
+      
+      console.error(`[EMAIL] 🚫 SENDER VERIFICATION REQUIRED`);
+      console.error(`[EMAIL] ============================================`);
+      console.error(`[EMAIL] The sender email "${senderEmail}" is not verified in SendGrid.`);
+      console.error(`[EMAIL] `);
+      console.error(`[EMAIL] 📋 To fix this issue, follow these steps:`);
+      console.error(`[EMAIL] 1. Visit SendGrid Sender Authentication: ${sendgridVerificationUrl}`);
+      console.error(`[EMAIL] 2. Click "Create New Sender" or verify existing sender`);
+      console.error(`[EMAIL] 3. Add and verify the email address: ${senderEmail}`);
+      console.error(`[EMAIL] 4. Check your inbox for verification email from SendGrid`);
+      console.error(`[EMAIL] 5. Click the verification link in the email`);
+      console.error(`[EMAIL] 6. Once verified, emails will send successfully`);
+      console.error(`[EMAIL] `);
+      console.error(`[EMAIL] ℹ️  Note: You can also set a different verified sender email`);
+      console.error(`[EMAIL]    using the SENDGRID_FROM_EMAIL environment variable.`);
+      console.error(`[EMAIL] ============================================`);
+      
+      userFacingMessage = `Email delivery failed: The sender email "${senderEmail}" is not verified in SendGrid. ` +
+        `To fix this, verify your sender email at ${sendgridVerificationUrl}. ` +
+        `Steps: (1) Visit the SendGrid Sender Authentication page, (2) Create or verify sender "${senderEmail}", ` +
+        `(3) Check your inbox for the verification email from SendGrid, (4) Click the verification link. ` +
+        `Alternatively, update SENDGRID_FROM_EMAIL to use a different verified email address.`;
+    } else {
+      console.error(`[EMAIL] 🚫 Forbidden - Access denied by SendGrid`);
+      userFacingMessage = 'Email delivery failed: Access forbidden. Please check your SendGrid account permissions and settings.';
+    }
   } else if (statusCode === 400) {
     console.error(`[EMAIL] 📝 Bad request - check email format and content`);
+    userFacingMessage = 'Email request failed due to invalid format or content. Please check the email parameters.';
   }
   
   const errorType = categorizeError(String(statusCode), errorMsg);
   const circuitBreakerOpen = !emailHelper['circuitBreaker'].canAttempt();
   
-  return createCommunicationResult('email', false, `Failed to send email: ${errorMsg}`, {
+  const metadata: Record<string, any> = { 
+    statusCode: statusCode !== 'N/A' ? Number(statusCode) : undefined,
+    circuitBreakerOpen
+  };
+  
+  if (statusCode === 403 && isSenderVerificationError(responseBody)) {
+    metadata.senderEmail = params.from;
+    metadata.verificationUrl = 'https://app.sendgrid.com/settings/sender_auth/senders';
+  }
+  
+  return createCommunicationResult('email', false, userFacingMessage, {
     errorCode: String(statusCode),
     errorType,
     retryable: errorType === 'service_unavailable' || errorType === 'network' || errorType === 'unknown',
     retryCount: attempts - 1,
     totalAttempts: attempts,
-    metadata: { 
-      statusCode: statusCode !== 'N/A' ? Number(statusCode) : undefined,
-      circuitBreakerOpen
-    }
+    metadata
   });
 }
 
@@ -465,6 +576,217 @@ Ronak Motor Garage Team
       subject,
       html,
       text: `Auction Bid Update - ${data.carName}\n\n${isHighestBidder ? `You're the highest bidder with ₹${data.bidAmount.toLocaleString('en-IN')}!` : `You've been outbid. Current highest: ₹${data.currentHighestBid.toLocaleString('en-IN')}`}\n\nBest regards,\nRonak Motor Garage Team`
+    });
+  }
+
+  // Email verification for email/password authentication
+  static async sendVerificationEmail(to: string, token: string, name: string): Promise<boolean> {
+    // Determine base URL dynamically
+    const port = process.env.PORT || "5000";
+    const isReplit = !!(process.env.REPL_SLUG || process.env.REPL_OWNER || process.env.REPLIT_DB_URL);
+    const isProduction = process.env.NODE_ENV === "production";
+    
+    let baseUrl: string;
+    if (isReplit) {
+      if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
+        baseUrl = `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.replit.dev`;
+      } else {
+        baseUrl = process.env.REPLIT_URL || process.env.REPL_URL || `https://localhost:${port}`;
+      }
+    } else if (isProduction) {
+      baseUrl = process.env.PRODUCTION_URL || `https://localhost:${port}`;
+    } else {
+      baseUrl = `http://localhost:${port}`;
+    }
+
+    const verificationLink = `${baseUrl}/verify-email?token=${token}&email=${encodeURIComponent(to)}`;
+    
+    const subject = "Verify Your Email - Ronak Motor Garage";
+    
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f8f9fa;">
+        <div style="background-color: white; border-radius: 8px; padding: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #2c3e50; margin: 0; font-size: 28px;">Ronak Motor Garage</h1>
+          </div>
+          
+          <h2 style="color: #2c3e50; margin-bottom: 20px;">Welcome, ${name}!</h2>
+          
+          <p style="color: #495057; font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
+            Thank you for registering with Ronak Motor Garage. To complete your registration and access all features, please verify your email address.
+          </p>
+          
+          <div style="text-align: center; margin: 40px 0;">
+            <a href="${verificationLink}" 
+               style="display: inline-block; background-color: #007bff; color: white; padding: 16px 32px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px;">
+              Verify Email Address
+            </a>
+          </div>
+          
+          <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 30px 0; border-radius: 4px;">
+            <p style="margin: 0; color: #856404; font-size: 14px;">
+              <strong>Important:</strong> This verification link will expire in 24 hours.
+            </p>
+          </div>
+          
+          <p style="color: #6c757d; font-size: 14px; line-height: 1.6; margin-top: 30px;">
+            If the button above doesn't work, copy and paste this link into your browser:
+          </p>
+          <p style="color: #007bff; font-size: 13px; word-break: break-all; background-color: #f8f9fa; padding: 10px; border-radius: 4px;">
+            ${verificationLink}
+          </p>
+          
+          <hr style="border: none; border-top: 1px solid #dee2e6; margin: 30px 0;">
+          
+          <p style="color: #6c757d; font-size: 14px; line-height: 1.6; margin: 0;">
+            If you didn't create an account with Ronak Motor Garage, please ignore this email.
+          </p>
+          
+          <p style="color: #6c757d; font-size: 14px; margin-top: 30px;">
+            Best regards,<br>
+            <strong style="color: #2c3e50;">The Ronak Motor Garage Team</strong>
+          </p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 20px; color: #6c757d; font-size: 12px;">
+          <p>This is an automated message, please do not reply to this email.</p>
+        </div>
+      </div>
+    `;
+
+    const text = `
+Welcome to Ronak Motor Garage, ${name}!
+
+Thank you for registering with us. To complete your registration and access all features, please verify your email address.
+
+Click the link below to verify your email:
+${verificationLink}
+
+Important: This verification link will expire in 24 hours.
+
+If you didn't create an account with Ronak Motor Garage, please ignore this email.
+
+Best regards,
+The Ronak Motor Garage Team
+
+---
+This is an automated message, please do not reply to this email.
+    `;
+
+    return sendEmail({
+      to,
+      from: this.FROM_EMAIL,
+      subject,
+      html,
+      text: text.trim()
+    });
+  }
+
+  // Password reset email
+  static async sendPasswordResetEmail(to: string, token: string, name: string): Promise<boolean> {
+    // Determine base URL dynamically
+    const port = process.env.PORT || "5000";
+    const isReplit = !!(process.env.REPL_SLUG || process.env.REPL_OWNER || process.env.REPLIT_DB_URL);
+    const isProduction = process.env.NODE_ENV === "production";
+    
+    let baseUrl: string;
+    if (isReplit) {
+      if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
+        baseUrl = `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.replit.dev`;
+      } else {
+        baseUrl = process.env.REPLIT_URL || process.env.REPL_URL || `https://localhost:${port}`;
+      }
+    } else if (isProduction) {
+      baseUrl = process.env.PRODUCTION_URL || `https://localhost:${port}`;
+    } else {
+      baseUrl = `http://localhost:${port}`;
+    }
+
+    const resetLink = `${baseUrl}/reset-password?token=${token}&email=${encodeURIComponent(to)}`;
+    
+    const subject = "Reset Your Password - Ronak Motor Garage";
+    
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background-color: #f8f9fa;">
+        <div style="background-color: white; border-radius: 8px; padding: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <div style="text-align: center; margin-bottom: 30px;">
+            <h1 style="color: #2c3e50; margin: 0; font-size: 28px;">Ronak Motor Garage</h1>
+          </div>
+          
+          <h2 style="color: #2c3e50; margin-bottom: 20px;">Password Reset Request</h2>
+          
+          <p style="color: #495057; font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
+            Hello ${name},
+          </p>
+          
+          <p style="color: #495057; font-size: 16px; line-height: 1.6; margin-bottom: 20px;">
+            We received a request to reset your password for your Ronak Motor Garage account. Click the button below to set a new password.
+          </p>
+          
+          <div style="text-align: center; margin: 40px 0;">
+            <a href="${resetLink}" 
+               style="display: inline-block; background-color: #dc3545; color: white; padding: 16px 32px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 16px;">
+              Reset Password
+            </a>
+          </div>
+          
+          <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 30px 0; border-radius: 4px;">
+            <p style="margin: 0; color: #856404; font-size: 14px;">
+              <strong>Important:</strong> This password reset link will expire in 24 hours.
+            </p>
+          </div>
+          
+          <p style="color: #6c757d; font-size: 14px; line-height: 1.6; margin-top: 30px;">
+            If the button above doesn't work, copy and paste this link into your browser:
+          </p>
+          <p style="color: #007bff; font-size: 13px; word-break: break-all; background-color: #f8f9fa; padding: 10px; border-radius: 4px;">
+            ${resetLink}
+          </p>
+          
+          <hr style="border: none; border-top: 1px solid #dee2e6; margin: 30px 0;">
+          
+          <p style="color: #6c757d; font-size: 14px; line-height: 1.6; margin: 0;">
+            If you didn't request a password reset, please ignore this email. Your password will remain unchanged.
+          </p>
+          
+          <p style="color: #6c757d; font-size: 14px; margin-top: 30px;">
+            Best regards,<br>
+            <strong style="color: #2c3e50;">The Ronak Motor Garage Team</strong>
+          </p>
+        </div>
+        
+        <div style="text-align: center; margin-top: 20px; color: #6c757d; font-size: 12px;">
+          <p>This is an automated message, please do not reply to this email.</p>
+        </div>
+      </div>
+    `;
+
+    const text = `
+Password Reset Request - Ronak Motor Garage
+
+Hello ${name},
+
+We received a request to reset your password for your Ronak Motor Garage account. Click the link below to set a new password.
+
+${resetLink}
+
+Important: This password reset link will expire in 24 hours.
+
+If you didn't request a password reset, please ignore this email. Your password will remain unchanged.
+
+Best regards,
+The Ronak Motor Garage Team
+
+---
+This is an automated message, please do not reply to this email.
+    `;
+
+    return sendEmail({
+      to,
+      from: this.FROM_EMAIL,
+      subject,
+      html,
+      text: text.trim()
     });
   }
 }

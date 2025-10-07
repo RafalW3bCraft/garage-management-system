@@ -20,6 +20,8 @@ import {
   type InsertBid,
   type OtpVerification,
   type InsertOtpVerification,
+  type EmailVerificationToken,
+  type InsertEmailVerificationToken,
   type WhatsAppMessage,
   type InsertWhatsAppMessage,
   type AdminAuditLog,
@@ -40,6 +42,7 @@ import {
   locations,
   bids,
   otpVerifications,
+  emailVerificationTokens,
   whatsappMessages,
   adminAuditLogs,
   adminRateLimits,
@@ -160,6 +163,14 @@ export interface IStorage {
 
   // Phone-based user operations
   getUserByPhone(phone: string, countryCode: string): Promise<User | undefined>;
+
+  // Email Verification Tokens
+  createVerificationToken(userId: string, email: string, purpose?: string): Promise<{ token: string; tokenHash: string }>;
+  getVerificationToken(tokenHash: string, email: string, purpose?: string): Promise<EmailVerificationToken | undefined>;
+  consumeVerificationToken(tokenHash: string, purpose?: string): Promise<boolean>;
+  cleanupExpiredVerificationTokens(cutoffDate: Date): Promise<number>;
+  incrementResendCount(userId: string): Promise<boolean>;
+  getActiveVerificationToken(userId: string): Promise<EmailVerificationToken | undefined>;
 
   // WhatsApp Messages
   logWhatsAppMessage(message: InsertWhatsAppMessage): Promise<WhatsAppMessage>;
@@ -1277,6 +1288,136 @@ export class DatabaseStorage implements IStorage {
         eq(users.countryCode, countryCode)
       ))
       .limit(1);
+    return result[0];
+  }
+
+  // Email Verification Tokens
+  async createVerificationToken(userId: string, email: string, purpose: string = 'email_verification'): Promise<{ token: string; tokenHash: string }> {
+    const db = await getDb();
+    const crypto = await import('crypto');
+    
+    // Generate a secure random token (32 bytes = 64 hex characters)
+    const token = crypto.randomBytes(32).toString('hex');
+    
+    // Hash the token for storage
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    
+    // Set expiration to 24 hours from now
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    
+    // Store the hashed token
+    await db.insert(emailVerificationTokens).values({
+      userId,
+      email,
+      tokenHash,
+      purpose,
+      expiresAt,
+      resendCount: 0
+    });
+    
+    // Return the plain token (to be sent via email) and hash (for reference)
+    return { token, tokenHash };
+  }
+
+  async getVerificationToken(tokenHash: string, email: string, purpose?: string): Promise<EmailVerificationToken | undefined> {
+    const db = await getDb();
+    const now = new Date();
+    
+    // Build where conditions
+    const conditions = [
+      eq(emailVerificationTokens.tokenHash, tokenHash),
+      eq(emailVerificationTokens.email, email),
+      isNull(emailVerificationTokens.consumedAt),
+      gte(emailVerificationTokens.expiresAt, now)
+    ];
+    
+    // Optionally filter by purpose
+    if (purpose) {
+      conditions.push(eq(emailVerificationTokens.purpose, purpose));
+    }
+    
+    // Fetch active token (not consumed, not expired)
+    const result = await db.select()
+      .from(emailVerificationTokens)
+      .where(and(...conditions))
+      .limit(1);
+    
+    return result[0];
+  }
+
+  async consumeVerificationToken(tokenHash: string, purpose?: string): Promise<boolean> {
+    const db = await getDb();
+    
+    return await db.transaction(async (tx) => {
+      // Get the token with user info
+      const tokenResult = await tx.select()
+        .from(emailVerificationTokens)
+        .where(eq(emailVerificationTokens.tokenHash, tokenHash))
+        .limit(1);
+      
+      if (!tokenResult[0]) {
+        return false;
+      }
+      
+      const token = tokenResult[0];
+      
+      // Mark token as consumed
+      await tx.update(emailVerificationTokens)
+        .set({ consumedAt: new Date() })
+        .where(eq(emailVerificationTokens.id, token.id));
+      
+      // Mark user as email verified only if purpose is email_verification
+      if (token.purpose === 'email_verification') {
+        await tx.update(users)
+          .set({ emailVerified: true })
+          .where(eq(users.id, token.userId));
+      }
+      
+      return true;
+    });
+  }
+
+  async cleanupExpiredVerificationTokens(cutoffDate: Date): Promise<number> {
+    const db = await getDb();
+    
+    const result = await db.delete(emailVerificationTokens)
+      .where(lte(emailVerificationTokens.expiresAt, cutoffDate))
+      .returning({ id: emailVerificationTokens.id });
+    
+    return result.length;
+  }
+
+  async incrementResendCount(userId: string): Promise<boolean> {
+    const db = await getDb();
+    
+    // Increment resend count for the most recent unconsumed token for this user
+    const result = await db.update(emailVerificationTokens)
+      .set({ 
+        resendCount: sql`${emailVerificationTokens.resendCount} + 1` 
+      })
+      .where(and(
+        eq(emailVerificationTokens.userId, userId),
+        isNull(emailVerificationTokens.consumedAt)
+      ))
+      .returning({ id: emailVerificationTokens.id });
+    
+    return result.length > 0;
+  }
+
+  async getActiveVerificationToken(userId: string): Promise<EmailVerificationToken | undefined> {
+    const db = await getDb();
+    const now = new Date();
+    
+    const result = await db.select()
+      .from(emailVerificationTokens)
+      .where(and(
+        eq(emailVerificationTokens.userId, userId),
+        isNull(emailVerificationTokens.consumedAt),
+        gte(emailVerificationTokens.expiresAt, now)
+      ))
+      .orderBy(desc(emailVerificationTokens.createdAt))
+      .limit(1);
+    
     return result[0];
   }
 

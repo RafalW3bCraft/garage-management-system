@@ -204,6 +204,26 @@ export const otpVerifications = pgTable("otp_verifications", {
   phoneCountryIdx: index("idx_phone_country").on(table.phone, table.countryCode, table.expiresAt)
 }));
 
+// Email verification tokens for email/password authentication and password reset
+export const emailVerificationTokens = pgTable("email_verification_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: 'cascade', onUpdate: 'cascade' }),
+  email: text("email").notNull(), // Store email for verification
+  tokenHash: text("token_hash").notNull().unique(), // Hashed token for security
+  purpose: text("purpose").notNull().default("email_verification"), // "email_verification" or "password_reset"
+  expiresAt: timestamp("expires_at").notNull(),
+  consumedAt: timestamp("consumed_at"), // When token was used (nullable)
+  resendCount: integer("resend_count").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index for efficient token lookups
+  tokenHashIdx: index("idx_token_hash").on(table.tokenHash),
+  // Index for user's tokens
+  userIdIdx: index("idx_email_verification_user").on(table.userId),
+  // Index for cleanup of expired tokens
+  expiresAtIdx: index("idx_email_verification_expires").on(table.expiresAt)
+}));
+
 // WhatsApp message tracking
 export const whatsappMessages = pgTable("whatsapp_messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -343,6 +363,16 @@ export const serverRegisterSchema = z.object({
 export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1, "Password is required"),
+});
+
+export const passwordResetRequestSchema = z.object({
+  email: z.string().email("Invalid email format"),
+});
+
+export const passwordResetVerifySchema = z.object({
+  token: z.string().min(1, "Reset token is required"),
+  email: z.string().email("Invalid email format"),
+  newPassword: z.string().min(8, "Password must be at least 8 characters"),
 });
 
 export const insertCustomerSchema = createInsertSchema(customers).omit({
@@ -649,6 +679,9 @@ export type InsertBid = z.infer<typeof insertBidSchema>;
 
 export type OtpVerification = typeof otpVerifications.$inferSelect;
 export type InsertOtpVerification = z.infer<typeof insertOtpVerificationSchema>;
+
+export type EmailVerificationToken = typeof emailVerificationTokens.$inferSelect;
+export type InsertEmailVerificationToken = typeof emailVerificationTokens.$inferInsert;
 
 export type WhatsAppMessage = typeof whatsappMessages.$inferSelect;
 export type InsertWhatsAppMessage = z.infer<typeof insertWhatsAppMessageSchema>;

@@ -120,9 +120,37 @@ export class OTPService {
    * Send OTP via WhatsApp using Twilio API
    */
   private static async sendWhatsAppOTP(phone: string, countryCode: string, otpCode: string): Promise<boolean> {
+    console.log(`[OTP] 🔐 Starting WhatsApp OTP send process...`);
+    console.log(`[OTP] 📋 Request details:`);
+    console.log(`[OTP]    - Phone: ${phone}`);
+    console.log(`[OTP]    - Country Code: ${countryCode}`);
+    console.log(`[OTP]    - OTP (masked): ${otpCode.substring(0, 2)}****`);
+    console.log(`[OTP]    - Target: ${countryCode}${phone}`);
+    
     try {
-      console.log(`[OTP] Sending WhatsApp OTP to ${countryCode}${phone}`);
+      console.log(`[OTP] 📞 Calling WhatsAppService.sendOTPMessage()...`);
       const result = await WhatsAppService.sendOTPMessage(phone, countryCode, otpCode);
+      
+      console.log(`[OTP] 📋 WhatsApp service response:`);
+      console.log(`[OTP]    - Success: ${result.success}`);
+      console.log(`[OTP]    - Service: ${result.service}`);
+      console.log(`[OTP]    - Message: ${result.message}`);
+      
+      if (result.messageSid) {
+        console.log(`[OTP]    - Message SID: ${result.messageSid}`);
+      }
+      
+      if (result.retryCount !== undefined) {
+        console.log(`[OTP]    - Retry count: ${result.retryCount}`);
+      }
+      
+      if (result.fallbackUsed) {
+        console.log(`[OTP]    - Fallback used: ${result.fallbackUsed}`);
+      }
+      
+      if (result.error) {
+        console.error(`[OTP]    - Error details: ${result.error}`);
+      }
       
       if (result.success) {
         console.log(`[OTP] ✅ WhatsApp OTP sent successfully to ${countryCode}${phone}`);
@@ -130,10 +158,40 @@ export class OTPService {
       }
       
       console.error(`[OTP] ❌ WhatsApp OTP failed: ${result.message}`);
+      console.error(`[OTP] 💡 Troubleshooting hints:`);
+      console.error(`[OTP]    - Check if TWILIO_ACCOUNT_SID is set correctly`);
+      console.error(`[OTP]    - Check if TWILIO_AUTH_TOKEN is set correctly`);
+      console.error(`[OTP]    - Check if TWILIO_WHATSAPP_NUMBER is in format: whatsapp:+14155238886`);
+      console.error(`[OTP]    - Verify phone number format: ${countryCode}${phone}`);
+      console.error(`[OTP]    - Check Twilio account status and WhatsApp sandbox configuration`);
+      
       return false;
     } catch (error) {
       const err = error as Error;
-      console.error(`[OTP] WhatsApp OTP error:`, err.message);
+      console.error(`[OTP] ❌ WhatsApp OTP exception caught:`);
+      console.error(`[OTP]    - Error type: ${err.constructor.name}`);
+      console.error(`[OTP]    - Error message: ${err.message}`);
+      console.error(`[OTP]    - Error stack:`, err.stack);
+      
+      // Check for specific Twilio errors
+      const twilioError = error as any;
+      if (twilioError.code) {
+        console.error(`[OTP]    - Twilio error code: ${twilioError.code}`);
+      }
+      if (twilioError.status) {
+        console.error(`[OTP]    - HTTP status: ${twilioError.status}`);
+      }
+      if (twilioError.moreInfo) {
+        console.error(`[OTP]    - More info: ${twilioError.moreInfo}`);
+      }
+      
+      console.error(`[OTP] 💡 Debugging steps:`);
+      console.error(`[OTP]    1. Verify Twilio credentials are correctly set`);
+      console.error(`[OTP]    2. Check if Twilio WhatsApp sandbox is activated`);
+      console.error(`[OTP]    3. Verify phone number format matches E.164 standard`);
+      console.error(`[OTP]    4. Check Twilio account balance and limits`);
+      console.error(`[OTP]    5. Review Twilio console for detailed error logs`);
+      
       return false;
     }
   }
@@ -278,6 +336,8 @@ export class OTPService {
       await storage.storeOTPVerification({
         phone,
         countryCode,
+        channel,
+        email: channel === 'email' ? email : null,
         otpCodeHash: otpHash,
         verificationId: null,
         purpose,

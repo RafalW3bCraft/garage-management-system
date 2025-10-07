@@ -55,7 +55,7 @@ describe('Communication Services - Unit Tests', () => {
     // Set up environment variables
     process.env.TWILIO_ACCOUNT_SID = 'test-account-sid';
     process.env.TWILIO_AUTH_TOKEN = 'test-auth-token';
-    process.env.TWILIO_WHATSAPP_FROM = 'whatsapp:+14155238886';
+    process.env.TWILIO_WHATSAPP_NUMBER = 'whatsapp:+14155238886';
     process.env.SENDGRID_API_KEY = 'test-sendgrid-key';
     process.env.SENDGRID_FROM_EMAIL = 'test@example.com';
     process.env.MESSAGECENTRAL_AUTH_TOKEN = 'test-mc-token';

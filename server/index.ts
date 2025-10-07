@@ -2,6 +2,7 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { OTPService } from "./otp-service";
+import { getStorage } from "./storage";
 import { performanceMiddleware } from "./performance-monitor";
 
 // Environment validation and logging
@@ -84,14 +85,14 @@ function validateEnvironment(): void {
   // Validate WhatsApp/Twilio Configuration
   const twilioSid = process.env.TWILIO_ACCOUNT_SID;
   const twilioToken = process.env.TWILIO_AUTH_TOKEN;
-  const twilioWhatsApp = process.env.TWILIO_WHATSAPP_FROM;
+  const twilioWhatsApp = process.env.TWILIO_WHATSAPP_NUMBER;
   const hasTwilioSid = !!twilioSid;
   const hasTwilioToken = !!twilioToken;
   
   if (hasTwilioSid && hasTwilioToken) {
     console.log("- TWILIO_ACCOUNT_SID: ✓ Available");
     console.log("- TWILIO_AUTH_TOKEN: ✓ Available");
-    console.log(`- TWILIO_WHATSAPP_FROM: ${twilioWhatsApp ? "✓ Available" : "⚠ Missing (using default)"}`);
+    console.log(`- TWILIO_WHATSAPP_NUMBER: ${twilioWhatsApp ? "✓ Available" : "⚠ Missing (using default)"}`);
     console.log("- WhatsApp Service: ✓ Enabled");
   } else if (hasTwilioSid || hasTwilioToken) {
     const missing = hasTwilioSid ? "TWILIO_AUTH_TOKEN" : "TWILIO_ACCOUNT_SID";
@@ -285,8 +286,9 @@ app.use((req, res, next) => {
   }, () => {
     log(`serving on port ${port}`);
     
-    // Start OTP cleanup scheduler after server is running
+    // Start cleanup schedulers after server is running
     startOTPCleanupScheduler();
+    startEmailVerificationCleanupScheduler();
   });
 })();
 
@@ -358,4 +360,76 @@ function startOTPCleanupScheduler(): void {
   // Store interval ID for potential future use (though not needed for this implementation)
   // This allows the interval to be cleared if needed programmatically
   (global as any).__otpCleanupInterval = intervalId;
+}
+
+/**
+ * Email Verification Token Cleanup Scheduler
+ * Runs cleanup every 6 hours and performs initial cleanup on startup
+ */
+function startEmailVerificationCleanupScheduler(): void {
+  const CLEANUP_INTERVAL_HOURS = 6;
+  const CLEANUP_INTERVAL_MS = CLEANUP_INTERVAL_HOURS * 60 * 60 * 1000; // 6 hours in milliseconds
+  
+  console.log(`[EMAIL_VERIFICATION_CLEANUP] Starting email verification token cleanup scheduler (runs every ${CLEANUP_INTERVAL_HOURS} hour${CLEANUP_INTERVAL_HOURS !== 1 ? 's' : ''})`);
+  
+  // Function to perform cleanup with error handling and logging
+  const performCleanup = async (isStartup: boolean = false): Promise<void> => {
+    const startTime = Date.now();
+    const cleanupType = isStartup ? 'STARTUP' : 'SCHEDULED';
+    
+    try {
+      console.log(`[EMAIL_VERIFICATION_CLEANUP] ${cleanupType} cleanup started at ${new Date().toISOString()}`);
+      
+      const storage = await getStorage();
+      // Clean up tokens older than 48 hours (double the expiry time for safety)
+      const cutoffDate = new Date(Date.now() - (48 * 60 * 60 * 1000));
+      const deletedCount = await storage.cleanupExpiredVerificationTokens(cutoffDate);
+      
+      const duration = Date.now() - startTime;
+      console.log(`[EMAIL_VERIFICATION_CLEANUP] ${cleanupType} cleanup completed successfully in ${duration}ms - deleted ${deletedCount} expired token(s)`);
+      
+    } catch (error: unknown) {
+      const duration = Date.now() - startTime;
+      const errorObj = error as Error;
+      console.error(`[EMAIL_VERIFICATION_CLEANUP] ${cleanupType} cleanup failed after ${duration}ms:`, {
+        message: errorObj.message,
+        stack: errorObj.stack,
+        timestamp: new Date().toISOString()
+      });
+      
+      // In production, we want to log the error but not crash the application
+      if (process.env.NODE_ENV === 'production') {
+        console.error(`[EMAIL_VERIFICATION_CLEANUP] Production error logged - application continues running`);
+      } else {
+        console.warn(`[EMAIL_VERIFICATION_CLEANUP] Development mode - cleanup failure is non-critical`);
+      }
+    }
+  };
+  
+  // Perform initial cleanup on startup (with a small delay to ensure database is ready)
+  setTimeout(async () => {
+    await performCleanup(true);
+  }, 3000); // 3 second delay (slightly after OTP cleanup)
+  
+  // Schedule regular cleanup every 6 hours
+  const intervalId = setInterval(async () => {
+    await performCleanup(false);
+  }, CLEANUP_INTERVAL_MS);
+  
+  console.log(`[EMAIL_VERIFICATION_CLEANUP] Scheduler started successfully - cleanup will run every ${CLEANUP_INTERVAL_HOURS} hour${CLEANUP_INTERVAL_HOURS !== 1 ? 's' : ''}`);
+  console.log(`[EMAIL_VERIFICATION_CLEANUP] Initial cleanup will run in 3 seconds`);
+  
+  // Handle graceful shutdown (cleanup interval on process termination)
+  const gracefulShutdown = (signal: string) => {
+    console.log(`[EMAIL_VERIFICATION_CLEANUP] Received ${signal}, stopping cleanup scheduler...`);
+    clearInterval(intervalId);
+    console.log(`[EMAIL_VERIFICATION_CLEANUP] Cleanup scheduler stopped gracefully`);
+  };
+  
+  // Register shutdown handlers
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+  
+  // Store interval ID for potential future use
+  (global as any).__emailVerificationCleanupInterval = intervalId;
 }

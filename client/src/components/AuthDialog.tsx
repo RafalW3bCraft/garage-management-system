@@ -56,11 +56,9 @@ interface AuthDialogProps {
 }
 
 /**
- * Comprehensive authentication dialog supporting OTP-only authentication.
- * Features mobile OTP (WhatsApp & Email) authentication flows with
+ * Comprehensive authentication dialog supporting multiple authentication methods.
+ * Features email/password, mobile OTP (WhatsApp & Email), and Google OAuth authentication flows with
  * smart method selection, preference memory, and seamless multi-step registration.
- * 
- * Note: Email/password and Google OAuth have been disabled in favor of OTP-only authentication.
  * 
  * @param {AuthDialogProps} props - Component props
  * @param {React.ReactNode} props.children - Trigger element for opening the dialog
@@ -119,11 +117,10 @@ export function AuthDialog({ children }: AuthDialogProps) {
     return () => clearInterval(interval);
   }, [otpCountdown]);
   
-  // Pre-select mobile OTP method when dialog opens (OTP-only authentication)
+  // Pre-select last used method when dialog opens
   useEffect(() => {
-    if (open) {
-      // Always default to mobile OTP since email/password and Google are disabled
-      flow.setMethod('mobile');
+    if (open && preferences.lastMethod) {
+      flow.setMethod(preferences.lastMethod);
     }
   }, [open]);
   
@@ -157,11 +154,11 @@ export function AuthDialog({ children }: AuthDialogProps) {
     }
   }, [open]);
   
-  // Method selection handler - OTP only
+  // Method selection handler
   const handleMethodSelection = (method: "email" | "mobile" | "google") => {
-    // Only mobile OTP is allowed
-    if (method !== "mobile") {
-      console.warn('Only mobile OTP authentication is supported');
+    if (method === "google") {
+      // Redirect to Google OAuth
+      window.location.href = "/api/auth/google";
       return;
     }
     

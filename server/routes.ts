@@ -14,6 +14,8 @@ import {
   registerSchema,
   serverRegisterSchema,
   loginSchema,
+  passwordResetRequestSchema,
+  passwordResetVerifySchema,
   rescheduleAppointmentSchema,
   placeBidSchema,
   mobileRegisterSchema,
@@ -928,15 +930,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Apply CSRF protection to all API routes
   app.use('/api', csrfProtection);
 
-  // Authentication Routes - DISABLED (OTP-only authentication)
-  // Email/password authentication has been disabled in favor of OTP-only authentication
-  app.post("/api/auth/register", async (req, res) => {
-    return sendError(res, "Email/password registration is disabled. Please use OTP authentication.", 403, undefined, "AUTH_METHOD_DISABLED");
-  });
+  // Authentication Routes - Email/Password with Email Verification
+  app.post("/api/auth/register", asyncRoute("register user", async (req: Request, res: Response) => {
+    // Validate request data
+    const validationResult = serverRegisterSchema.safeParse(req.body);
+    
+    if (!validationResult.success) {
+      return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
+    }
 
-  app.post("/api/auth/login", async (req, res) => {
-    return sendError(res, "Email/password login is disabled. Please use OTP authentication.", 403, undefined, "AUTH_METHOD_DISABLED");
-  });
+    const { email, name, password } = validationResult.data;
+    const storage = await getStorage();
+
+    // Check if user already exists
+    const existingUser = await storage.getUserByEmail(email);
+    if (existingUser) {
+      return sendConflictError(res, "User", "A user with this email address already exists");
+    }
+
+    // Hash password
+    const hashedPassword = await hashPassword(password);
+
+    // Create user with email verification disabled
+    const newUser = await storage.createUser({
+      email,
+      name,
+      password: hashedPassword,
+      provider: "email",
+      emailVerified: false,
+      role: "customer"
+    });
+
+    // Generate verification token
+    const { token } = await storage.createVerificationToken(newUser.id, email);
+
+    // Send verification email
+    const emailSent = await EmailNotificationService.sendVerificationEmail(email, token, name);
+    
+    if (!emailSent) {
+      console.error(`[REGISTER] Failed to send verification email to ${email}`);
+    }
+
+    return sendResourceCreated(res, 
+      { message: "Registration successful! Please check your email to verify your account." },
+      "User registered successfully"
+    );
+  }));
+
+  app.post("/api/auth/login", asyncRoute("login user", async (req: Request, res: Response) => {
+    // Validate request data
+    const validationResult = loginSchema.safeParse(req.body);
+    
+    if (!validationResult.success) {
+      return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
+    }
+
+    const { email, password } = validationResult.data;
+    const storage = await getStorage();
+
+    // Find user by email
+    const user = await storage.getUserByEmail(email);
+    
+    if (!user || !user.password) {
+      return sendUnauthorizedError(res, "Invalid email or password");
+    }
+
+    // Check if email is verified
+    if (!user.emailVerified) {
+      return sendForbiddenError(res, "Please verify your email address before logging in. Check your inbox for the verification link.");
+    }
+
+    // Verify password
+    const passwordValid = await verifyPassword(password, user.password);
+    
+    if (!passwordValid) {
+      return sendUnauthorizedError(res, "Invalid email or password");
+    }
+
+    // Regenerate session for security
+    await new Promise<void>((resolve, reject) => {
+      req.session.regenerate((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    // Login user via Passport
+    await new Promise<void>((resolve, reject) => {
+      req.login(user, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    // Return user data without password
+    const { password: _, ...userResponse } = user;
+    return sendSuccess(res, userResponse, "Login successful");
+  }));
 
   app.post("/api/auth/logout", asyncRoute("logout", async (req: Request, res: Response) => {
     req.logout((err: Error | null) => {
@@ -947,14 +1037,241 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   }));
 
-  // Google OAuth routes - DISABLED (OTP-only authentication)
-  app.get("/api/auth/google", asyncRoute("initiate Google OAuth", async (req: Request, res: Response, next: NextFunction) => {
-    return res.redirect("/login?error=oauth_disabled");
+  // Email verification endpoint
+  app.post("/api/auth/verify-email", asyncRoute("verify email", async (req: Request, res: Response) => {
+    const { token, email } = req.body;
+    
+    // Validate input
+    if (!token || !email) {
+      return sendValidationError(res, "Token and email are required", []);
+    }
+
+    const storage = await getStorage();
+    const crypto = await import('crypto');
+    
+    // Hash the token to match stored hash
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    
+    // Get verification token
+    const verificationToken = await storage.getVerificationToken(tokenHash, email);
+    
+    if (!verificationToken) {
+      return sendError(res, "Invalid or expired verification token. Please request a new verification email.", 400, undefined, "INVALID_TOKEN");
+    }
+
+    // Consume the token (marks user as verified)
+    const success = await storage.consumeVerificationToken(tokenHash);
+    
+    if (!success) {
+      return sendError(res, "Failed to verify email. Please try again.", 500);
+    }
+
+    // Get the updated user
+    const user = await storage.getUserByEmail(email);
+    
+    if (!user) {
+      return sendNotFoundError(res, "User");
+    }
+
+    // Auto-login the user after successful verification
+    await new Promise<void>((resolve, reject) => {
+      req.session.regenerate((err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      req.login(user, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    // Return user data without password
+    const { password: _, ...userResponse } = user;
+    return sendSuccess(res, userResponse, "Email verified successfully! You are now logged in.");
   }));
 
-  app.get("/api/auth/google/callback", asyncRoute("Google OAuth callback", async (req: Request, res: Response) => {
-    return res.redirect("/login?error=oauth_disabled");
+  // Resend verification email endpoint
+  app.post("/api/auth/resend-verification", asyncRoute("resend verification email", async (req: Request, res: Response) => {
+    const { email } = req.body;
+    
+    // Validate input
+    if (!email) {
+      return sendValidationError(res, "Email is required", []);
+    }
+
+    const storage = await getStorage();
+    
+    // Get user
+    const user = await storage.getUserByEmail(email);
+    
+    if (!user) {
+      // Don't reveal if user exists or not for security
+      return sendSuccess(res, null, "If an unverified account exists with this email, a verification link has been sent.");
+    }
+
+    // Check if already verified
+    if (user.emailVerified) {
+      return sendError(res, "This email is already verified. You can log in.", 400, undefined, "ALREADY_VERIFIED");
+    }
+
+    // Check active verification token and resend count
+    const activeToken = await storage.getActiveVerificationToken(user.id);
+    
+    if (activeToken && activeToken.resendCount >= 5) {
+      return sendRateLimitError(res, "Maximum verification email resend limit reached. Please contact support.");
+    }
+
+    // Generate new verification token
+    const { token } = await storage.createVerificationToken(user.id, email);
+
+    // Increment resend count if there was an active token
+    if (activeToken) {
+      await storage.incrementResendCount(user.id);
+    }
+
+    // Send verification email
+    const emailSent = await EmailNotificationService.sendVerificationEmail(email, token, user.name);
+    
+    if (!emailSent) {
+      console.error(`[RESEND_VERIFICATION] Failed to send verification email to ${email}`);
+      return sendError(res, "Failed to send verification email. Please try again later.", 500);
+    }
+
+    return sendSuccess(res, null, "Verification email sent! Please check your inbox.");
   }));
+
+  // Password reset request endpoint
+  app.post("/api/auth/password-reset/request", asyncRoute("request password reset", async (req: Request, res: Response) => {
+    const validationResult = passwordResetRequestSchema.safeParse(req.body);
+    
+    if (!validationResult.success) {
+      return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
+    }
+
+    const { email } = validationResult.data;
+    const storage = await getStorage();
+    
+    // SECURITY: Generic response message used for all cases to prevent account enumeration
+    const GENERIC_RESPONSE = "If an account exists with this email, you will receive a password reset link shortly.";
+    
+    // Timing attack prevention: Track start time
+    const startTime = Date.now();
+    
+    // Get user
+    const user = await storage.getUserByEmail(email);
+    
+    if (!user) {
+      // User doesn't exist - log internally but return generic success
+      console.log(`[PASSWORD_RESET] Password reset requested for non-existent email: ${email}`);
+      
+      // Timing attack prevention: Add artificial delay to match successful flow
+      const minDelay = 100; // Minimum delay in ms to simulate token generation and email sending
+      const elapsed = Date.now() - startTime;
+      if (elapsed < minDelay) {
+        await new Promise(resolve => setTimeout(resolve, minDelay - elapsed));
+      }
+      
+      return sendSuccess(res, null, GENERIC_RESPONSE);
+    }
+
+    // Check if user has a password (OAuth users don't have passwords)
+    if (!user.password) {
+      // OAuth-only account - log internally but return generic success
+      console.log(`[PASSWORD_RESET] Password reset requested for OAuth-only account: ${email} (User ID: ${user.id})`);
+      
+      // Timing attack prevention: Add artificial delay to match successful flow
+      const minDelay = 100;
+      const elapsed = Date.now() - startTime;
+      if (elapsed < minDelay) {
+        await new Promise(resolve => setTimeout(resolve, minDelay - elapsed));
+      }
+      
+      // DO NOT create token or send email for OAuth users
+      return sendSuccess(res, null, GENERIC_RESPONSE);
+    }
+
+    // Email-based account - proceed with password reset
+    try {
+      // Generate password reset token with purpose='password_reset'
+      const { token } = await storage.createVerificationToken(user.id, email, 'password_reset');
+
+      // Send password reset email
+      const emailSent = await EmailNotificationService.sendPasswordResetEmail(email, token, user.name);
+      
+      if (!emailSent) {
+        // Log internally but still return generic success to prevent information disclosure
+        console.error(`[PASSWORD_RESET] Failed to send password reset email to ${email} (User ID: ${user.id})`);
+      } else {
+        console.log(`[PASSWORD_RESET] Password reset email sent successfully to ${email} (User ID: ${user.id})`);
+      }
+    } catch (error) {
+      // Log error internally but still return generic success
+      console.error(`[PASSWORD_RESET] Error during password reset process for ${email}:`, error);
+    }
+
+    // SECURITY: Always return the same generic success message regardless of outcome
+    return sendSuccess(res, null, GENERIC_RESPONSE);
+  }));
+
+  // Password reset verify endpoint
+  app.post("/api/auth/password-reset/verify", asyncRoute("verify password reset", async (req: Request, res: Response) => {
+    const validationResult = passwordResetVerifySchema.safeParse(req.body);
+    
+    if (!validationResult.success) {
+      return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
+    }
+
+    const { token, email, newPassword } = validationResult.data;
+    const storage = await getStorage();
+    const crypto = await import('crypto');
+    
+    // Hash the token for lookup
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    
+    // Get and validate token with purpose='password_reset'
+    const verificationToken = await storage.getVerificationToken(tokenHash, email, 'password_reset');
+    
+    if (!verificationToken) {
+      return sendError(res, "Invalid or expired reset link. Please request a new password reset.", 400, undefined, "INVALID_TOKEN");
+    }
+
+    // Get user
+    const user = await storage.getUser(verificationToken.userId);
+    
+    if (!user) {
+      return sendNotFoundError(res, "User");
+    }
+
+    // Hash the new password
+    const hashedPassword = await hashPassword(newPassword);
+    
+    // Update user password
+    await storage.updateUser(user.id, { password: hashedPassword });
+    
+    // Consume the token (purpose is passed so it won't mark email as verified)
+    await storage.consumeVerificationToken(tokenHash, 'password_reset');
+    
+    return sendSuccess(res, null, "Password has been reset successfully. You can now log in with your new password.");
+  }));
+
+  // Google OAuth routes
+  app.get("/api/auth/google", 
+    passport.authenticate("google", { 
+      scope: ["profile", "email"],
+      prompt: "select_account"
+    })
+  );
+
+  app.get("/api/auth/google/callback",
+    passport.authenticate("google", { failureRedirect: "/login?error=oauth_failed" }),
+    asyncRoute("Google OAuth callback success", async (req: Request, res: Response) => {
+      // Successful authentication, redirect to home or dashboard
+      res.redirect("/?auth=success");
+    })
+  );
 
   // Get current user
   app.get("/api/auth/me", asyncRoute("get current user", async (req: Request, res: Response) => {
@@ -966,10 +1283,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   }));
 
-  // Get available auth providers - OTP only
+  // Get available auth providers
   app.get("/api/auth/providers", asyncRoute("get auth providers", async (req: Request, res: Response) => {
-    // Only OTP authentication is available (WhatsApp and Email)
-    const providers = ["mobile"];
+    const providers = ["email", "mobile"];
+    
+    // Add Google OAuth if credentials are configured
+    if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+      providers.push("google");
+    }
     
     return sendSuccess(res, { providers });
   }));

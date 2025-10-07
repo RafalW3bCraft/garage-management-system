@@ -28,6 +28,7 @@ const CarDetail = lazy(() => import("@/pages/CarDetail"));
 const Appointments = lazy(() => import("@/pages/Appointments"));
 const Contact = lazy(() => import("@/pages/Contact"));
 const Profile = lazy(() => import("@/pages/Profile"));
+const VerifyEmail = lazy(() => import("@/pages/VerifyEmail"));
 
 // Admin pages - separate chunk
 const AdminDashboard = lazy(() => import("@/pages/admin/Dashboard"));
@@ -62,6 +63,7 @@ function Router() {
             <Route path="/appointments" component={Appointments} />
             <Route path="/contact" component={Contact} />
             <Route path="/profile" component={Profile} />
+            <Route path="/verify-email" component={VerifyEmail} />
             <Route path="/admin" component={AdminDashboard} />
             <Route path="/admin/appointments" component={AdminAppointments} />
             <Route path="/admin/services" component={AdminServices} />
