@@ -100,8 +100,7 @@ export function ContactDialog({
         title: "Message Sent Successfully!",
         description: `Your inquiry about the ${carMake} ${carModel} has been sent. We'll contact you soon.`,
       });
-      
-      // Reset form and close dialog
+
       form.reset();
       onOpenChange(false);
     },

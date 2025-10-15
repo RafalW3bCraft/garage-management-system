@@ -86,13 +86,11 @@ export function CarCard({
   const [bidDialogOpen, setBidDialogOpen] = useState(false);
   const [contactDialogOpen, setContactDialogOpen] = useState(false);
 
-  // Load favorites from localStorage on mount
   useEffect(() => {
     const favorites = JSON.parse(localStorage.getItem('car-favorites') || '[]');
     setIsFavorited(favorites.includes(id));
   }, [id]);
 
-  // Helper to parse imageUrls from image string
   const getImageUrls = (imageUrl: string) => {
     const baseUrl = imageUrl.replace(/\.(jpg|jpeg|png|webp)$/i, '');
     return {

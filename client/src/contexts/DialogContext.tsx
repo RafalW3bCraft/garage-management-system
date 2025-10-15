@@ -77,18 +77,18 @@ export function DialogProvider({ children }: { children: ReactNode }) {
  * ```tsx
  * const { openDialog, closeDialog, isDialogOpen } = useDialog();
  * 
- * // Open auth dialog
+ *
  * openDialog("auth");
  * 
- * // Open booking dialog with service data
+ *
  * openDialog("booking", { serviceId: "123" });
  * 
- * // Check if dialog is open
+ *
  * if (isDialogOpen("auth")) {
- *   // Dialog is open
+ *
  * }
  * 
- * // Close current dialog
+ *
  * closeDialog();
  * ```
  */

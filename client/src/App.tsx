@@ -19,7 +19,6 @@ import { Loader2 } from "lucide-react";
  * - This reduces initial bundle size and improves load times
  */
 
-// Lazy load page components for better code splitting
 const Home = lazy(() => import("@/pages/Home"));
 const Services = lazy(() => import("@/pages/Services"));
 const ServiceDetail = lazy(() => import("@/pages/ServiceDetail"));
@@ -28,15 +27,19 @@ const CarDetail = lazy(() => import("@/pages/CarDetail"));
 const Appointments = lazy(() => import("@/pages/Appointments"));
 const Contact = lazy(() => import("@/pages/Contact"));
 const Profile = lazy(() => import("@/pages/Profile"));
+const Settings = lazy(() => import("@/pages/Settings"));
 const VerifyEmail = lazy(() => import("@/pages/VerifyEmail"));
 
-// Admin pages - separate chunk
 const AdminDashboard = lazy(() => import("@/pages/admin/Dashboard"));
 const AdminAppointments = lazy(() => import("@/pages/admin/Appointments"));
 const AdminServices = lazy(() => import("@/pages/admin/Services"));
 const AdminLocations = lazy(() => import("@/pages/admin/Locations"));
 const AdminCars = lazy(() => import("@/pages/admin/Cars"));
 const AdminUsers = lazy(() => import("@/pages/admin/Users"));
+const AdminContacts = lazy(() => import("@/pages/admin/Contacts"));
+const AdminBids = lazy(() => import("@/pages/admin/Bids"));
+const AdminPromotions = lazy(() => import("@/pages/admin/Promotions"));
+const AdminInvoices = lazy(() => import("@/pages/admin/Invoices"));
 
 const NotFound = lazy(() => import("@/pages/not-found"));
 
@@ -63,6 +66,7 @@ function Router() {
             <Route path="/appointments" component={Appointments} />
             <Route path="/contact" component={Contact} />
             <Route path="/profile" component={Profile} />
+            <Route path="/settings" component={Settings} />
             <Route path="/verify-email" component={VerifyEmail} />
             <Route path="/admin" component={AdminDashboard} />
             <Route path="/admin/appointments" component={AdminAppointments} />
@@ -70,6 +74,10 @@ function Router() {
             <Route path="/admin/locations" component={AdminLocations} />
             <Route path="/admin/cars" component={AdminCars} />
             <Route path="/admin/users" component={AdminUsers} />
+            <Route path="/admin/contacts" component={AdminContacts} />
+            <Route path="/admin/bids" component={AdminBids} />
+            <Route path="/admin/promotions" component={AdminPromotions} />
+            <Route path="/admin/invoices" component={AdminInvoices} />
             <Route component={NotFound} />
           </Switch>
         </Suspense>

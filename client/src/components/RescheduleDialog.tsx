@@ -89,7 +89,6 @@ export function RescheduleDialog({
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Fetch available locations
   const { data: locations = [] } = useQuery<Location[]>({
     queryKey: ["/api/locations"],
     enabled: open,
@@ -103,7 +102,6 @@ export function RescheduleDialog({
     },
   });
 
-  // Available time slots
   const timeSlots = [
     "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
     "12:00", "12:30", "14:00", "14:30", "15:00", "15:30",
@@ -112,7 +110,7 @@ export function RescheduleDialog({
 
   const rescheduleAppointmentMutation = useMutation({
     mutationFn: async (data: RescheduleData) => {
-      // Combine date and time
+
       const [hours, minutes] = data.timeSlot.split(':').map(Number);
       const appointmentDateTime = new Date(data.dateTime);
       appointmentDateTime.setHours(hours, minutes, 0, 0);
@@ -129,15 +127,13 @@ export function RescheduleDialog({
         title: "Appointment Rescheduled!",
         description: "Your appointment has been rescheduled successfully.",
       });
-      
-      // Invalidate appointments cache to refresh the list
+
       queryClient.invalidateQueries({ 
         predicate: (query) => 
           typeof query.queryKey?.[0] === 'string' && 
           (query.queryKey[0] as string).startsWith('/api/appointments')
       });
-      
-      // Close dialog and reset form
+
       setOpen(false);
       form.reset();
     },

@@ -5,7 +5,7 @@ import { z } from "zod";
  * Schema for validating authentication preferences
  */
 const authPreferencesSchema = z.object({
-  lastMethod: z.enum(["email", "mobile", "google"]).default("email"),
+  lastMethod: z.enum(["email", "google"]).default("email"),
   lastCountryCode: z.string().default("+91"),
   lastEmail: z.string().default(""),
   rememberMe: z.boolean().default(true),
@@ -228,10 +228,10 @@ export function AuthPreferencesProvider({ children }: { children: ReactNode }) {
  *   rememberMe
  * } = useAuthPreferences();
  * 
- * // Save user's preferred method
+ *
  * saveMethod("email");
  * 
- * // Save email if remember me is enabled
+ *
  * if (rememberMe) {
  *   saveEmail("user@example.com");
  * }

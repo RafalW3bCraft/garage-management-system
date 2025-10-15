@@ -6,7 +6,6 @@ import {
 } from '@shared/communication-types';
 import { BaseCommunicationService, type RetryConfig, type CircuitBreakerConfig } from './base-communication-service';
 
-// SendGrid error types
 interface SendGridErrorField {
   message?: string;
   field?: string;
@@ -45,7 +44,6 @@ interface EmailData {
   html?: string;
 }
 
-// Referenced from SendGrid integration blueprint
 let mailService: MailService | null = null;
 
 function initializeMailService() {
@@ -57,7 +55,6 @@ function initializeMailService() {
   if (!mailService) {
     mailService = new MailService();
     mailService.setApiKey(process.env.SENDGRID_API_KEY);
-    console.log(`[EMAIL] Service initialized with sender: ${process.env.SENDGRID_FROM_EMAIL || 'noreply@ronakmotorgarage.com'}`);
   }
   return true;
 }
@@ -70,13 +67,10 @@ function sanitizeSendGridError(responseBody: SendGridErrorResponse): Partial<Sen
     return { error_id: 'unknown' };
   }
 
-  // Keep only safe, non-PII error information
   const sanitized: Partial<SendGridErrorResponse> = {};
-  
-  // Safe fields to include in logs
+
   const safeFields: (keyof SendGridErrorField)[] = ['message', 'field', 'help', 'error_id'];
-  
-  // If it's an array of errors (common SendGrid format)
+
   if (Array.isArray(responseBody.errors)) {
     sanitized.errors = responseBody.errors.map((error: SendGridErrorField) => {
       const safeError: Partial<SendGridErrorField> = {};
@@ -88,14 +82,12 @@ function sanitizeSendGridError(responseBody: SendGridErrorResponse): Partial<Sen
       return safeError as SendGridErrorField;
     });
   }
-  
-  // Include top-level safe fields
+
   if (responseBody.message) sanitized.message = responseBody.message;
   if (responseBody.field) sanitized.field = responseBody.field;
   if (responseBody.help) sanitized.help = responseBody.help;
   if (responseBody.error_id) sanitized.error_id = responseBody.error_id;
-  
-  // Include error count if available
+
   if (responseBody.error_count !== undefined) {
     sanitized.error_count = responseBody.error_count;
   }
@@ -112,7 +104,6 @@ function isSenderVerificationError(responseBody: SendGridErrorResponse | null): 
     return false;
   }
 
-  // Keywords that indicate sender verification issues
   const verificationKeywords = [
     'sender identity',
     'verified',
@@ -123,15 +114,13 @@ function isSenderVerificationError(responseBody: SendGridErrorResponse | null): 
     'domain authentication'
   ];
 
-  // Check errors array
   if (Array.isArray(responseBody.errors)) {
     for (const error of responseBody.errors) {
-      // Check if the field is "from" (sender email field)
+
       if (error.field === 'from') {
         return true;
       }
 
-      // Check if error message contains verification-related keywords
       if (error.message) {
         const messageLower = error.message.toLowerCase();
         if (verificationKeywords.some(keyword => messageLower.includes(keyword))) {
@@ -139,7 +128,6 @@ function isSenderVerificationError(responseBody: SendGridErrorResponse | null): 
         }
       }
 
-      // Check help text for verification keywords
       if (error.help) {
         const helpLower = error.help.toLowerCase();
         if (verificationKeywords.some(keyword => helpLower.includes(keyword))) {
@@ -149,7 +137,6 @@ function isSenderVerificationError(responseBody: SendGridErrorResponse | null): 
     }
   }
 
-  // Check top-level message field
   if (responseBody.message) {
     const messageLower = responseBody.message.toLowerCase();
     if (verificationKeywords.some(keyword => messageLower.includes(keyword))) {
@@ -157,12 +144,10 @@ function isSenderVerificationError(responseBody: SendGridErrorResponse | null): 
     }
   }
 
-  // Check top-level field
   if (responseBody.field === 'from') {
     return true;
   }
 
-  // Check top-level help text
   if (responseBody.help) {
     const helpLower = responseBody.help.toLowerCase();
     if (verificationKeywords.some(keyword => helpLower.includes(keyword))) {
@@ -191,7 +176,6 @@ class EmailServiceHelper extends BaseCommunicationService {
   }
 }
 
-// Configuration from environment variables with fallback defaults
 const EMAIL_RETRY_CONFIG: RetryConfig = {
   initialDelayMs: parseInt(process.env.EMAIL_RETRY_DELAY || '1000'),
   maxDelayMs: parseInt(process.env.EMAIL_MAX_RETRY_DELAY || '30000'),
@@ -204,7 +188,6 @@ const EMAIL_CIRCUIT_CONFIG: CircuitBreakerConfig = {
   recoveryTimeoutMinutes: parseInt(process.env.EMAIL_CIRCUIT_RECOVERY_MIN || '5')
 };
 
-// Helper instance with circuit breaker and retry logic
 const emailHelper = new EmailServiceHelper(EMAIL_RETRY_CONFIG, EMAIL_CIRCUIT_CONFIG);
 
 /**
@@ -219,8 +202,6 @@ async function sendEmailCore(params: EmailParams): Promise<any> {
     ...(params.html && { html: params.html })
   };
 
-  console.log(`[EMAIL] Sending email to ${params.to} with subject: "${params.subject}"`);
-  
   const emailPromise = mailService!.send(emailData as any);
   const timeoutPromise = new Promise((_, reject) => 
     setTimeout(() => reject(new Error('Email send timeout after 15 seconds')), 15000)
@@ -228,21 +209,17 @@ async function sendEmailCore(params: EmailParams): Promise<any> {
 
   const result = await Promise.race([emailPromise, timeoutPromise]);
   
-  console.log(`[EMAIL] ✅ Successfully sent to ${params.to} - Subject: "${params.subject}" - From: ${params.from}`);
   return result;
 }
 
-// Main function returns CommunicationResult
 export async function sendEmailV2(params: EmailParams): Promise<CommunicationResult> {
   if (!initializeMailService() || !mailService) {
-    console.log("[EMAIL] Service not initialized - skipping email");
     return createCommunicationResult('email', false, 'Email service not initialized', {
       errorType: 'service_unavailable',
       retryable: true
     });
   }
 
-  // Validate email parameters
   if (!params.to || !params.from || !params.subject) {
     console.error(`[EMAIL] Invalid email parameters - to: ${!!params.to}, from: ${!!params.from}, subject: ${!!params.subject}`);
     return createCommunicationResult('email', false, 'Missing required email parameters', {
@@ -251,7 +228,6 @@ export async function sendEmailV2(params: EmailParams): Promise<CommunicationRes
     });
   }
 
-  // Basic email format validation
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(params.to)) {
     console.error(`[EMAIL] Invalid recipient email format: ${params.to}`);
@@ -362,13 +338,11 @@ export async function sendEmailV2(params: EmailParams): Promise<CommunicationRes
   });
 }
 
-// Backward compatibility wrapper for sendEmail - returns boolean
 export async function sendEmail(params: EmailParams): Promise<boolean> {
   const result = await sendEmailV2(params);
   return result.success;
 }
 
-// Email templates for garage notifications
 export interface AppointmentEmailData {
   customerName: string;
   serviceName: string;
@@ -380,11 +354,10 @@ export interface AppointmentEmailData {
 }
 
 export class EmailNotificationService {
-  private static FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@ronakmotorgarage.com"; // Use env var or fallback to default
+  private static FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@ronakmotorgarage.com";
 
-  // Non-blocking email helper for appointment operations
   static async sendAppointmentConfirmationAsync(to: string, data: AppointmentEmailData): Promise<void> {
-    // Send email asynchronously without blocking appointment creation
+
     setImmediate(async () => {
       try {
         await this.sendAppointmentConfirmation(to, data);
@@ -395,7 +368,6 @@ export class EmailNotificationService {
     });
   }
 
-  // Appointment confirmation email
   static async sendAppointmentConfirmation(to: string, data: AppointmentEmailData): Promise<boolean> {
     const subject = `Appointment Confirmed - ${data.serviceName}`;
     const html = `
@@ -453,7 +425,6 @@ Ronak Motor Garage Team
     });
   }
 
-  // Appointment status update email
   static async sendAppointmentStatusUpdate(to: string, data: AppointmentEmailData & { status: string }): Promise<boolean> {
     const statusMessages = {
       'confirmed': 'Your appointment has been confirmed',
@@ -501,7 +472,6 @@ Ronak Motor Garage Team
     });
   }
 
-  // Appointment reminder email (24 hours before)
   static async sendAppointmentReminder(to: string, data: AppointmentEmailData): Promise<boolean> {
     const subject = `Reminder: Appointment Tomorrow - ${data.serviceName}`;
     const html = `
@@ -537,7 +507,6 @@ Ronak Motor Garage Team
     });
   }
 
-  // Auction bid notification
   static async sendBidNotification(to: string, data: { customerName: string; carName: string; bidAmount: number; currentHighestBid: number }): Promise<boolean> {
     const subject = `Bid Update - ${data.carName}`;
     const isHighestBidder = data.bidAmount === data.currentHighestBid;
@@ -579,24 +548,32 @@ Ronak Motor Garage Team
     });
   }
 
-  // Email verification for email/password authentication
   static async sendVerificationEmail(to: string, token: string, name: string): Promise<boolean> {
-    // Determine base URL dynamically
-    const port = process.env.PORT || "5000";
-    const isReplit = !!(process.env.REPL_SLUG || process.env.REPL_OWNER || process.env.REPLIT_DB_URL);
-    const isProduction = process.env.NODE_ENV === "production";
+
+    const explicitUrl = process.env.APP_URL || process.env.BASE_URL;
     
     let baseUrl: string;
-    if (isReplit) {
-      if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
-        baseUrl = `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.replit.dev`;
-      } else {
-        baseUrl = process.env.REPLIT_URL || process.env.REPL_URL || `https://localhost:${port}`;
-      }
-    } else if (isProduction) {
-      baseUrl = process.env.PRODUCTION_URL || `https://localhost:${port}`;
+    
+    if (explicitUrl) {
+
+      baseUrl = explicitUrl.replace(/\/$/, '');
     } else {
-      baseUrl = `http://localhost:${port}`;
+
+      const port = process.env.PORT || "5000";
+      const isReplit = !!(process.env.REPL_SLUG || process.env.REPL_OWNER || process.env.REPLIT_DB_URL);
+      const isProduction = process.env.NODE_ENV === "production";
+      
+      if (isReplit) {
+        if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
+          baseUrl = `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.replit.dev`;
+        } else {
+          baseUrl = process.env.REPLIT_URL || process.env.REPL_URL || `https://localhost:${port}`;
+        }
+      } else if (isProduction) {
+        baseUrl = process.env.PRODUCTION_URL || `https://localhost:${port}`;
+      } else {
+        baseUrl = `http://localhost:${port}`;
+      }
     }
 
     const verificationLink = `${baseUrl}/verify-email?token=${token}&email=${encodeURIComponent(to)}`;
@@ -682,24 +659,32 @@ This is an automated message, please do not reply to this email.
     });
   }
 
-  // Password reset email
   static async sendPasswordResetEmail(to: string, token: string, name: string): Promise<boolean> {
-    // Determine base URL dynamically
-    const port = process.env.PORT || "5000";
-    const isReplit = !!(process.env.REPL_SLUG || process.env.REPL_OWNER || process.env.REPLIT_DB_URL);
-    const isProduction = process.env.NODE_ENV === "production";
+
+    const explicitUrl = process.env.APP_URL || process.env.BASE_URL;
     
     let baseUrl: string;
-    if (isReplit) {
-      if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
-        baseUrl = `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.replit.dev`;
-      } else {
-        baseUrl = process.env.REPLIT_URL || process.env.REPL_URL || `https://localhost:${port}`;
-      }
-    } else if (isProduction) {
-      baseUrl = process.env.PRODUCTION_URL || `https://localhost:${port}`;
+    
+    if (explicitUrl) {
+
+      baseUrl = explicitUrl.replace(/\/$/, '');
     } else {
-      baseUrl = `http://localhost:${port}`;
+
+      const port = process.env.PORT || "5000";
+      const isReplit = !!(process.env.REPL_SLUG || process.env.REPL_OWNER || process.env.REPLIT_DB_URL);
+      const isProduction = process.env.NODE_ENV === "production";
+      
+      if (isReplit) {
+        if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
+          baseUrl = `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.replit.dev`;
+        } else {
+          baseUrl = process.env.REPLIT_URL || process.env.REPL_URL || `https://localhost:${port}`;
+        }
+      } else if (isProduction) {
+        baseUrl = process.env.PRODUCTION_URL || `https://localhost:${port}`;
+      } else {
+        baseUrl = `http://localhost:${port}`;
+      }
     }
 
     const resetLink = `${baseUrl}/reset-password?token=${token}&email=${encodeURIComponent(to)}`;

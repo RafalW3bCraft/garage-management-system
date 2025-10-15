@@ -61,11 +61,9 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Calculate minimum bid amount
   const currentBid = car.currentBid || car.price;
-  const minimumBid = currentBid + 1000; // Minimum ₹1,000 increment
+  const minimumBid = currentBid + 1000;
 
-  // Create form with dynamic validation schema
   const bidSchema = createBidSchema(minimumBid);
   
   const form = useForm<BidFormData>({
@@ -73,7 +71,7 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
     defaultValues: {
       bidAmount: minimumBid,
     },
-    mode: "onChange", // Real-time validation
+    mode: "onChange",
   });
 
   const placeBidMutation = useMutation({
@@ -87,13 +85,11 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
         title: "Bid Placed Successfully!",
         description: `Your bid of ₹${variables.bidAmount.toLocaleString('en-IN')} has been placed for ${car.make} ${car.model}.`,
       });
-      
-      // Invalidate and refetch cars data
+
       queryClient.invalidateQueries({ queryKey: ["/api/cars"] });
       queryClient.invalidateQueries({ queryKey: ["/api/cars/auctions"] });
       queryClient.invalidateQueries({ queryKey: [`/api/cars/${car.id}/bids`] });
-      
-      // Reset form and close dialog
+
       form.reset();
       onOpenChange(false);
     },
@@ -112,10 +108,8 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
     placeBidMutation.mutate(data);
   };
 
-  // Check if auction has ended
   const auctionEnded = car.auctionEndTime && new Date() > new Date(car.auctionEndTime);
 
-  // Reset form when dialog closes
   const handleOpenChange = (newOpen: boolean) => {
     if (!newOpen) {
       form.reset();

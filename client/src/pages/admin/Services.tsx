@@ -87,7 +87,6 @@ export default function AdminServices() {
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
 
-  // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
     return (
       <div className="container mx-auto px-4 py-8 text-center">
@@ -100,14 +99,12 @@ export default function AdminServices() {
     );
   }
 
-  // Fetch all services
   const { data: services = [], isLoading, isError } = useQuery<Service[]>({
     queryKey: ["/api/services"],
   });
 
-  // Create service mutation
   const createServiceMutation = useMutation({
-    mutationFn: async (data: ServiceFormData) => {
+    mutationFn: async (data: any) => {
       const response = await apiRequest("POST", "/api/services", data);
       return response.json();
     },
@@ -128,9 +125,8 @@ export default function AdminServices() {
     },
   });
 
-  // Update service mutation
   const updateServiceMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: ServiceFormData }) => {
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
       const response = await apiRequest("PUT", `/api/services/${id}`, data);
       return response.json();
     },
@@ -151,7 +147,6 @@ export default function AdminServices() {
     },
   });
 
-  // Delete service mutation
   const deleteServiceMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/services/${id}`);
@@ -172,15 +167,12 @@ export default function AdminServices() {
     },
   });
 
-  // Filter services by category
   const filteredServices = services.filter(service => 
     selectedCategory === "all" || service.category === selectedCategory
   );
 
-  // Get unique categories for filter
   const categories = Array.from(new Set(services.map(s => s.category)));
 
-  // Add service form
   const addForm = useForm<ServiceFormData>({
     resolver: zodResolver(serviceFormSchema),
     defaultValues: {
@@ -198,12 +190,10 @@ export default function AdminServices() {
     },
   });
 
-  // Edit service form
   const editForm = useForm<ServiceFormData>({
     resolver: zodResolver(serviceFormSchema),
   });
 
-  // Handle add service
   const handleAddService = (data: ServiceFormData) => {
     const transformedData = {
       ...data,
@@ -212,7 +202,6 @@ export default function AdminServices() {
     createServiceMutation.mutate(transformedData);
   };
 
-  // Handle edit service
   const handleEditService = (data: ServiceFormData) => {
     if (editingService) {
       const transformedData = {
@@ -223,12 +212,10 @@ export default function AdminServices() {
     }
   };
 
-  // Handle delete service
   const handleDeleteService = (id: string) => {
     deleteServiceMutation.mutate(id);
   };
 
-  // Open edit dialog
   const openEditDialog = (service: Service) => {
     setEditingService(service);
     editForm.reset({

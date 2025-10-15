@@ -49,7 +49,7 @@ class PerformanceMonitor {
   constructor(maxCacheSize: number = 1000, slowRequestThreshold?: number) {
     this.requestCache = new LRUCache<number, RequestMetric>({
       max: maxCacheSize,
-      ttl: 1000 * 60 * 60, // 1 hour TTL
+      ttl: 1000 * 60 * 60,
       updateAgeOnGet: false,
       updateAgeOnHas: false,
     });
@@ -57,7 +57,7 @@ class PerformanceMonitor {
     this.endpointStatsMap = new Map<string, EndpointStats>();
     this.monitoringStartTime = Date.now();
     this.requestCounter = 0;
-    // Use environment variable PERF_SLOW_MS if available, otherwise use provided threshold or default 1000ms
+
     this.slowRequestThreshold = slowRequestThreshold ?? parseInt(process.env.PERF_SLOW_MS || '1000', 10);
   }
 
@@ -66,8 +66,7 @@ class PerformanceMonitor {
    */
   middleware() {
     return (req: Request, res: Response, next: NextFunction) => {
-      // Only monitor API traffic (paths starting with '/api')
-      // This prevents static/Vite traffic from skewing API metrics
+
       if (!req.path.startsWith('/api')) {
         return next();
       }
@@ -76,13 +75,11 @@ class PerformanceMonitor {
       const endpoint = this.normalizeEndpoint(req.path);
       const method = req.method;
 
-      // Use the 'finish' event to track when the response is complete
       res.on('finish', () => {
         const duration = Date.now() - startTime;
         const statusCode = res.statusCode;
         const isError = statusCode >= 400;
 
-        // Record the metric
         this.recordMetric({
           method,
           path: endpoint,
@@ -92,7 +89,6 @@ class PerformanceMonitor {
           isError,
         });
 
-        // Log slow requests
         if (duration >= this.slowRequestThreshold) {
           console.warn(`[SLOW_REQUEST] ${method} ${endpoint} ${statusCode} in ${duration}ms`);
         }
@@ -106,16 +102,14 @@ class PerformanceMonitor {
    * Normalize endpoint path by removing IDs and dynamic segments
    */
   private normalizeEndpoint(path: string): string {
-    // Replace UUIDs with :id
+
     let normalized = path.replace(
       /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
       ':id'
     );
-    
-    // Replace numeric IDs with :id
+
     normalized = normalized.replace(/\/\d+/g, '/:id');
-    
-    // Replace other common dynamic segments
+
     normalized = normalized.replace(/\/[a-zA-Z0-9_-]{20,}/g, '/:token');
 
     return normalized;
@@ -125,10 +119,9 @@ class PerformanceMonitor {
    * Record a request metric
    */
   private recordMetric(metric: RequestMetric): void {
-    // Store in LRU cache
+
     this.requestCache.set(this.requestCounter++, metric);
 
-    // Update endpoint stats
     const key = `${metric.method} ${metric.path}`;
     const existingStats = this.endpointStatsMap.get(key);
 
@@ -167,7 +160,6 @@ class PerformanceMonitor {
       (m) => m.duration >= this.slowRequestThreshold
     ).length;
 
-    // Calculate top slowest endpoints
     const endpointArray = Array.from(this.endpointStatsMap.entries()).map(
       ([key, stats]) => {
         const [method, ...pathParts] = key.split(' ');
@@ -183,12 +175,10 @@ class PerformanceMonitor {
       }
     );
 
-    // Sort by average duration and take top 10
     const topSlowestEndpoints = endpointArray
       .sort((a, b) => b.avgDuration - a.avgDuration)
       .slice(0, 10);
 
-    // Build endpoint stats object
     const endpointStats: Record<string, EndpointStats> = {};
     this.endpointStatsMap.forEach((stats, key) => {
       endpointStats[key] = {
@@ -218,7 +208,6 @@ class PerformanceMonitor {
     this.endpointStatsMap.clear();
     this.monitoringStartTime = Date.now();
     this.requestCounter = 0;
-    console.log('[PERFORMANCE_MONITOR] Metrics reset');
   }
 
   /**
@@ -236,11 +225,8 @@ class PerformanceMonitor {
   }
 }
 
-// Export singleton instance
 export const performanceMonitor = new PerformanceMonitor(1000, 1000);
 
-// Export middleware function
 export const performanceMiddleware = performanceMonitor.middleware.bind(performanceMonitor);
 
-// Export metrics getter
 export const getPerformanceMetrics = performanceMonitor.getMetrics.bind(performanceMonitor);

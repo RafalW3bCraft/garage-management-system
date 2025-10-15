@@ -108,8 +108,6 @@ export const reducer = (state: State, action: Action): State => {
     case "DISMISS_TOAST": {
       const { toastId } = action
 
-      // ! Side effects ! - This could be extracted into a dismissToast() action,
-      // but I'll keep it here for simplicity
       if (toastId) {
         addToRemoveQueue(toastId)
       } else {
@@ -215,7 +213,7 @@ function toast({ ...props }: Toast) {
  * const { toast } = useToast();
  * 
  * const handleSave = () => {
- *   // ... save logic
+ *
  *   toast({
  *     title: "Success",
  *     description: "Data saved successfully"

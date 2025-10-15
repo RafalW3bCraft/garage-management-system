@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/queryClient";
 import { CheckCircle2, XCircle, Loader2, Mail } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 /**
  * Email verification page component that handles email verification via token
@@ -14,10 +15,12 @@ export default function VerifyEmail() {
   const [, navigate] = useLocation();
   const searchString = useSearch();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [verificationStatus, setVerificationStatus] = useState<'idle' | 'verifying' | 'success' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string>("");
+  const [resendCooldown, setResendCooldown] = useState<number>(0);
+  const hasVerified = useRef(false);
 
-  // Extract token and email from URL
   const searchParams = new URLSearchParams(searchString);
   const token = searchParams.get('token');
   const email = searchParams.get('email');
@@ -29,11 +32,10 @@ export default function VerifyEmail() {
     },
     onSuccess: (data) => {
       setVerificationStatus('success');
-      // Update the user in the query cache
-      queryClient.setQueryData(["/api/auth/me"], data.user);
+
+      queryClient.setQueryData(["/api/auth/me"], data.data);
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      
-      // Redirect to home page after 3 seconds
+
       setTimeout(() => {
         navigate('/');
       }, 3000);
@@ -44,20 +46,51 @@ export default function VerifyEmail() {
     },
   });
 
+  const resendVerificationMutation = useMutation({
+    mutationFn: async (email: string) => {
+      const response = await apiRequest("POST", "/api/auth/resend-verification", { email });
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Verification email sent!",
+        description: "Please check your inbox and spam folder for the verification link.",
+        variant: "default",
+      });
+      setResendCooldown(60);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to resend email",
+        description: error.message || "Please try again later or contact support.",
+        variant: "destructive",
+      });
+    },
+  });
+
   useEffect(() => {
-    // Check if we have the required parameters
+
     if (!token || !email) {
       setVerificationStatus('error');
       setErrorMessage("Invalid verification link. Missing token or email parameter.");
       return;
     }
 
-    // Automatically trigger verification on mount
-    if (verificationStatus === 'idle') {
+    if (!hasVerified.current) {
+      hasVerified.current = true;
       setVerificationStatus('verifying');
       verifyEmailMutation.mutate({ token, email });
     }
-  }, [token, email, verificationStatus]);
+  }, [token, email, verifyEmailMutation]);
+
+  useEffect(() => {
+    if (resendCooldown > 0) {
+      const timer = setTimeout(() => {
+        setResendCooldown(resendCooldown - 1);
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [resendCooldown]);
 
   return (
     <div className="container mx-auto p-6 max-w-2xl min-h-[60vh] flex items-center justify-center">
@@ -106,10 +139,34 @@ export default function VerifyEmail() {
           )}
           
           {verificationStatus === 'error' && (
-            <div className="space-y-3">
+            <div className="space-y-4">
               <p className="text-sm text-destructive">
                 {errorMessage}
               </p>
+              {email && (
+                <div className="bg-muted/50 p-4 rounded-lg space-y-2">
+                  <p className="text-sm text-muted-foreground">
+                    Didn't receive the email? Check your spam folder or request a new verification link.
+                  </p>
+                  <Button
+                    onClick={() => resendVerificationMutation.mutate(email)}
+                    disabled={resendVerificationMutation.isPending || resendCooldown > 0}
+                    className="w-full"
+                    variant="secondary"
+                  >
+                    {resendVerificationMutation.isPending ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Sending...
+                      </>
+                    ) : resendCooldown > 0 ? (
+                      `Resend Available in ${resendCooldown}s`
+                    ) : (
+                      "Resend Verification Email"
+                    )}
+                  </Button>
+                </div>
+              )}
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
                 <Button 
                   onClick={() => navigate('/')}

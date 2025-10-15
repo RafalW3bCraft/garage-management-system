@@ -39,7 +39,6 @@ class ImageProcessingQueue {
     this.queue = [];
     this.processing = false;
     this.startWorker();
-    console.log('[IMAGE_QUEUE] Image processing queue initialized');
   }
 
   static getInstance(): ImageProcessingQueue {
@@ -77,8 +76,6 @@ class ImageProcessingQueue {
     this.jobs.set(jobId, job);
     this.queue.push(jobId);
 
-    console.log(`[IMAGE_QUEUE] Job ${jobId} added to queue (type: ${params.type}, queue length: ${this.queue.length})`);
-
     this.processNextJob();
 
     return jobId;
@@ -89,7 +86,6 @@ class ImageProcessingQueue {
   }
 
   private startWorker(): void {
-    console.log('[IMAGE_QUEUE] Background worker started');
   }
 
   private async processNextJob(): Promise<void> {
@@ -123,8 +119,6 @@ class ImageProcessingQueue {
     const startTime = Date.now();
     job.status = 'processing';
     job.startedAt = new Date();
-
-    console.log(`[IMAGE_QUEUE] Processing job ${job.id} (type: ${job.type}, attempt: ${job.retryCount + 1}/${this.maxRetries + 1})`);
 
     try {
       let processedImages: { jpeg: string; webp: string };
@@ -175,7 +169,6 @@ class ImageProcessingQueue {
         try {
           const storage = await getStorage();
           await storage.updateUser(job.userId, { profileImage: imageUrl });
-          console.log(`[IMAGE_QUEUE] Updated user ${job.userId} profile image in database`);
         } catch (error) {
           console.error(`[IMAGE_QUEUE] Failed to update user profile image in database:`, error);
         }
@@ -187,7 +180,6 @@ class ImageProcessingQueue {
       job.completedAt = new Date();
 
       const duration = Date.now() - startTime;
-      console.log(`[IMAGE_QUEUE] ✅ Job ${job.id} completed successfully in ${duration}ms (type: ${job.type})`);
 
     } catch (error) {
       const duration = Date.now() - startTime;
@@ -196,7 +188,6 @@ class ImageProcessingQueue {
       job.retryCount++;
 
       if (job.retryCount <= this.maxRetries) {
-        console.log(`[IMAGE_QUEUE] ⏳ Retrying job ${job.id} (attempt ${job.retryCount + 1}/${this.maxRetries + 1})`);
         job.status = 'pending';
         this.queue.push(job.id);
       } else {
@@ -251,7 +242,6 @@ class ImageProcessingQueue {
     }
 
     if (cleared > 0) {
-      console.log(`[IMAGE_QUEUE] Cleared ${cleared} old jobs (older than ${olderThanMs}ms)`);
     }
 
     return cleared;

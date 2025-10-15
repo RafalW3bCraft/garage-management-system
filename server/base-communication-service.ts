@@ -47,7 +47,6 @@ export class CircuitBreaker {
     
     if (this.state === CircuitState.OPEN) {
       if (Date.now() - this.lastFailureTime >= this.recoveryTimeout) {
-        console.log(`[${this.serviceName}] 🔄 Circuit breaker transitioning to HALF_OPEN - testing service recovery`);
         this.state = CircuitState.HALF_OPEN;
         this.halfOpenAttemptCount = 0;
         return true;
@@ -56,12 +55,10 @@ export class CircuitBreaker {
     }
     
     if (this.halfOpenAttemptCount >= this.halfOpenMaxAttempts) {
-      console.log(`[${this.serviceName}] 🚫 Circuit breaker HALF_OPEN - max probe attempts (${this.halfOpenMaxAttempts}) reached, rejecting request`);
       return false;
     }
     
     this.halfOpenAttemptCount++;
-    console.log(`[${this.serviceName}] 🔍 Circuit breaker HALF_OPEN - allowing probe request ${this.halfOpenAttemptCount}/${this.halfOpenMaxAttempts}`);
     return true;
   }
   
@@ -70,7 +67,6 @@ export class CircuitBreaker {
    */
   recordSuccess(): void {
     if (this.state === CircuitState.HALF_OPEN) {
-      console.log(`[${this.serviceName}] ✅ Circuit breaker CLOSED - service recovered`);
     }
     this.state = CircuitState.CLOSED;
     this.failureCount = 0;
@@ -86,15 +82,12 @@ export class CircuitBreaker {
     this.lastFailureTime = Date.now();
     
     if (this.state === CircuitState.HALF_OPEN) {
-      console.log(`[${this.serviceName}] ⚠️ Circuit breaker reopening - service still unavailable`);
       this.state = CircuitState.OPEN;
       this.halfOpenAttemptCount = 0;
       return;
     }
     
     if (this.failureCount >= this.failureThreshold) {
-      console.log(`[${this.serviceName}] 🚨 Circuit breaker OPEN - ${this.failureCount} consecutive failures detected`);
-      console.log(`[${this.serviceName}] ⏰ Will retry in ${this.recoveryTimeout / 60000} minutes`);
       this.state = CircuitState.OPEN;
     }
   }
@@ -117,7 +110,6 @@ export class CircuitBreaker {
    * Reset circuit breaker (for testing or manual recovery)
    */
   reset(): void {
-    console.log(`[${this.serviceName}] 🔄 Circuit breaker manually reset`);
     this.state = CircuitState.CLOSED;
     this.failureCount = 0;
     this.lastFailureTime = 0;
@@ -230,7 +222,6 @@ export abstract class BaseCommunicationService {
         const result = await operation();
         
         if (attempt > 1) {
-          console.log(`[${this.serviceName}] ✅ ${operationName} succeeded on attempt ${attempt}`);
         }
         
         return { result, success: true, attempts: attempt };
@@ -240,17 +231,14 @@ export abstract class BaseCommunicationService {
         console.error(`[${this.serviceName}] ❌ ${operationName} failed on attempt ${attempt}/${retries + 1}: ${lastError.message}`);
         
         if (!this.isRetryableError(lastError)) {
-          console.log(`[${this.serviceName}] 🚫 Error is not retryable (${String((lastError as any).code)}), stopping retries`);
           break;
         }
         
         if (attempt > retries) {
-          console.log(`[${this.serviceName}] 🛑 Max retries (${retries}) exceeded for ${operationName}`);
           break;
         }
         
         const delay = this.calculateBackoffDelay(attempt);
-        console.log(`[${this.serviceName}] ⏳ Retrying in ${delay}ms (attempt ${attempt + 1}/${retries + 1})`);
         await this.sleep(delay);
       }
     }
@@ -276,7 +264,6 @@ export abstract class BaseCommunicationService {
   ): Promise<RetryResult<T>> {
     if (!options.skipCircuitBreaker && !this.circuitBreaker.canAttempt()) {
       const state = this.circuitBreaker.getState();
-      console.log(`[${this.serviceName}] ⚡ Circuit breaker is ${state} - fast failing without retry`);
       
       return {
         success: false,
@@ -313,7 +300,6 @@ export abstract class BaseCommunicationService {
         console.warn(logMessage);
         break;
       default:
-        console.log(logMessage);
     }
   }
   

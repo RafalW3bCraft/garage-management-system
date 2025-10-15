@@ -32,22 +32,19 @@ import type { Service, Car as CarType } from "@shared/schema";
  * ```
  */
 export default function Home() {
-  // Fetch services from API
+
   const { data: services = [], isLoading: servicesLoading, error: servicesError } = useQuery<Service[]>({
     queryKey: ["/api/services"],
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 5 * 60 * 1000,
   });
 
-  // Fetch cars for sale from API
   const { data: carsForSale = [], isLoading: carsLoading, error: carsError } = useQuery<CarType[]>({
     queryKey: ["/api/cars/sale"],
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 5 * 60 * 1000,
   });
 
-  // Get featured cars (first 3 cars for sale)
   const featuredCars = carsForSale.slice(0, 3);
 
-  // Get featured services (first 3 services)
   const featuredServices = services.slice(0, 3).map(service => {
     const getServiceIcon = () => {
       switch (service.category) {
@@ -203,7 +200,7 @@ export default function Home() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
             {servicesLoading ? (
-              // Loading state
+
               [...Array(3)].map((_, index) => (
                 <Card key={index} className="animate-pulse">
                   <div className="h-48 bg-muted rounded-t-lg"></div>
@@ -215,12 +212,12 @@ export default function Home() {
                 </Card>
               ))
             ) : servicesError ? (
-              // Error state
+
               <div className="col-span-3 text-center py-8">
                 <p className="text-muted-foreground">Unable to load services. Please try again later.</p>
               </div>
             ) : featuredServices.length > 0 ? (
-              // Services loaded successfully
+
               featuredServices.map((item, index) => (
                 <ServiceCard 
                   key={item.service.id} 
@@ -230,7 +227,7 @@ export default function Home() {
                 />
               ))
             ) : (
-              // No services available
+
               <div className="col-span-3 text-center py-8">
                 <p className="text-muted-foreground">No services available at the moment.</p>
               </div>

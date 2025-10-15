@@ -30,7 +30,6 @@ export default function AdminAppointments() {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 20;
 
-  // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
     return (
       <div className="container mx-auto px-4 py-8 text-center">
@@ -43,7 +42,6 @@ export default function AdminAppointments() {
     );
   }
 
-  // Fetch appointments with pagination
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["/api/admin/appointments", currentPage, pageSize],
     queryFn: async () => {
@@ -59,7 +57,6 @@ export default function AdminAppointments() {
   const startIndex = (currentPage - 1) * pageSize + 1;
   const endIndex = Math.min(currentPage * pageSize, totalCount);
 
-  // Status update mutation
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
       const response = await apiRequest("PATCH", `/api/admin/appointments/${id}/status`, { status });

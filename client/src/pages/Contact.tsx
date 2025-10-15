@@ -67,7 +67,6 @@ export default function Contact() {
   const { toast } = useToast();
   const { handleMutationError } = useErrorHandler();
 
-  // Initialize form with react-hook-form and Zod validation
   const form = useForm<ContactFormData>({
     resolver: zodResolver(contactFormSchema),
     mode: "onChange",
@@ -80,14 +79,12 @@ export default function Contact() {
     },
   });
 
-  // Fetch locations from API
   const { data: locations, isLoading: locationsLoading, isError: locationsError, error: locationsErrorData, refetch: refetchLocations } = useQuery<Location[]>({
     queryKey: ["/api/locations"],
-    staleTime: 10 * 60 * 1000, // 10 minutes
+    staleTime: 10 * 60 * 1000,
     retry: 3,
   });
 
-  // Contact form mutation
   const contactMutation = useMutation({
     mutationFn: async (data: ContactFormData) => {
       const response = await apiRequest("POST", "/api/contacts", data);
@@ -98,7 +95,7 @@ export default function Contact() {
         title: "Message Sent!",
         description: "Thank you for contacting us. We'll get back to you soon.",
       });
-      // Reset form
+
       form.reset();
     },
     onError: (error: Error) => {

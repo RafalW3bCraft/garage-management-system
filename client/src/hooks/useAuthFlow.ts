@@ -7,9 +7,9 @@ import { z } from "zod";
 export type AuthMode = "login" | "register";
 
 /**
- * Authentication method (email, mobile, or Google)
+ * Authentication method (email or Google)
  */
-export type AuthMethod = "email" | "mobile" | "google";
+export type AuthMethod = "email" | "google";
 
 /**
  * Authentication flow step
@@ -19,8 +19,6 @@ export type AuthStep =
   | "email-input" 
   | "password-input" 
   | "name-input" 
-  | "phone-input" 
-  | "otp-verification" 
   | "profile-setup";
 
 /**
@@ -30,10 +28,6 @@ export interface AuthContext {
   email?: string;
   password?: string;
   name?: string;
-  phone?: string;
-  countryCode?: string;
-  channel?: 'whatsapp' | 'email';
-  otpToken?: string;
 }
 
 /**
@@ -50,15 +44,10 @@ export interface AuthState {
  * Flow configuration defining authentication steps for each mode-method combination
  */
 export const FLOW_CONFIG: Record<string, AuthStep[]> = {
-  // Email flows
+
   "login-email": ["method-selection", "email-input", "password-input"],
   "register-email": ["method-selection", "email-input", "password-input", "name-input"],
-  
-  // Mobile flows  
-  "login-mobile": ["method-selection", "phone-input", "otp-verification"],
-  "register-mobile": ["method-selection", "phone-input", "otp-verification", "profile-setup"],
-  
-  // Google flows (immediate redirect)
+
   "login-google": ["method-selection"],
   "register-google": ["method-selection"],
 };
@@ -89,22 +78,6 @@ export const STEP_METADATA: Record<AuthStep, {
   "name-input": {
     title: () => "What's your name?",
     description: () => "This will be displayed on your profile"
-  },
-  "phone-input": {
-    title: () => "Choose verification method",
-    description: (_, __, context) => 
-      context.channel === 'email' 
-        ? "We'll send you a verification code via email" 
-        : "We'll send you a verification code via WhatsApp"
-  },
-  "otp-verification": {
-    title: () => "Verify your code",
-    description: (_, __, context) => {
-      if (context.channel === 'email' && context.email) {
-        return `Enter the 6-digit code sent to ${context.email}`;
-      }
-      return `Enter the 6-digit code sent to ${context.countryCode}${context.phone}`;
-    }
   },
   "profile-setup": {
     title: () => "Complete your profile",
@@ -152,11 +125,10 @@ function authFlowReducer(state: AuthState, action: AuthAction): AuthState {
       const steps = FLOW_CONFIG[flowKey];
       
       if (action.method === "google") {
-        // Google auth doesn't follow normal step flow
+
         return newState;
       }
-      
-      // Move to first step after method selection
+
       const nextStep = steps?.[1] || "method-selection";
       return { ...newState, step: nextStep };
     }
@@ -174,7 +146,7 @@ function authFlowReducer(state: AuthState, action: AuthAction): AuthState {
         return { ...state, step: steps[nextIndex] };
       }
       
-      return state; // Already at last step
+      return state;
     }
     
     case "PREV_STEP": {
@@ -190,7 +162,7 @@ function authFlowReducer(state: AuthState, action: AuthAction): AuthState {
         return { ...state, step: steps[prevIndex] };
       }
       
-      return { ...state, step: "method-selection" }; // Go back to method selection
+      return { ...state, step: "method-selection" };
     }
     
     case "GO_TO_STEP":
@@ -211,7 +183,7 @@ function authFlowReducer(state: AuthState, action: AuthAction): AuthState {
 }
 
 /**
- * Hook for managing multi-step authentication flow with support for email, mobile, and Google auth.
+ * Hook for managing multi-step authentication flow with support for email and Google auth.
  * Handles navigation between authentication steps, context management, and progress tracking.
  * 
  * @returns {object} Authentication flow state and methods
@@ -243,36 +215,32 @@ function authFlowReducer(state: AuthState, action: AuthAction): AuthState {
  *   updateContext
  * } = useAuthFlow();
  * 
- * // Select email method
+ *
  * setMethod("email");
  * 
- * // Update context with email
+ *
  * updateContext({ email: "user@example.com" });
  * 
- * // Move to next step
+ *
  * nextStep();
  * ```
  */
 export function useAuthFlow() {
   const [state, dispatch] = useReducer(authFlowReducer, initialState);
-  
-  // Computed values
+
   const flowKey = `${state.mode}-${state.method}`;
   const steps = FLOW_CONFIG[flowKey] || [];
   const currentStepIndex = steps.indexOf(state.step);
   const totalSteps = steps.length;
-  
-  // Progress calculation (config-driven)
+
   const progress = useMemo(() => {
     if (state.step === "method-selection" || totalSteps === 0) return 0;
     return Math.round(((currentStepIndex + 1) / totalSteps) * 100);
   }, [currentStepIndex, totalSteps, state.step]);
-  
-  // Step metadata
+
   const stepTitle = STEP_METADATA[state.step]?.title(state.mode, state.method, state.context) || "";
   const stepDescription = STEP_METADATA[state.step]?.description(state.mode, state.method, state.context) || "";
-  
-  // Helper functions
+
   const setMode = (mode: AuthMode) => dispatch({ type: "SET_MODE", mode });
   const setMethod = (method: AuthMethod) => dispatch({ type: "SET_METHOD", method });
   const nextStep = () => dispatch({ type: "NEXT_STEP" });
@@ -281,21 +249,19 @@ export function useAuthFlow() {
   const updateContext = (context: Partial<AuthContext>) => 
     dispatch({ type: "UPDATE_CONTEXT", context });
   const reset = () => dispatch({ type: "RESET" });
-  
-  // Navigation helpers
+
   const canGoBack = state.step !== "method-selection";
   const isFirstStep = currentStepIndex <= 0;
   const isLastStep = currentStepIndex >= totalSteps - 1;
   
   return {
-    // State
+
     state,
     mode: state.mode,
     method: state.method,
     step: state.step,
     context: state.context,
-    
-    // Computed
+
     flowKey,
     steps,
     currentStepIndex,
@@ -303,8 +269,7 @@ export function useAuthFlow() {
     progress,
     stepTitle,
     stepDescription,
-    
-    // Actions
+
     setMode,
     setMethod,
     nextStep,
@@ -312,8 +277,7 @@ export function useAuthFlow() {
     goToStep,
     updateContext,
     reset,
-    
-    // Helpers
+
     canGoBack,
     isFirstStep,
     isLastStep,

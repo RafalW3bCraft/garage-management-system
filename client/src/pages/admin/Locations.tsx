@@ -44,7 +44,6 @@ export default function AdminLocations() {
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
   const [deletingLocation, setDeletingLocation] = useState<Location | null>(null);
 
-  // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
     return (
       <div className="container mx-auto px-4 py-8 text-center">
@@ -57,12 +56,10 @@ export default function AdminLocations() {
     );
   }
 
-  // Fetch all locations
   const { data: locations = [], isLoading, isError } = useQuery<Location[]>({
     queryKey: ["/api/locations"],
   });
 
-  // Create location mutation
   const createLocationMutation = useMutation({
     mutationFn: async (data: LocationFormData) => {
       const response = await apiRequest("POST", "/api/locations", data);
@@ -86,7 +83,6 @@ export default function AdminLocations() {
     },
   });
 
-  // Update location mutation
   const updateLocationMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: LocationFormData }) => {
       const response = await apiRequest("PUT", `/api/locations/${id}`, data);
@@ -110,7 +106,6 @@ export default function AdminLocations() {
     },
   });
 
-  // Delete location mutation
   const deleteLocationMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/locations/${id}`);
@@ -132,7 +127,6 @@ export default function AdminLocations() {
     },
   });
 
-  // Form for adding location
   const form = useForm<LocationFormData>({
     resolver: zodResolver(insertLocationSchema),
     defaultValues: {
@@ -145,7 +139,6 @@ export default function AdminLocations() {
     },
   });
 
-  // Form for editing location
   const editForm = useForm<LocationFormData>({
     resolver: zodResolver(insertLocationSchema),
     defaultValues: {
@@ -158,12 +151,10 @@ export default function AdminLocations() {
     },
   });
 
-  // Handle add location
   const handleAddLocation = (data: LocationFormData) => {
     createLocationMutation.mutate(data);
   };
 
-  // Handle edit location
   const handleEditLocation = (location: Location) => {
     setEditingLocation(location);
     editForm.reset({
@@ -176,32 +167,27 @@ export default function AdminLocations() {
     });
   };
 
-  // Handle update location
   const handleUpdateLocation = (data: LocationFormData) => {
     if (editingLocation) {
       updateLocationMutation.mutate({ id: editingLocation.id, data });
     }
   };
 
-  // Handle delete location
   const handleDeleteLocation = (location: Location) => {
     setDeletingLocation(location);
   };
 
-  // Confirm delete location
   const confirmDeleteLocation = () => {
     if (deletingLocation) {
       deleteLocationMutation.mutate(deletingLocation.id);
     }
   };
 
-  // Format rating for display
   const formatRating = (rating: string) => {
     const numRating = parseFloat(rating);
     return numRating.toFixed(1);
   };
 
-  // Get rating color
   const getRatingColor = (rating: string) => {
     const numRating = parseFloat(rating);
     if (numRating >= 4.5) return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300";

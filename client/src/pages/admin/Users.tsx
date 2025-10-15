@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
-import { Users, Search, Eye, Mail, Phone, MapPin, Calendar, Shield, User, UserCheck, ChevronLeft, ChevronRight } from "lucide-react";
+import { Users, Search, Eye, Mail, Phone, MapPin, Calendar, Shield, User, UserCheck, ChevronLeft, ChevronRight, UserPlus, Edit, Trash2, Key } from "lucide-react";
 import { Link } from "wouter";
 import type { User as UserType } from "@shared/schema";
 import { useState, useMemo } from "react";
@@ -26,8 +26,7 @@ import { useToast } from "@/hooks/use-toast";
  */
 const getImageUrls = (imageUrl: string | null | undefined) => {
   if (!imageUrl) return null;
-  
-  // Handle object format (new imageUrls structure)
+
   if (typeof imageUrl === 'object' && imageUrl !== null) {
     const imgUrls = imageUrl as any;
     return {
@@ -35,8 +34,7 @@ const getImageUrls = (imageUrl: string | null | undefined) => {
       jpeg: imgUrls.jpeg || imgUrls.jpg || null
     };
   }
-  
-  // Legacy string format - convert to imageUrls format
+
   const baseUrl = imageUrl.replace(/\.(jpg|jpeg|png|webp)$/i, '');
   return {
     webp: `${baseUrl}.webp`,
@@ -65,10 +63,17 @@ export default function AdminUsers() {
   const [providerFilter, setProviderFilter] = useState<string>("all");
   const [viewingUser, setViewingUser] = useState<UserType | null>(null);
   const [changingRoleUser, setChangingRoleUser] = useState<UserType | null>(null);
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [editingUser, setEditingUser] = useState<UserType | null>(null);
+  const [deletingUser, setDeletingUser] = useState<UserType | null>(null);
+  const [resettingPasswordUser, setResettingPasswordUser] = useState<UserType | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 50;
+  
+  const [createFormErrors, setCreateFormErrors] = useState<Record<string, string>>({});
+  const [editFormErrors, setEditFormErrors] = useState<Record<string, string>>({});
+  const [resetPasswordErrors, setResetPasswordErrors] = useState<Record<string, string>>({});
 
-  // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
     return (
       <div className="container mx-auto px-4 py-8 text-center">
@@ -81,7 +86,6 @@ export default function AdminUsers() {
     );
   }
 
-  // Fetch users with pagination
   const { data, isLoading, isError } = useQuery({
     queryKey: ["/api/admin/users", currentPage, pageSize],
     queryFn: async () => {
@@ -97,7 +101,6 @@ export default function AdminUsers() {
   const startIndex = (currentPage - 1) * pageSize + 1;
   const endIndex = Math.min(currentPage * pageSize, totalCount);
 
-  // Update user role mutation
   const updateUserRoleMutation = useMutation({
     mutationFn: async ({ userId, role }: { userId: string; role: "customer" | "admin" }) => {
       const response = await apiRequest("PATCH", `/api/admin/users/${userId}`, { role });
@@ -120,12 +123,112 @@ export default function AdminUsers() {
     },
   });
 
-  // Handle role change
+  const toggleStatusMutation = useMutation({
+    mutationFn: async ({ userId, isActive }: { userId: string; isActive: boolean }) => {
+      const response = await apiRequest("PATCH", `/api/admin/users/${userId}/status`, { isActive });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      toast({ title: "Success", description: "User account status updated!" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const createUserMutation = useMutation({
+    mutationFn: async (data: { email: string; name: string; password: string; role: string; phone?: string; countryCode?: string }) => {
+      const response = await apiRequest("POST", "/api/admin/users", data);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setCreatingUser(false);
+      toast({
+        title: "Success",
+        description: "User created successfully!",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create user",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateUserMutation = useMutation({
+    mutationFn: async ({ userId, data }: { userId: string; data: any }) => {
+      const response = await apiRequest("PUT", `/api/admin/users/${userId}`, data);
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setEditingUser(null);
+      toast({
+        title: "Success",
+        description: "User updated successfully!",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update user",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteUserMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const response = await apiRequest("DELETE", `/api/admin/users/${userId}`, {});
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setDeletingUser(null);
+      toast({
+        title: "Success",
+        description: "User deleted successfully!",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to delete user",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async ({ userId, newPassword }: { userId: string; newPassword: string }) => {
+      const response = await apiRequest("POST", `/api/admin/users/${userId}/reset-password`, { newPassword });
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      setResettingPasswordUser(null);
+      toast({
+        title: "Success",
+        description: "Password reset successfully!",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to reset password",
+        variant: "destructive",
+      });
+    },
+  });
+
   const handleRoleChange = (user: UserType) => {
     setChangingRoleUser(user);
   };
 
-  // Confirm role change
   const confirmRoleChange = (newRole: "customer" | "admin") => {
     if (changingRoleUser) {
       updateUserRoleMutation.mutate({
@@ -135,14 +238,12 @@ export default function AdminUsers() {
     }
   };
 
-  // Check if current user can change roles (prevent self-demotion)
   const canChangeRole = (targetUser: UserType) => {
     return user && user.id !== targetUser.id;
   };
 
-  // Filter and search users
   const filteredUsers = useMemo(() => {
-    return users.filter(u => {
+    return users.filter((u: UserType) => {
       const matchesSearch = !searchTerm || 
         u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -155,19 +256,17 @@ export default function AdminUsers() {
     });
   }, [users, searchTerm, roleFilter, providerFilter]);
 
-  // Calculate stats
   const stats = {
     totalUsers: users.length,
-    customers: users.filter(u => u.role === "customer").length,
-    admins: users.filter(u => u.role === "admin").length,
-    emailUsers: users.filter(u => u.provider === "email").length,
-    googleUsers: users.filter(u => u.provider === "google").length,
-    mobileUsers: users.filter(u => u.provider === "mobile").length,
-    verifiedEmails: users.filter(u => u.emailVerified).length,
-    verifiedPhones: users.filter(u => u.phoneVerified).length,
+    customers: users.filter((u: UserType) => u.role === "customer").length,
+    admins: users.filter((u: UserType) => u.role === "admin").length,
+    emailUsers: users.filter((u: UserType) => u.provider === "email").length,
+    googleUsers: users.filter((u: UserType) => u.provider === "google").length,
+    mobileUsers: users.filter((u: UserType) => u.provider === "mobile").length,
+    verifiedEmails: users.filter((u: UserType) => u.emailVerified).length,
+    verifiedPhones: users.filter((u: UserType) => u.phoneVerified).length,
   };
 
-  // Get role badge color
   const getRoleColor = (role: string) => {
     switch (role) {
       case "admin": return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-300";
@@ -176,7 +275,6 @@ export default function AdminUsers() {
     }
   };
 
-  // Get provider badge color
   const getProviderColor = (provider: string) => {
     switch (provider) {
       case "email": return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300";
@@ -186,9 +284,36 @@ export default function AdminUsers() {
     }
   };
 
-  // Get user initials
   const getUserInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  };
+
+  const validateEmail = (email: string): string | null => {
+    if (!email || email.trim() === '') {
+      return 'Email is required';
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return 'Please enter a valid email address';
+    }
+    return null;
+  };
+
+  const validatePassword = (password: string): string | null => {
+    if (!password || password.trim() === '') {
+      return 'Password is required';
+    }
+    if (password.length < 8) {
+      return 'Password must be at least 8 characters long';
+    }
+    return null;
+  };
+
+  const validateRequiredField = (value: string | null | undefined, fieldName: string): string | null => {
+    if (!value || value.trim() === '') {
+      return `${fieldName} is required`;
+    }
+    return null;
   };
 
   if (isLoading) {
@@ -234,6 +359,10 @@ export default function AdminUsers() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button onClick={() => setCreatingUser(true)} variant="default">
+            <UserPlus className="w-4 h-4 mr-2" />
+            Create User
+          </Button>
           <Link href="/admin">
             <Button variant="outline">Back to Dashboard</Button>
           </Link>
@@ -375,7 +504,7 @@ export default function AdminUsers() {
         </Card>
       ) : (
         <div className="grid gap-4">
-          {filteredUsers.map((usr) => (
+          {filteredUsers.map((usr: UserType) => (
             <Card key={usr.id} className="hover-elevate">
               <CardContent className="p-6">
                 <div className="flex items-start justify-between">
@@ -398,6 +527,9 @@ export default function AdminUsers() {
                         </Badge>
                         <Badge className={getProviderColor(usr.provider)} data-testid={`provider-${usr.id}`}>
                           {usr.provider}
+                        </Badge>
+                        <Badge variant={usr.isActive ? "default" : "destructive"} data-testid={`status-${usr.id}`}>
+                          {usr.isActive ? "Active" : "Suspended"}
                         </Badge>
                       </div>
                       
@@ -442,7 +574,7 @@ export default function AdminUsers() {
                         <div className="mt-3">
                           <div className="text-xs text-muted-foreground mb-1">Registered Vehicles:</div>
                           <div className="flex flex-wrap gap-1">
-                            {usr.registrationNumbers.map((regNum, index) => (
+                            {usr.registrationNumbers.map((regNum: string, index: number) => (
                               <Badge key={index} variant="outline" className="text-xs">
                                 {regNum}
                               </Badge>
@@ -454,6 +586,43 @@ export default function AdminUsers() {
                   </div>
                   
                   <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setEditingUser(usr)}
+                      data-testid={`button-edit-${usr.id}`}
+                    >
+                      <Edit className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setResettingPasswordUser(usr)}
+                      data-testid={`button-reset-password-${usr.id}`}
+                    >
+                      <Key className="w-4 h-4" />
+                    </Button>
+                    {canChangeRole(usr) && (
+                      <Button
+                        variant={usr.isActive ? "destructive" : "default"}
+                        size="sm"
+                        onClick={() => toggleStatusMutation.mutate({ userId: usr.id, isActive: !usr.isActive })}
+                        data-testid={`button-toggle-status-${usr.id}`}
+                      >
+                        {usr.isActive ? "Suspend" : "Activate"}
+                      </Button>
+                    )}
+                    {user?.id !== usr.id && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setDeletingUser(usr)}
+                        data-testid={`button-delete-${usr.id}`}
+                        className="text-destructive hover:bg-destructive/10"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    )}
                     <Dialog>
                       <DialogTrigger asChild>
                         <Button
@@ -561,7 +730,7 @@ export default function AdminUsers() {
                               <div>
                                 <h4 className="font-semibold mb-3">Registered Vehicles</h4>
                                 <div className="flex flex-wrap gap-2">
-                                  {usr.registrationNumbers.map((regNum, index) => (
+                                  {usr.registrationNumbers.map((regNum: string, index: number) => (
                                     <Badge key={index} variant="outline">
                                       {regNum}
                                     </Badge>
@@ -704,7 +873,7 @@ export default function AdminUsers() {
                     <span data-testid="stat-google-users">{stats.googleUsers}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Mobile/OTP:</span>
+                    <span className="text-muted-foreground">Mobile:</span>
                     <span data-testid="stat-mobile-users">{stats.mobileUsers}</span>
                   </div>
                 </div>
@@ -774,6 +943,399 @@ export default function AdminUsers() {
           </div>
         </div>
       )}
+
+      {/* Create User Dialog */}
+      <Dialog open={creatingUser} onOpenChange={(open) => {
+        setCreatingUser(open);
+        if (!open) setCreateFormErrors({});
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create New User</DialogTitle>
+            <DialogDescription>
+              Add a new user to the system with email and password authentication.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={(e) => {
+            e.preventDefault();
+            const formData = new FormData(e.currentTarget);
+            const email = formData.get('email') as string;
+            const name = formData.get('name') as string;
+            const password = formData.get('password') as string;
+            const role = formData.get('role') as string;
+            
+            const errors: Record<string, string> = {};
+            
+            const nameError = validateRequiredField(name, 'Name');
+            if (nameError) errors.name = nameError;
+            
+            const emailError = validateEmail(email);
+            if (emailError) errors.email = emailError;
+            
+            const passwordError = validatePassword(password);
+            if (passwordError) errors.password = passwordError;
+            
+            if (Object.keys(errors).length > 0) {
+              setCreateFormErrors(errors);
+              return;
+            }
+            
+            setCreateFormErrors({});
+            createUserMutation.mutate({
+              email,
+              name,
+              password,
+              role,
+              phone: formData.get('phone') as string || undefined,
+              countryCode: formData.get('countryCode') as string || undefined,
+            });
+          }}>
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="create-name">Full Name *</Label>
+                <Input
+                  id="create-name"
+                  name="name"
+                  placeholder="John Doe"
+                  className={createFormErrors.name ? "border-destructive" : ""}
+                />
+                {createFormErrors.name && (
+                  <p className="text-sm text-destructive mt-1">{createFormErrors.name}</p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="create-email">Email *</Label>
+                <Input
+                  id="create-email"
+                  name="email"
+                  type="email"
+                  placeholder="john@example.com"
+                  className={createFormErrors.email ? "border-destructive" : ""}
+                />
+                {createFormErrors.email && (
+                  <p className="text-sm text-destructive mt-1">{createFormErrors.email}</p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="create-password">Password *</Label>
+                <Input
+                  id="create-password"
+                  name="password"
+                  type="password"
+                  placeholder="Minimum 8 characters"
+                  className={createFormErrors.password ? "border-destructive" : ""}
+                />
+                {createFormErrors.password ? (
+                  <p className="text-sm text-destructive mt-1">{createFormErrors.password}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Must be at least 8 characters long
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="create-role">Role *</Label>
+                <Select name="role" defaultValue="customer" required>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="customer">Customer</SelectItem>
+                    <SelectItem value="admin">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <Label htmlFor="create-countryCode">Code</Label>
+                  <Input
+                    id="create-countryCode"
+                    name="countryCode"
+                    placeholder="+91"
+                    defaultValue="+91"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <Label htmlFor="create-phone">Phone (Optional)</Label>
+                  <Input
+                    id="create-phone"
+                    name="phone"
+                    placeholder="9876543210"
+                  />
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="mt-6">
+              <Button type="button" variant="outline" onClick={() => {
+                setCreatingUser(false);
+                setCreateFormErrors({});
+              }}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={createUserMutation.isPending}>
+                {createUserMutation.isPending ? "Creating..." : "Create User"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit User Dialog */}
+      <Dialog open={!!editingUser} onOpenChange={(open) => {
+        if (!open) {
+          setEditingUser(null);
+          setEditFormErrors({});
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit User</DialogTitle>
+            <DialogDescription>
+              Update user profile information.
+            </DialogDescription>
+          </DialogHeader>
+          {editingUser && (
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              const email = formData.get('email') as string;
+              const name = formData.get('name') as string;
+              
+              const errors: Record<string, string> = {};
+              
+              if (email) {
+                const emailError = validateEmail(email);
+                if (emailError) errors.email = emailError;
+              }
+              
+              if (Object.keys(errors).length > 0) {
+                setEditFormErrors(errors);
+                return;
+              }
+              
+              setEditFormErrors({});
+              const data: any = {};
+              if (name) data.name = name;
+              if (email) data.email = email;
+              if (formData.get('phone')) data.phone = formData.get('phone');
+              if (formData.get('countryCode')) data.countryCode = formData.get('countryCode');
+              if (formData.get('address')) data.address = formData.get('address');
+              if (formData.get('city')) data.city = formData.get('city');
+              if (formData.get('state')) data.state = formData.get('state');
+              if (formData.get('zipCode')) data.zipCode = formData.get('zipCode');
+              updateUserMutation.mutate({ userId: editingUser.id, data });
+            }}>
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="edit-name">Full Name</Label>
+                  <Input
+                    id="edit-name"
+                    name="name"
+                    defaultValue={editingUser.name}
+                    placeholder="John Doe"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="edit-email">Email</Label>
+                  <Input
+                    id="edit-email"
+                    name="email"
+                    type="email"
+                    defaultValue={editingUser.email || ''}
+                    placeholder="john@example.com"
+                    className={editFormErrors.email ? "border-destructive" : ""}
+                  />
+                  {editFormErrors.email && (
+                    <p className="text-sm text-destructive mt-1">{editFormErrors.email}</p>
+                  )}
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <Label htmlFor="edit-countryCode">Code</Label>
+                    <Input
+                      id="edit-countryCode"
+                      name="countryCode"
+                      defaultValue={editingUser.countryCode || '+91'}
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <Label htmlFor="edit-phone">Phone</Label>
+                    <Input
+                      id="edit-phone"
+                      name="phone"
+                      defaultValue={editingUser.phone || ''}
+                      placeholder="9876543210"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="edit-address">Address</Label>
+                  <Input
+                    id="edit-address"
+                    name="address"
+                    defaultValue={editingUser.address || ''}
+                    placeholder="Street address"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label htmlFor="edit-city">City</Label>
+                    <Input
+                      id="edit-city"
+                      name="city"
+                      defaultValue={editingUser.city || ''}
+                      placeholder="City"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="edit-state">State</Label>
+                    <Input
+                      id="edit-state"
+                      name="state"
+                      defaultValue={editingUser.state || ''}
+                      placeholder="State"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="edit-zipCode">ZIP Code</Label>
+                  <Input
+                    id="edit-zipCode"
+                    name="zipCode"
+                    defaultValue={editingUser.zipCode || ''}
+                    placeholder="12345"
+                  />
+                </div>
+              </div>
+              <DialogFooter className="mt-6">
+                <Button type="button" variant="outline" onClick={() => {
+                  setEditingUser(null);
+                  setEditFormErrors({});
+                }}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={updateUserMutation.isPending}>
+                  {updateUserMutation.isPending ? "Saving..." : "Save Changes"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete User Dialog */}
+      <AlertDialog open={!!deletingUser} onOpenChange={(open) => !open && setDeletingUser(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete User</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deletingUser && (
+                <>
+                  Are you sure you want to delete <strong>{deletingUser.name}</strong> ({deletingUser.email || deletingUser.phone})?
+                  <br /><br />
+                  <span className="text-destructive font-medium">
+                    This action cannot be undone. All user data will be permanently deleted.
+                  </span>
+                  {deletingUser.role === 'admin' && (
+                    <>
+                      <br /><br />
+                      <span className="text-orange-600 font-medium">
+                        ⚠️ Warning: This user is an administrator. Deleting them will remove their admin access.
+                      </span>
+                    </>
+                  )}
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deletingUser && deleteUserMutation.mutate(deletingUser.id)}
+              disabled={deleteUserMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteUserMutation.isPending ? "Deleting..." : "Delete User"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Reset Password Dialog */}
+      <Dialog open={!!resettingPasswordUser} onOpenChange={(open) => {
+        if (!open) {
+          setResettingPasswordUser(null);
+          setResetPasswordErrors({});
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reset User Password</DialogTitle>
+            <DialogDescription>
+              {resettingPasswordUser && `Set a new password for ${resettingPasswordUser.name}`}
+            </DialogDescription>
+          </DialogHeader>
+          {resettingPasswordUser && (
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              const formData = new FormData(e.currentTarget);
+              const newPassword = formData.get('newPassword') as string;
+              
+              const errors: Record<string, string> = {};
+              
+              const passwordError = validatePassword(newPassword);
+              if (passwordError) errors.password = passwordError;
+              
+              if (Object.keys(errors).length > 0) {
+                setResetPasswordErrors(errors);
+                return;
+              }
+              
+              setResetPasswordErrors({});
+              resetPasswordMutation.mutate({ userId: resettingPasswordUser.id, newPassword });
+            }}>
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="reset-password">New Password *</Label>
+                  <Input
+                    id="reset-password"
+                    name="newPassword"
+                    type="password"
+                    placeholder="Enter new password"
+                    className={resetPasswordErrors.password ? "border-destructive" : ""}
+                  />
+                  {resetPasswordErrors.password ? (
+                    <p className="text-sm text-destructive mt-1">{resetPasswordErrors.password}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Must be at least 8 characters long
+                    </p>
+                  )}
+                </div>
+                <div className="p-3 bg-muted rounded-md">
+                  <p className="text-sm">
+                    <strong>User:</strong> {resettingPasswordUser.name}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {resettingPasswordUser.email || resettingPasswordUser.phone}
+                  </p>
+                </div>
+              </div>
+              <DialogFooter className="mt-6">
+                <Button type="button" variant="outline" onClick={() => {
+                  setResettingPasswordUser(null);
+                  setResetPasswordErrors({});
+                }}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={resetPasswordMutation.isPending}>
+                  {resetPasswordMutation.isPending ? "Resetting..." : "Reset Password"}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

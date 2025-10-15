@@ -1,6 +1,5 @@
 import type { Response } from "express";
 
-// Standardized API response interfaces
 export interface ApiSuccessResponse<T = any> {
   success: true;
   data: T;
@@ -17,7 +16,6 @@ export interface ApiErrorResponse {
 
 export type ApiResponse<T = any> = ApiSuccessResponse<T> | ApiErrorResponse;
 
-// Success response utility functions
 export function createSuccessResponse<T>(
   data: T, 
   message?: string
@@ -60,7 +58,6 @@ export function createErrorResponse(
   return response;
 }
 
-// Express response helper functions
 export function sendSuccess<T>(
   res: Response,
   data: T,
@@ -81,7 +78,6 @@ export function sendError(
   return res.status(statusCode).json(createErrorResponse(message, errors, code, meta));
 }
 
-// Specialized success response helpers for common patterns
 export function sendResourceCreated<T>(
   res: Response,
   data: T,
@@ -105,7 +101,6 @@ export function sendResourceDeleted(
   return sendSuccess(res, null, message || "Resource deleted successfully");
 }
 
-// Collection response helper with pagination metadata
 export interface PaginatedData<T> {
   items: T[];
   pagination: {
@@ -137,7 +132,6 @@ export function sendPaginatedResponse<T>(
   return sendSuccess(res, data, message);
 }
 
-// Specialized error response helpers
 export function sendValidationError(
   res: Response,
   message: string = "Validation failed",
@@ -193,27 +187,25 @@ export function sendRateLimitError(
   return response;
 }
 
-// Database error handling with standardized responses
 export function sendDatabaseError(
   res: Response,
   operation: string,
   error: unknown
 ): Response {
   console.error(`Database error during ${operation}:`, error);
-  
-  // Handle specific PostgreSQL error codes
+
   const dbError = error as { code?: string };
   switch (dbError?.code) {
-    case '23505': // Unique constraint violation
+    case '23505':
       return sendConflictError(res, `This ${operation} conflicts with existing data. Please check for duplicates.`);
       
-    case '23503': // Foreign key constraint violation
+    case '23503':
       return sendValidationError(res, `Invalid reference in ${operation}. Referenced data does not exist.`);
       
-    case '23502': // Not null constraint violation
+    case '23502':
       return sendValidationError(res, `Missing required field in ${operation}. All required fields must be provided.`);
       
-    case '22001': // String data too long
+    case '22001':
       return sendValidationError(res, `Data too long for ${operation}. Please reduce the length of your input.`);
       
     default:

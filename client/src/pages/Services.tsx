@@ -64,14 +64,12 @@ export default function Services() {
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [priceRange, setPriceRange] = useState("all");
 
-  // Fetch services from API
   const { data: servicesData, isLoading, error, refetch } = useQuery<Service[]>({
     queryKey: ["/api/services"],
     retry: 3,
-    staleTime: 60 * 1000 // 60 seconds
+    staleTime: 60 * 1000
   });
 
-  // Use original API data without transformation
   const services = servicesData || [];
 
   const categories = [
@@ -94,7 +92,6 @@ export default function Services() {
     { value: "above-10000", label: "Above ₹10,000" }
   ];
 
-  // Memoized filtering for performance
   const filteredServices = useMemo(() => {
     return services.filter(service => {
       const matchesSearch = service.title.toLowerCase().includes(searchTerm.toLowerCase()) ||

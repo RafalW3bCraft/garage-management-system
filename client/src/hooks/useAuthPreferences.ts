@@ -29,16 +29,16 @@ import { useAuthPreferencesContext } from "@/contexts";
  *   rememberMe
  * } = useAuthPreferences();
  * 
- * // Save user's preferred method
+ *
  * saveMethod("email");
  * 
- * // Save email if remember me is enabled
+ *
  * if (rememberMe) {
  *   saveEmail("user@example.com");
  * }
  * ```
  */
 export function useAuthPreferences() {
-  // Simply return the context - all logic is now in the context provider
+
   return useAuthPreferencesContext();
 }

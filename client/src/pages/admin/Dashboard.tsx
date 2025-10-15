@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Users, Car, Calendar, Settings, MapPin, Wrench, AlertCircle } from "lucide-react";
+import { Users, Car, Calendar, Settings, MapPin, Wrench, AlertCircle, MessageSquare, DollarSign, Megaphone, FileText } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useEffect } from "react";
@@ -26,7 +26,6 @@ export default function AdminDashboard() {
   const { user, isAuthenticated } = useAuth();
   const { toast } = useToast();
 
-  // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
     return (
       <div className="container mx-auto px-4 py-8 text-center">
@@ -39,9 +38,8 @@ export default function AdminDashboard() {
     );
   }
 
-  // Fetch consolidated admin statistics - match backend AdminStatsResponse type
   const { data: stats, isLoading, isError, error } = useQuery<{
-    // Core metrics with availability indicators
+
     totalUsers: number | null;
     totalUsersAvailable: boolean;
     totalAppointments: number | null;
@@ -61,7 +59,7 @@ export default function AdminDashboard() {
     activeCars: number | null;
     auctionCars: number | null;
     activeAuctions: number | null;
-    // Metadata
+
     lastUpdated: string;
     cacheStatus: {
       appointments: 'cached' | 'fresh' | 'fallback';
@@ -80,7 +78,6 @@ export default function AdminDashboard() {
     queryKey: ["/api/admin/stats"],
   });
 
-  // Error logging and user notification
   useEffect(() => {
     if (isError && error) {
       console.error(`[Admin Dashboard] Failed to load statistics:`, error);
@@ -92,7 +89,6 @@ export default function AdminDashboard() {
     }
   }, [isError, error, toast]);
 
-  // Provide safe access to stats with null handling
   const dashboardStats = {
     totalUsers: stats?.totalUsers ?? 0,
     totalAppointments: stats?.totalAppointments ?? 0,
@@ -108,7 +104,7 @@ export default function AdminDashboard() {
     auctionCars: stats?.auctionCars ?? 0,
     activeAuctions: stats?.activeAuctions ?? 0,
     recentAppointments: stats?.recentAppointments ?? 0,
-    // Availability flags for UI indicators
+
     availabilityFlags: {
       usersAvailable: stats?.totalUsersAvailable ?? false,
       appointmentsAvailable: stats?.appointmentsAvailable ?? false,
@@ -116,7 +112,7 @@ export default function AdminDashboard() {
       locationsAvailable: stats?.locationsAvailable ?? false,
       carsAvailable: stats?.carsAvailable ?? false,
     },
-    // Reliability metrics for monitoring
+
     reliability: stats?.reliability,
     lastUpdated: stats?.lastUpdated,
   };
@@ -162,9 +158,40 @@ export default function AdminDashboard() {
       count: dashboardStats.totalUsers,
       color: "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-300",
     },
+    {
+      title: "Contact Messages",
+      description: "View and respond to customer inquiries",
+      icon: MessageSquare,
+      href: "/admin/contacts",
+      count: 0,
+      color: "bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-300",
+    },
+    {
+      title: "Auction Bids",
+      description: "Review and manage customer bids on vehicles",
+      icon: DollarSign,
+      href: "/admin/bids",
+      count: 0,
+      color: "bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-300",
+    },
+    {
+      title: "Promotional Messages",
+      description: "Send WhatsApp & Email campaigns to customers",
+      icon: Megaphone,
+      href: "/admin/promotions",
+      count: 0,
+      color: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-300",
+    },
+    {
+      title: "Invoice Management",
+      description: "Create & send invoices with Indian GST",
+      icon: FileText,
+      href: "/admin/invoices",
+      count: 0,
+      color: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-300",
+    },
   ];
 
-  // Show loading state
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-8" role="status" aria-live="polite">
@@ -189,7 +216,6 @@ export default function AdminDashboard() {
     );
   }
 
-  // Show error alert if statistics failed to load
   const errorComponent = isError ? (
     <Alert variant="destructive" className="mb-4" role="alert">
       <AlertCircle className="h-4 w-4" aria-hidden="true" />

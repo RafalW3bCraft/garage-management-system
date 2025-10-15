@@ -3,16 +3,15 @@ import { pgTable, text, varchar, integer, decimal, timestamp, boolean, index } f
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Users table - enhanced for mobile auth, profiles and OAuth
+// Users table - enhanced for profiles and OAuth
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").unique(), // Optional for mobile-only registrations - nullable
   name: text("name").notNull(),
   password: text("password"), // nullable for OAuth users
   googleId: text("google_id").unique(), // for Google OAuth
-  // Mobile authentication fields
-  phone: text("phone").unique(), // For mobile OTP registration
-  phoneVerified: boolean("phone_verified").default(false),
+  // Contact fields (not for authentication)
+  phone: text("phone").unique(),
   countryCode: text("country_code").default("+91"), // Default to India
   // Enhanced profile fields
   registrationNumbers: text("registration_numbers").array(), // Vehicle registration numbers
@@ -23,9 +22,11 @@ export const users = pgTable("users", {
   state: text("state"),
   zipCode: text("zip_code"),
   // Account settings
-  provider: text("provider").notNull().default("email"), // "email", "google", or "mobile"
+  provider: text("provider").notNull().default("email"), // "email" or "google"
   role: text("role").notNull().default("customer"), // "customer" or "admin"
   emailVerified: boolean("email_verified").default(false),
+  preferredNotificationChannel: text("preferred_notification_channel").notNull().default("whatsapp"), // "whatsapp" or "email"
+  isActive: boolean("is_active").default(true).notNull(), // For account suspension
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   // Ensure at least one identifier exists (email or phone)
@@ -74,7 +75,14 @@ export const services = pgTable("services", {
   providerName: text("provider_name"), // Name of service provider/mechanic
   providerPhone: text("provider_phone"), // Phone number for WhatsApp notifications
   providerCountryCode: text("provider_country_code").default("+91"), // Country code for provider phone
-});
+}, (table) => ({
+  // Index for category filtering
+  categoryIdx: index("idx_service_category").on(table.category),
+  // Index for popular services
+  popularIdx: index("idx_service_popular").on(table.popular),
+  // Composite index for category + popular queries
+  categoryPopularIdx: index("idx_service_category_popular").on(table.category, table.popular)
+}));
 
 // Appointments for services
 export const appointments = pgTable("appointments", {
@@ -99,7 +107,9 @@ export const appointments = pgTable("appointments", {
   dateTimeIdx: index("idx_date_time").on(table.dateTime),
   // Composite indexes for common query patterns
   customerStatusIdx: index("idx_customer_status").on(table.customerId, table.status),
-  statusDateTimeIdx: index("idx_status_datetime").on(table.status, table.dateTime)
+  statusDateTimeIdx: index("idx_status_datetime").on(table.status, table.dateTime),
+  // Composite index for appointment conflict checks
+  locationDateTimeStatusIdx: index("idx_location_datetime_status").on(table.locationId, table.dateTime, table.status)
 }));
 
 // Cars for sale and auction
@@ -131,7 +141,19 @@ export const cars = pgTable("cars", {
   // Composite index for active auctions query
   auctionEndTimeIdx: index("idx_auction_end_time").on(table.isAuction, table.auctionEndTime),
   // Index for searching by manufacturer
-  makeIdx: index("idx_make").on(table.make)
+  makeIdx: index("idx_make").on(table.make),
+  // Index for model searches
+  modelIdx: index("idx_model").on(table.model),
+  // Index for condition filtering
+  conditionIdx: index("idx_condition").on(table.condition),
+  // Index for fuel type filtering
+  fuelTypeIdx: index("idx_fuel_type").on(table.fuelType),
+  // Index for year filtering
+  yearIdx: index("idx_year").on(table.year),
+  // Composite index for sale cars (most common query)
+  saleIdx: index("idx_sale").on(table.isAuction, table.year, table.price),
+  // Composite index for make + model searches
+  makeModelIdx: index("idx_make_model").on(table.make, table.model)
 }));
 
 // Car images for multiple photos per car
@@ -153,16 +175,24 @@ export const carImages = pgTable("car_images", {
 export const bids = pgTable("bids", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   carId: varchar("car_id").notNull().references(() => cars.id, { onDelete: 'restrict', onUpdate: 'cascade' }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: 'restrict', onUpdate: 'cascade' }),
   bidderEmail: text("bidder_email").notNull(), // Match email with customers/users
   bidAmount: integer("bid_amount").notNull(),
+  status: text("status").notNull().default("pending"), // pending, accepted, rejected
   bidTime: timestamp("bid_time").defaultNow().notNull(),
 }, (table) => ({
   // Index on carId for car's bids
   carIdIdx: index("idx_car_id").on(table.carId),
   // Index on bidderEmail for user's bids
   bidderEmailIdx: index("idx_bidder_email").on(table.bidderEmail),
+  // Index on userId for user's bids
+  bidUserIdIdx: index("idx_bid_user_id").on(table.userId),
+  // Index on status for filtering
+  statusIdx: index("idx_bid_status").on(table.status),
   // Composite index for ordered bid history
-  carBidTimeIdx: index("idx_car_bid_time").on(table.carId, table.bidTime)
+  carBidTimeIdx: index("idx_car_bid_time").on(table.carId, table.bidTime),
+  // Composite index for status filtering
+  carStatusIdx: index("idx_car_status").on(table.carId, table.status)
 }));
 
 // Contact form submissions
@@ -174,6 +204,8 @@ export const contacts = pgTable("contacts", {
   subject: text("subject").notNull(),
   message: text("message").notNull(),
   status: text("status").default("new"), // new, responded, resolved
+  notes: text("notes"), // Admin notes (nullable for backward compatibility)
+  notesUpdatedAt: timestamp("notes_updated_at"), // Last time notes were updated
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   // Index on status for filtering
@@ -184,25 +216,6 @@ export const contacts = pgTable("contacts", {
   statusCreatedAtIdx: index("idx_contacts_status_created").on(table.status, table.createdAt)
 }));
 
-// OTP verification tracking
-export const otpVerifications = pgTable("otp_verifications", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  phone: text("phone").notNull(),
-  countryCode: text("country_code").notNull(),
-  channel: text("channel").notNull().default("whatsapp"), // "whatsapp" or "email"
-  email: text("email"), // nullable - used when channel is 'email'
-  otpCodeHash: text("otp_code_hash"), // Hashed OTP for security (nullable for MessageCentral auto-OTP)
-  verificationId: text("verification_id"), // MessageCentral verification ID for auto-OTP
-  purpose: text("purpose").notNull(), // "registration", "login", "password_reset"
-  verified: boolean("verified").default(false),
-  attempts: integer("attempts").default(0),
-  maxAttempts: integer("max_attempts").default(3),
-  expiresAt: timestamp("expires_at").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-}, (table) => ({
-  // Index for efficient lookups
-  phoneCountryIdx: index("idx_phone_country").on(table.phone, table.countryCode, table.expiresAt)
-}));
 
 // Email verification tokens for email/password authentication and password reset
 export const emailVerificationTokens = pgTable("email_verification_tokens", {
@@ -340,12 +353,21 @@ export const insertOAuthUserSchema = createInsertSchema(users).omit({
   password: true, // OAuth users don't have passwords
 });
 
+// Shared password validation schema with strict security requirements
+export const passwordValidation = z.string()
+  .min(8, "Password must be at least 8 characters")
+  .max(100, "Password cannot exceed 100 characters")
+  .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
+  .regex(/[a-z]/, "Password must contain at least one lowercase letter")
+  .regex(/[0-9]/, "Password must contain at least one number")
+  .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character");
+
 // Separate schemas for different auth flows
 // Email registration schemas (email required)
 export const registerSchema = z.object({
   email: z.string().email("Invalid email format"),
   name: z.string().min(2, "Name must be at least 2 characters"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  password: passwordValidation,
   confirmPassword: z.string(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
@@ -356,7 +378,7 @@ export const registerSchema = z.object({
 export const serverRegisterSchema = z.object({
   email: z.string().email("Invalid email format"),
   name: z.string().min(2, "Name must be at least 2 characters"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  password: passwordValidation,
   provider: z.literal("email").default("email"),
 });
 
@@ -372,7 +394,7 @@ export const passwordResetRequestSchema = z.object({
 export const passwordResetVerifySchema = z.object({
   token: z.string().min(1, "Reset token is required"),
   email: z.string().email("Invalid email format"),
-  newPassword: z.string().min(8, "Password must be at least 8 characters"),
+  newPassword: passwordValidation,
 });
 
 export const insertCustomerSchema = createInsertSchema(customers).omit({
@@ -446,12 +468,6 @@ export const insertBidSchema = createInsertSchema(bids).omit({
   bidTime: true,
 });
 
-export const insertOtpVerificationSchema = createInsertSchema(otpVerifications).omit({
-  id: true,
-  createdAt: true,
-  verified: true,
-  attempts: true,
-});
 
 export const insertWhatsAppMessageSchema = createInsertSchema(whatsappMessages).omit({
   id: true,
@@ -505,57 +521,6 @@ export const rescheduleAppointmentSchema = z.object({
     .uuid({ message: "Location ID must be a valid UUID" })
 });
 
-// Mobile registration schemas
-export const sendOtpSchema = z.object({
-  phone: z.string()
-    .min(10, "Phone number must be at least 10 digits")
-    .max(15, "Phone number cannot exceed 15 digits")
-    .regex(/^\d+$/, "Phone number must contain only digits"),
-  countryCode: z.string()
-    .regex(/^\+\d{1,4}$/, "Invalid country code format"),
-  purpose: z.enum(["registration", "login", "password_reset"], {
-    errorMap: () => ({ message: "Purpose must be registration, login, or password_reset" })
-  }),
-  channel: z.enum(["whatsapp", "email"], {
-    errorMap: () => ({ message: "Channel must be whatsapp or email" })
-  }).default("whatsapp")
-});
-
-export const verifyOtpSchema = z.object({
-  phone: z.string()
-    .min(10, "Phone number must be at least 10 digits")
-    .max(15, "Phone number cannot exceed 15 digits")
-    .regex(/^\d+$/, "Phone number must contain only digits"),
-  countryCode: z.string()
-    .regex(/^\+\d{1,4}$/, "Invalid country code format"),
-  otpCode: z.string()
-    .length(6, "OTP must be exactly 6 digits")
-    .regex(/^\d{6}$/, "OTP must contain only numbers"),
-  purpose: z.enum(["registration", "login", "password_reset"], {
-    errorMap: () => ({ message: "Purpose must be registration, login, or password_reset" })
-  }),
-  channel: z.enum(["whatsapp", "email"], {
-    errorMap: () => ({ message: "Channel must be whatsapp or email" })
-  }).default("whatsapp")
-});
-
-export const mobileRegisterSchema = z.object({
-  phone: z.string()
-    .min(10, "Phone number must be at least 10 digits")
-    .max(15, "Phone number cannot exceed 15 digits")
-    .regex(/^\d+$/, "Phone number must contain only digits"),
-  countryCode: z.string()
-    .regex(/^\+\d{1,4}$/, "Invalid country code format"),
-  name: z.string().min(2, "Name must be at least 2 characters"),
-  email: z.string().email("Invalid email format").optional(),
-  dateOfBirth: z.string().datetime().optional(),
-  registrationNumbers: z.array(z.string()).optional(),
-  profileImage: z.string().url("Invalid image URL").optional(),
-  address: z.string().optional(),
-  city: z.string().optional(),
-  state: z.string().optional(),
-  zipCode: z.string().optional(),
-});
 
 export const updateProfileSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").optional(),
@@ -575,7 +540,42 @@ export const updateProfileSchema = z.object({
 export const updateContactSchema = z.object({
   status: z.enum(["new", "responded", "resolved"], {
     errorMap: () => ({ message: "Status must be one of: new, responded, resolved" })
+  }).optional(),
+  notes: z.string().optional()
+});
+
+// User settings schema for notification preferences
+export const updateUserSettingsSchema = z.object({
+  preferredNotificationChannel: z.enum(["whatsapp", "email"], {
+    errorMap: () => ({ message: "Notification channel must be either whatsapp or email" })
   })
+});
+
+// Admin user management schemas
+export const adminCreateUserSchema = z.object({
+  email: z.string().email("Invalid email format"),
+  name: z.string().min(2, "Name must be at least 2 characters"),
+  password: passwordValidation,
+  role: z.enum(["customer", "admin"], {
+    errorMap: () => ({ message: "Role must be either customer or admin" })
+  }),
+  phone: z.string().optional(),
+  countryCode: z.string().optional(),
+});
+
+export const adminUpdateUserSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters").optional(),
+  email: z.string().email("Invalid email format").optional(),
+  phone: z.string().optional(),
+  countryCode: z.string().optional(),
+  address: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zipCode: z.string().optional(),
+});
+
+export const adminResetPasswordSchema = z.object({
+  newPassword: passwordValidation,
 });
 
 // WhatsApp messaging schemas for standardized validation
@@ -649,6 +649,149 @@ export const whatsappWebhookSchema = z.object({
   ErrorMessage: z.string().optional()
 });
 
+// Invoices - Manual invoice creation with Indian GST standards
+export const invoices = pgTable("invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceNumber: text("invoice_number").notNull().unique(),
+  
+  // Customer details
+  customerName: text("customer_name").notNull(),
+  customerEmail: text("customer_email"),
+  customerPhone: text("customer_phone"),
+  customerAddress: text("customer_address"),
+  customerCity: text("customer_city"),
+  customerState: text("customer_state").notNull(), // Required for GST calculation
+  customerZipCode: text("customer_zip_code"),
+  customerGSTIN: text("customer_gstin"), // Optional GSTIN number
+  
+  // Invoice dates
+  invoiceDate: timestamp("invoice_date").notNull().defaultNow(),
+  dueDate: timestamp("due_date"),
+  
+  // Amounts
+  subtotal: decimal("subtotal", { precision: 10, scale: 2 }).notNull(),
+  cgstAmount: decimal("cgst_amount", { precision: 10, scale: 2 }).default("0").notNull(), // Central GST (intra-state)
+  sgstAmount: decimal("sgst_amount", { precision: 10, scale: 2 }).default("0").notNull(), // State GST (intra-state)
+  igstAmount: decimal("igst_amount", { precision: 10, scale: 2 }).default("0").notNull(), // Integrated GST (inter-state)
+  totalAmount: decimal("total_amount", { precision: 10, scale: 2 }).notNull(),
+  
+  // Status and metadata
+  status: text("status").notNull().default("unpaid"), // unpaid, paid, cancelled
+  notes: text("notes"),
+  termsAndConditions: text("terms_and_conditions"),
+  
+  // Reference links
+  serviceId: varchar("service_id").references(() => services.id, { onDelete: 'set null', onUpdate: 'cascade' }),
+  appointmentId: varchar("appointment_id").references(() => appointments.id, { onDelete: 'set null', onUpdate: 'cascade' }),
+  carId: varchar("car_id").references(() => cars.id, { onDelete: 'set null', onUpdate: 'cascade' }),
+  bidId: varchar("bid_id").references(() => bids.id, { onDelete: 'set null', onUpdate: 'cascade' }),
+  
+  // Business details (from settings or hardcoded)
+  businessName: text("business_name").default("Ronak Motor Garage"),
+  businessAddress: text("business_address"),
+  businessGSTIN: text("business_gstin"),
+  businessState: text("business_state").default("Gujarat"), // Required for GST calculation
+  
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  invoiceNumberIdx: index("idx_invoice_number").on(table.invoiceNumber),
+  statusIdx: index("idx_invoice_status").on(table.status),
+  invoiceDateIdx: index("idx_invoice_date").on(table.invoiceDate),
+  customerEmailIdx: index("idx_customer_email").on(table.customerEmail),
+  customerPhoneIdx: index("idx_customer_phone").on(table.customerPhone),
+}));
+
+// Invoice line items
+export const invoiceItems = pgTable("invoice_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id").references(() => invoices.id, { onDelete: 'cascade', onUpdate: 'cascade' }).notNull(),
+  
+  // Item details
+  description: text("description").notNull(),
+  hsnSacCode: text("hsn_sac_code"), // HSN for goods, SAC for services
+  quantity: decimal("quantity", { precision: 10, scale: 2 }).notNull().default("1"),
+  unitPrice: decimal("unit_price", { precision: 10, scale: 2 }).notNull(),
+  amount: decimal("amount", { precision: 10, scale: 2 }).notNull(), // quantity * unitPrice
+  
+  // Tax details
+  taxRate: decimal("tax_rate", { precision: 5, scale: 2 }).notNull().default("18"), // GST rate (0, 5, 12, 18, 28)
+  taxAmount: decimal("tax_amount", { precision: 10, scale: 2 }).notNull().default("0"),
+  
+  displayOrder: integer("display_order").notNull().default(0),
+  
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  invoiceIdIdx: index("idx_invoice_item_invoice_id").on(table.invoiceId),
+  displayOrderIdx: index("idx_invoice_item_display_order").on(table.invoiceId, table.displayOrder),
+}));
+
+// Invoice schemas for validation
+export const insertInvoiceSchema = createInsertSchema(invoices, {
+  customerName: z.string().min(1, "Customer name is required"),
+  customerState: z.string().min(1, "Customer state is required for GST calculation"),
+  invoiceNumber: z.string().min(1, "Invoice number is required"),
+  subtotal: z.coerce.number().nonnegative("Subtotal must be non-negative").transform(val => String(val)),
+  cgstAmount: z.coerce.number().nonnegative("CGST amount must be non-negative").transform(val => String(val)).optional(),
+  sgstAmount: z.coerce.number().nonnegative("SGST amount must be non-negative").transform(val => String(val)).optional(),
+  igstAmount: z.coerce.number().nonnegative("IGST amount must be non-negative").transform(val => String(val)).optional(),
+  totalAmount: z.coerce.number().positive("Total amount must be positive").transform(val => String(val)),
+  businessState: z.string().default("Gujarat"),
+}).omit({ id: true, createdAt: true, updatedAt: true }).superRefine((data, ctx) => {
+  const subtotal = parseFloat(data.subtotal);
+  const cgst = parseFloat(data.cgstAmount || "0");
+  const sgst = parseFloat(data.sgstAmount || "0");
+  const igst = parseFloat(data.igstAmount || "0");
+  const total = parseFloat(data.totalAmount);
+  const isIntraState = data.customerState === data.businessState;
+  
+  // GST Exclusivity: For intra-state use CGST+SGST, for inter-state use IGST
+  if (isIntraState) {
+    if (igst !== 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "For intra-state transactions, IGST must be 0. Use CGST and SGST instead.",
+        path: ["igstAmount"]
+      });
+    }
+    // CGST and SGST must be EQUAL for intra-state transactions (Indian GST rule)
+    if (cgst !== sgst) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "For intra-state transactions, CGST and SGST must be equal (each is half of total GST).",
+        path: ["cgstAmount"]
+      });
+    }
+  } else {
+    if (cgst !== 0 || sgst !== 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "For inter-state transactions, CGST and SGST must be 0. Use IGST instead.",
+        path: ["cgstAmount"]
+      });
+    }
+  }
+  
+  // Total amount validation: total = subtotal + (cgst + sgst + igst)
+  const expectedTotal = subtotal + cgst + sgst + igst;
+  if (Math.abs(total - expectedTotal) > 0.01) { // Allow 1 paisa tolerance for rounding
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Total amount (${total}) must equal subtotal (${subtotal}) + taxes (${cgst + sgst + igst}). Expected: ${expectedTotal}`,
+      path: ["totalAmount"]
+    });
+  }
+});
+
+export const insertInvoiceItemSchema = createInsertSchema(invoiceItems, {
+  description: z.string().min(1, "Item description is required"),
+  quantity: z.string().or(z.number()).transform(val => String(val)),
+  unitPrice: z.string().or(z.number()).transform(val => String(val)),
+  amount: z.string().or(z.number()).transform(val => String(val)),
+  taxRate: z.string().or(z.number()).transform(val => String(val)),
+  taxAmount: z.string().or(z.number()).transform(val => String(val)),
+}).omit({ id: true, createdAt: true });
+
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -677,9 +820,6 @@ export type InsertLocation = z.infer<typeof insertLocationSchema>;
 export type Bid = typeof bids.$inferSelect;
 export type InsertBid = z.infer<typeof insertBidSchema>;
 
-export type OtpVerification = typeof otpVerifications.$inferSelect;
-export type InsertOtpVerification = z.infer<typeof insertOtpVerificationSchema>;
-
 export type EmailVerificationToken = typeof emailVerificationTokens.$inferSelect;
 export type InsertEmailVerificationToken = typeof emailVerificationTokens.$inferInsert;
 
@@ -694,6 +834,18 @@ export type InsertAdminAuditLog = z.infer<typeof insertAdminAuditLogSchema>;
 export type AdminRateLimit = typeof adminRateLimits.$inferSelect;
 export type InsertAdminRateLimit = z.infer<typeof insertAdminRateLimitSchema>;
 
+export type SiteSetting = typeof siteSettings.$inferSelect;
+export type InsertSiteSetting = z.infer<typeof insertSiteSettingSchema>;
+
+export type MediaLibrary = typeof mediaLibrary.$inferSelect;
+export type InsertMediaLibrary = z.infer<typeof insertMediaLibrarySchema>;
+
+export type Invoice = typeof invoices.$inferSelect;
+export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
+
+export type InvoiceItem = typeof invoiceItems.$inferSelect;
+export type InsertInvoiceItem = z.infer<typeof insertInvoiceItemSchema>;
+
 // Enhanced appointment type with resolved names for frontend display
 export type AppointmentWithDetails = Appointment & {
   serviceName: string;
@@ -701,8 +853,9 @@ export type AppointmentWithDetails = Appointment & {
   customerName: string;
 };
 
-// Mobile registration and OTP types
-export type SendOtpRequest = z.infer<typeof sendOtpSchema>;
-export type VerifyOtpRequest = z.infer<typeof verifyOtpSchema>;
-export type MobileRegisterRequest = z.infer<typeof mobileRegisterSchema>;
+// Enhanced invoice type with line items
+export type InvoiceWithItems = Invoice & {
+  items: InvoiceItem[];
+};
+
 export type UpdateProfileRequest = z.infer<typeof updateProfileSchema>;

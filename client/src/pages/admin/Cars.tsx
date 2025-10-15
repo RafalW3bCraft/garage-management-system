@@ -12,18 +12,18 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Car, Plus, Edit, Trash2, Filter, Calendar, DollarSign, Eye, ChevronLeft, ChevronRight } from "lucide-react";
-import { Link } from "wouter";
-import { apiRequest } from "@/lib/queryClient";
+import { Car, Plus, Edit, Trash2, Filter, Calendar, DollarSign, Eye, ChevronLeft, ChevronRight, Check, X, Gavel, Clock, TrendingUp, List } from "lucide-react";
+import { Link, useLocation } from "wouter";
+import { apiRequest, apiRequestJson } from "@/lib/queryClient";
 import { useErrorHandler } from "@/lib/error-utils";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertCarSchema } from "@shared/schema";
 import type { Car as CarType, Bid } from "@shared/schema";
 import { z } from "zod";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { format } from "date-fns";
+import { format, differenceInHours, differenceInMinutes, differenceInSeconds, differenceInDays } from "date-fns";
 
 /**
  * Zod schema for car form validation with support for both sale and auction cars
@@ -68,6 +68,54 @@ const carFormSchema = z.object({
 
 type CarFormData = z.infer<typeof carFormSchema>;
 
+interface CountdownTimerProps {
+  endTime: string | Date;
+}
+
+function CountdownTimer({ endTime }: CountdownTimerProps) {
+  const [timeLeft, setTimeLeft] = useState<string>("");
+
+  useEffect(() => {
+    const calculateTimeLeft = () => {
+      const now = new Date();
+      const end = typeof endTime === 'string' ? new Date(endTime) : endTime;
+      
+      if (end <= now) {
+        setTimeLeft("Ended");
+        return;
+      }
+
+      const days = differenceInDays(end, now);
+      const hours = differenceInHours(end, now) % 24;
+      const minutes = differenceInMinutes(end, now) % 60;
+
+      if (days > 0) {
+        setTimeLeft(`${days}d ${hours}h ${minutes}m`);
+      } else if (hours > 0) {
+        setTimeLeft(`${hours}h ${minutes}m`);
+      } else {
+        setTimeLeft(`${minutes}m`);
+      }
+    };
+
+    calculateTimeLeft();
+    const interval = setInterval(calculateTimeLeft, 60000);
+
+    return () => clearInterval(interval);
+  }, [endTime]);
+
+  if (timeLeft === "Ended") {
+    return null;
+  }
+
+  return (
+    <Badge variant="outline" className="flex items-center gap-1">
+      <Clock className="w-3 h-3" />
+      {timeLeft}
+    </Badge>
+  );
+}
+
 /**
  * Helper function to parse and generate image URLs in multiple formats
  * 
@@ -107,7 +155,6 @@ export default function AdminCars() {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 20;
 
-  // Redirect non-admin users
   if (!isAuthenticated || user?.role !== "admin") {
     return (
       <div className="container mx-auto px-4 py-8 text-center">
@@ -120,7 +167,6 @@ export default function AdminCars() {
     );
   }
 
-  // Fetch cars with pagination
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["/api/cars", currentPage, pageSize],
     queryFn: async () => {
@@ -136,13 +182,22 @@ export default function AdminCars() {
   const startIndex = (currentPage - 1) * pageSize + 1;
   const endIndex = Math.min(currentPage * pageSize, totalCount);
 
-  // Fetch bids for a specific car when viewing bids
   const { data: bids = [], isLoading: bidsLoading } = useQuery<Bid[]>({
     queryKey: ["/api/cars", viewingBids?.id, "bids"],
     enabled: !!viewingBids?.id,
   });
 
-  // Create car mutation
+  const getBidCountForCar = (carId: string): number => {
+    const carBids = queryClient.getQueryData<Bid[]>(["/api/cars", carId, "bids"]);
+    return carBids?.length || 0;
+  };
+
+  const getHighestBidForCar = (carId: string): number | null => {
+    const carBids = queryClient.getQueryData<Bid[]>(["/api/cars", carId, "bids"]);
+    if (!carBids || carBids.length === 0) return null;
+    return Math.max(...carBids.map(bid => bid.bidAmount));
+  };
+
   const createCarMutation = useMutation({
     mutationFn: async (data: CarFormData) => {
       const response = await apiRequest("POST", "/api/cars", data);
@@ -164,7 +219,6 @@ export default function AdminCars() {
     },
   });
 
-  // Update car mutation
   const updateCarMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: CarFormData }) => {
       const response = await apiRequest("PUT", `/api/cars/${id}`, data);
@@ -186,7 +240,6 @@ export default function AdminCars() {
     },
   });
 
-  // Delete car mutation
   const deleteCarMutation = useMutation({
     mutationFn: async (id: string) => {
       await apiRequest("DELETE", `/api/cars/${id}`);
@@ -206,8 +259,31 @@ export default function AdminCars() {
     },
   });
 
-  // Filter cars by type
-  const filteredCars = cars.filter(car => {
+  const updateBidStatusMutation = useMutation({
+    mutationFn: async ({ bidId, status }: { bidId: string; status: "accepted" | "rejected" }) => {
+      const response = await apiRequestJson("PATCH", `/api/admin/bids/${bidId}`, { status });
+      return response;
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/bids"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cars"] });
+      if (viewingBids?.id) {
+        queryClient.invalidateQueries({ queryKey: ["/api/cars", viewingBids.id, "bids"] });
+      }
+      toast({
+        title: "Success",
+        description: `Bid ${variables.status} successfully!`,
+      });
+    },
+    onError: (error: Error) => {
+      handleMutationError(error, {
+        title: "Failed to Update Bid",
+        defaultMessage: "Could not update bid status. Please try again.",
+      });
+    },
+  });
+
+  const filteredCars = cars.filter((car: CarType) => {
     switch (selectedTab) {
       case "sale": return !car.isAuction;
       case "auction": return car.isAuction;
@@ -217,7 +293,20 @@ export default function AdminCars() {
     }
   });
 
-  // Add car form
+  useEffect(() => {
+    filteredCars.forEach((car: CarType) => {
+      if (car.isAuction && car.id) {
+        queryClient.prefetchQuery({
+          queryKey: ["/api/cars", car.id, "bids"],
+          queryFn: async () => {
+            const response = await apiRequest("GET", `/api/cars/${car.id}/bids`);
+            return response.json();
+          },
+        });
+      }
+    });
+  }, [filteredCars, queryClient]);
+
   const addForm = useForm<CarFormData>({
     resolver: zodResolver(carFormSchema),
     defaultValues: {
@@ -237,37 +326,44 @@ export default function AdminCars() {
     },
   });
 
-  // Edit car form
   const editForm = useForm<CarFormData>({
     resolver: zodResolver(carFormSchema),
   });
 
-  // Handle add car
   const handleAddCar = (data: CarFormData) => {
-    const transformedData = {
+    const transformedData: any = {
       ...data,
-      auctionEndTime: data.auctionEndTime ? new Date(data.auctionEndTime).toISOString() : undefined,
+      auctionEndTime: data.auctionEndTime && data.auctionEndTime.trim() !== '' 
+        ? new Date(data.auctionEndTime).toISOString() 
+        : undefined,
     };
+
+    if (transformedData.auctionEndTime === undefined) {
+      delete transformedData.auctionEndTime;
+    }
     createCarMutation.mutate(transformedData);
   };
 
-  // Handle edit car
   const handleEditCar = (data: CarFormData) => {
     if (editingCar) {
-      const transformedData = {
+      const transformedData: any = {
         ...data,
-        auctionEndTime: data.auctionEndTime ? new Date(data.auctionEndTime).toISOString() : undefined,
+        auctionEndTime: data.auctionEndTime && data.auctionEndTime.trim() !== '' 
+          ? new Date(data.auctionEndTime).toISOString() 
+          : undefined,
       };
+
+      if (transformedData.auctionEndTime === undefined) {
+        delete transformedData.auctionEndTime;
+      }
       updateCarMutation.mutate({ id: editingCar.id, data: transformedData });
     }
   };
 
-  // Handle delete car
   const handleDeleteCar = (id: string) => {
     deleteCarMutation.mutate(id);
   };
 
-  // Open edit dialog
   const openEditDialog = (car: CarType) => {
     setEditingCar(car);
     editForm.reset({
@@ -279,13 +375,11 @@ export default function AdminCars() {
     });
   };
 
-  // Check if auction is active
   const isAuctionActive = (car: CarType) => {
     if (!car.isAuction || !car.auctionEndTime) return false;
     return new Date(car.auctionEndTime) > new Date();
   };
 
-  // Get condition badge color
   const getConditionColor = (condition: string) => {
     switch (condition.toLowerCase()) {
       case "excellent": return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300";
@@ -295,12 +389,11 @@ export default function AdminCars() {
     }
   };
 
-  // Calculate stats
   const stats = {
     totalCars: cars.length,
-    carsForSale: cars.filter(c => !c.isAuction).length,
-    auctionCars: cars.filter(c => c.isAuction).length,
-    activeAuctions: cars.filter(c => c.isAuction && isAuctionActive(c)).length,
+    carsForSale: cars.filter((c: CarType) => !c.isAuction).length,
+    auctionCars: cars.filter((c: CarType) => c.isAuction).length,
+    activeAuctions: cars.filter((c: CarType) => c.isAuction && isAuctionActive(c)).length,
   };
 
   if (isLoading) {
@@ -699,7 +792,7 @@ export default function AdminCars() {
             </Card>
           ) : (
             <div className="grid gap-4">
-              {filteredCars.map((car) => (
+              {filteredCars.map((car: CarType) => (
                 <Card key={car.id} className="hover-elevate">
                   <div className="flex">
                     <div className="w-48 h-32 bg-muted rounded-l-lg overflow-hidden flex-shrink-0">
@@ -730,17 +823,34 @@ export default function AdminCars() {
                               {car.mileage.toLocaleString()} km • {car.fuelType} • {car.location}
                             </CardDescription>
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <Badge className={getConditionColor(car.condition)}>
                               {car.condition}
                             </Badge>
                             {car.isAuction ? (
-                              <Badge className={isAuctionActive(car) 
-                                ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
-                                : "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300"
-                              }>
-                                {isAuctionActive(car) ? "Live Auction" : "Ended"}
-                              </Badge>
+                              <>
+                                <Badge className={isAuctionActive(car) 
+                                  ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300"
+                                  : "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-300"
+                                }>
+                                  {isAuctionActive(car) ? "Live Auction" : "Ended"}
+                                </Badge>
+                                {getBidCountForCar(car.id) > 0 && (
+                                  <Badge variant="outline" className="flex items-center gap-1">
+                                    <Gavel className="w-3 h-3" />
+                                    {getBidCountForCar(car.id)} {getBidCountForCar(car.id) === 1 ? 'Bid' : 'Bids'}
+                                  </Badge>
+                                )}
+                                {getHighestBidForCar(car.id) && (
+                                  <Badge variant="outline" className="flex items-center gap-1 bg-primary/10">
+                                    <TrendingUp className="w-3 h-3" />
+                                    ₹{getHighestBidForCar(car.id)?.toLocaleString()}
+                                  </Badge>
+                                )}
+                                {car.auctionEndTime && isAuctionActive(car) && (
+                                  <CountdownTimer endTime={car.auctionEndTime} />
+                                )}
+                              </>
                             ) : (
                               <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300">
                                 For Sale
@@ -861,21 +971,94 @@ export default function AdminCars() {
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {bids.map((bid, index) => (
                 <div key={bid.id} className="flex justify-between items-center p-4 border rounded hover:bg-muted/50">
-                  <div>
-                    <div className="font-semibold" data-testid={`bid-amount-${index}`}>
-                      ₹{bid.bidAmount.toLocaleString()}
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="font-semibold" data-testid={`bid-amount-${index}`}>
+                        ₹{bid.bidAmount.toLocaleString()}
+                      </div>
+                      <Badge className={
+                        bid.status === "pending" ? "bg-yellow-500 text-white" :
+                        bid.status === "accepted" ? "bg-green-500 text-white" :
+                        "bg-red-500 text-white"
+                      }>
+                        {bid.status.charAt(0).toUpperCase() + bid.status.slice(1)}
+                      </Badge>
                     </div>
                     <div className="text-sm text-muted-foreground" data-testid={`bid-email-${index}`}>
                       {bid.bidderEmail}
                     </div>
                   </div>
-                  <div className="text-sm text-muted-foreground" data-testid={`bid-time-${index}`}>
-                    {format(new Date(bid.bidTime), "MMM dd, hh:mm a")}
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm text-muted-foreground mr-2" data-testid={`bid-time-${index}`}>
+                      {format(new Date(bid.bidTime), "MMM dd, hh:mm a")}
+                    </div>
+                    {bid.status === "pending" && (
+                      <>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button size="sm" variant="outline" className="text-green-600 hover:text-green-700">
+                              <Check className="w-4 h-4 mr-1" />
+                              Accept
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Accept Bid</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to accept this bid of ₹{bid.bidAmount.toLocaleString()} from {bid.bidderEmail}?
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => updateBidStatusMutation.mutate({ bidId: bid.id, status: "accepted" })}
+                                className="bg-green-600 hover:bg-green-700"
+                              >
+                                Accept Bid
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button size="sm" variant="outline" className="text-red-600 hover:text-red-700">
+                              <X className="w-4 h-4 mr-1" />
+                              Reject
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Reject Bid</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to reject this bid of ₹{bid.bidAmount.toLocaleString()} from {bid.bidderEmail}?
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => updateBidStatusMutation.mutate({ bidId: bid.id, status: "rejected" })}
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              >
+                                Reject Bid
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </>
+                    )}
                   </div>
                 </div>
               ))}
             </div>
           )}
+          <DialogFooter className="mt-4">
+            <Link href={`/admin/bids?carId=${viewingBids?.id}`}>
+              <Button variant="outline">
+                <List className="w-4 h-4 mr-2" />
+                View All Bids for this Car
+              </Button>
+            </Link>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

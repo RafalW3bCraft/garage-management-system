@@ -6,11 +6,13 @@ import {
   isErrorRetryable,
   type CommunicationResult 
 } from '@shared/communication-types';
+import { 
+  formatWhatsAppNumber, 
+  extractCountryCode 
+} from '@shared/phone-utils';
 import { BaseCommunicationService, type RetryConfig, type CircuitBreakerConfig } from './base-communication-service';
-import { OTPService } from './otp-service';
 import { sendEmailV2 } from './email-service';
 
-// Twilio error and response types
 interface TwilioError extends Error {
   code?: string | number;
   status?: number;
@@ -38,18 +40,15 @@ interface TwilioClient {
   };
 }
 
-// WhatsApp message types for different business scenarios
 export type WhatsAppMessageType = 
   | 'appointment_confirmation' 
   | 'booking_request'
   | 'status_update'
   | 'bid_notification'
-  | 'welcome_message'
-  | 'otp';
+  | 'welcome_message';
 
-// Legacy interface for backward compatibility - use CommunicationResult instead
 export interface WhatsAppSendResult extends CommunicationResult {
-  // All functionality moved to CommunicationResult
+
 }
 
 export interface AppointmentConfirmationData {
@@ -100,26 +99,27 @@ class WhatsAppServiceHelper extends BaseCommunicationService {
   }
 }
 
+interface TwilioCredentials {
+  accountSid: string;
+  apiKey: string;
+  apiKeySecret: string;
+  phoneNumber: string;
+}
+
 export class WhatsAppService {
-  private static readonly TWILIO_PHONE = process.env.TWILIO_WHATSAPP_NUMBER || 'whatsapp:+14155238886';
-  
-  // Configuration from environment variables with fallback defaults
-  private static readonly INITIAL_RETRY_DELAY = parseInt(process.env.WHATSAPP_RETRY_DELAY || '1000'); // ms
-  private static readonly MAX_RETRY_DELAY = parseInt(process.env.WHATSAPP_MAX_RETRY_DELAY || '60000'); // ms
+  private static twilioPhone: string | null = null;
+  private static twilioCredentials: TwilioCredentials | null = null;
+
+  private static readonly INITIAL_RETRY_DELAY = parseInt(process.env.WHATSAPP_RETRY_DELAY || '1000');
+  private static readonly MAX_RETRY_DELAY = parseInt(process.env.WHATSAPP_MAX_RETRY_DELAY || '60000');
   private static readonly MAX_RETRIES = parseInt(process.env.WHATSAPP_MAX_RETRIES || '3');
   private static readonly BACKOFF_MULTIPLIER = parseFloat(process.env.WHATSAPP_BACKOFF_MULTIPLIER || '2');
-  
-  // Circuit breaker configuration
+
   private static readonly CIRCUIT_FAILURE_THRESHOLD = parseInt(process.env.WHATSAPP_CIRCUIT_THRESHOLD || '5');
   private static readonly CIRCUIT_RECOVERY_MINUTES = parseInt(process.env.WHATSAPP_CIRCUIT_RECOVERY_MIN || '5');
-  
-  // Fallback configuration
-  // NOTE: SMS fallback is disabled by default as OTPService only supports OTP messages, not arbitrary messages
-  // To enable SMS fallback, set WHATSAPP_ENABLE_SMS_FALLBACK=true and extend OTPService with sendSMS method
-  private static readonly ENABLE_SMS_FALLBACK = process.env.WHATSAPP_ENABLE_SMS_FALLBACK === 'true'; // default false (not yet implemented)
-  private static readonly ENABLE_EMAIL_FALLBACK = process.env.WHATSAPP_ENABLE_EMAIL_FALLBACK !== 'false'; // default true
-  
-  // Helper instance with circuit breaker and retry logic
+
+  private static readonly ENABLE_EMAIL_FALLBACK = process.env.WHATSAPP_ENABLE_EMAIL_FALLBACK !== 'false';
+
   private static readonly helper = new WhatsAppServiceHelper(
     {
       initialDelayMs: WhatsAppService.INITIAL_RETRY_DELAY,
@@ -134,156 +134,142 @@ export class WhatsAppService {
   );
   
   /**
-   * Production safety checks for required environment variables
+   * Get Twilio credentials from Replit Connector
    */
-  private static checkProductionRequirements(): void {
-    const isProduction = process.env.NODE_ENV === 'production';
-    
-    if (isProduction) {
-      if (!process.env.TWILIO_ACCOUNT_SID) {
-        throw new Error('TWILIO_ACCOUNT_SID must be set in production');
+  private static async getTwilioCredentials(): Promise<TwilioCredentials> {
+    if (this.twilioCredentials) {
+      return this.twilioCredentials;
+    }
+
+    const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+    const xReplitToken = process.env.REPL_IDENTITY 
+      ? 'repl ' + process.env.REPL_IDENTITY 
+      : process.env.WEB_REPL_RENEWAL 
+      ? 'depl ' + process.env.WEB_REPL_RENEWAL 
+      : null;
+
+    if (!xReplitToken || !hostname) {
+      console.warn('[WhatsApp] ⚠️ Replit connector environment not available, falling back to env vars');
+      
+      if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN) {
+        const phoneNumber = process.env.TWILIO_WHATSAPP_NUMBER || process.env.TWILIO_PHONE_NUMBER || 'whatsapp:+14155238886';
+        this.twilioCredentials = {
+          accountSid: process.env.TWILIO_ACCOUNT_SID,
+          apiKey: process.env.TWILIO_ACCOUNT_SID,
+          apiKeySecret: process.env.TWILIO_AUTH_TOKEN,
+          phoneNumber
+        };
+        return this.twilioCredentials;
       }
       
-      if (!process.env.TWILIO_AUTH_TOKEN) {
-        throw new Error('TWILIO_AUTH_TOKEN must be set in production');
+      throw new Error('Twilio credentials not available');
+    }
+
+    try {
+      const response = await fetch(
+        'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=twilio',
+        {
+          headers: {
+            'Accept': 'application/json',
+            'X_REPLIT_TOKEN': xReplitToken
+          }
+        }
+      );
+
+      const data = await response.json();
+      const connectionSettings = data.items?.[0];
+
+      if (!connectionSettings || !connectionSettings.settings.account_sid || !connectionSettings.settings.api_key || !connectionSettings.settings.api_key_secret) {
+        throw new Error('Twilio connector not properly configured');
       }
+
+      this.twilioCredentials = {
+        accountSid: connectionSettings.settings.account_sid,
+        apiKey: connectionSettings.settings.api_key,
+        apiKeySecret: connectionSettings.settings.api_key_secret,
+        phoneNumber: connectionSettings.settings.phone_number || 'whatsapp:+14155238886'
+      };
+
+      console.log('[WhatsApp] ✅ Retrieved Twilio credentials from Replit Connector');
+      return this.twilioCredentials;
+    } catch (error) {
+      const err = error as Error;
+      console.error('[WhatsApp] ❌ Failed to get Twilio credentials from connector:', err.message);
+      throw error;
     }
   }
 
   /**
-   * Initialize Twilio client
+   * Get WhatsApp phone number
+   */
+  private static async getWhatsAppPhone(): Promise<string> {
+    if (this.twilioPhone) {
+      return this.twilioPhone;
+    }
+
+    const credentials = await this.getTwilioCredentials();
+    let phoneNumber = credentials.phoneNumber;
+
+    if (!phoneNumber.startsWith('whatsapp:')) {
+      phoneNumber = `whatsapp:${phoneNumber}`;
+    }
+
+    this.twilioPhone = phoneNumber;
+    return phoneNumber;
+  }
+
+  /**
+   * Initialize Twilio client using Replit Connector
    */
   private static async getTwilioClient(): Promise<TwilioClient> {
-    console.log('[WhatsApp] 🔧 Initializing Twilio client...');
-    
-    this.checkProductionRequirements();
-    
-    const hasSID = !!process.env.TWILIO_ACCOUNT_SID;
-    const hasToken = !!process.env.TWILIO_AUTH_TOKEN;
-    const sidPreview = process.env.TWILIO_ACCOUNT_SID ? `${process.env.TWILIO_ACCOUNT_SID.substring(0, 6)}...` : 'NOT_SET';
-    
-    console.log(`[WhatsApp] 📋 Twilio credentials status: SID=${hasSID ? 'SET' : 'NOT_SET'} (${sidPreview}), Token=${hasToken ? 'SET' : 'NOT_SET'}`);
-    
-    // In development, return a mock client for testing
-    if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
-      console.log('[WhatsApp] ⚠️ Development mode - returning mock client (no credentials)');
+    try {
+      const credentials = await this.getTwilioCredentials();
+      
+      console.log('[WhatsApp] 🔍 Twilio client initialization:');
+      console.log(`[WhatsApp]    - Account SID: ${credentials.accountSid.substring(0, 6)}...`);
+      console.log(`[WhatsApp]    - Phone: ${credentials.phoneNumber}`);
+      console.log(`[WhatsApp]    - NODE_ENV: ${process.env.NODE_ENV || 'not set'}`);
+
+      const { default: twilio } = await import('twilio');
+      const client = twilio(credentials.apiKey, credentials.apiKeySecret, {
+        accountSid: credentials.accountSid
+      }) as unknown as TwilioClient;
+      
+      console.log('[WhatsApp] ✅ Twilio client initialized successfully via Replit Connector');
+      return client;
+    } catch (error) {
+      const err = error as Error;
+      console.error(`[WhatsApp] ❌ Twilio initialization failed: ${err.message}`);
+      
+      console.warn('[WhatsApp] ⚠️ Using MOCK client for testing');
       return {
         messages: {
           create: async (options: TwilioMessageOptions): Promise<TwilioMessageResponse> => {
-            console.log(`[WhatsApp] 📱 Mock message sent to ${options.to}: ${options.body}`);
+            console.log('[WhatsApp] 🎭 MOCK: Would send message:', {
+              to: options.to,
+              from: options.from,
+              bodyLength: options.body.length
+            });
             return { sid: 'mock_' + Date.now() };
           }
         }
       };
     }
+  }
 
-    // Use dynamic import for ES module compatibility
+  /**
+   * Wrapper for formatWhatsAppNumber with WhatsApp-specific logging
+   */
+  private static formatWhatsAppNumberWithLogging(phone: string, countryCode: string): string {
+    
     try {
-      console.log('[WhatsApp] 📦 Loading Twilio package...');
-      const { default: twilio } = await import('twilio');
-      const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN) as unknown as TwilioClient;
-      console.log('[WhatsApp] ✅ Twilio client initialized successfully');
-      return client;
+      const formattedNumber = formatWhatsAppNumber(phone, countryCode);
+      return formattedNumber;
     } catch (error) {
       const err = error as Error;
-      console.error(`[WhatsApp] ❌ Twilio initialization failed: ${err.message}`);
-      console.error('[WhatsApp] 📦 Twilio package not found. Install with: npm install twilio');
-      throw new Error('Twilio package not installed');
+      console.error(`[WhatsApp] ❌ Validation failed: ${err.message}`);
+      throw error;
     }
-  }
-
-  /**
-   * Comprehensive trunk prefix mapping for international phone numbers
-   */
-  private static readonly TRUNK_PREFIX_MAP: { [countryCode: string]: { prefix: string; name: string } } = {
-    '44': { prefix: '0', name: 'UK' },
-    '61': { prefix: '0', name: 'Australia' },
-    '65': { prefix: '0', name: 'Singapore' },
-    '33': { prefix: '0', name: 'France' },
-    '49': { prefix: '0', name: 'Germany' },
-    '39': { prefix: '0', name: 'Italy' },
-    '34': { prefix: '0', name: 'Spain' },
-    '81': { prefix: '0', name: 'Japan' },
-    '82': { prefix: '0', name: 'South Korea' },
-    '86': { prefix: '0', name: 'China' },
-    '60': { prefix: '0', name: 'Malaysia' },
-    '66': { prefix: '0', name: 'Thailand' },
-    '971': { prefix: '0', name: 'UAE' },
-    '966': { prefix: '0', name: 'Saudi Arabia' },
-    '91': { prefix: '0', name: 'India' },
-    '92': { prefix: '0', name: 'Pakistan' },
-    '94': { prefix: '0', name: 'Sri Lanka' },
-    '90': { prefix: '0', name: 'Turkey' },
-    '30': { prefix: '0', name: 'Greece' },
-    '31': { prefix: '0', name: 'Netherlands' },
-    '32': { prefix: '0', name: 'Belgium' },
-    '43': { prefix: '0', name: 'Austria' },
-    '47': { prefix: '0', name: 'Norway' },
-    '48': { prefix: '0', name: 'Poland' },
-    '51': { prefix: '0', name: 'Peru' },
-    '52': { prefix: '0', name: 'Mexico' },
-    '54': { prefix: '0', name: 'Argentina' },
-    '55': { prefix: '0', name: 'Brazil' },
-  };
-  
-  /**
-   * Enhanced phone number normalization with comprehensive trunk prefix support
-   */
-  private static normalizePhone(phone: string, countryCode: string): string {
-    let cleanPhone = phone.replace(/\D/g, '');
-    const cleanCountryCode = countryCode.replace(/\D/g, '');
-    
-    const trunkInfo = this.TRUNK_PREFIX_MAP[cleanCountryCode];
-    if (trunkInfo && cleanPhone.startsWith(trunkInfo.prefix)) {
-      cleanPhone = cleanPhone.substring(trunkInfo.prefix.length);
-    }
-    
-    return cleanPhone;
-  }
-
-  /**
-   * Format phone number to E.164 format for WhatsApp (international standard)
-   */
-  private static formatWhatsAppNumber(phone: string, countryCode: string): string {
-    console.log(`[WhatsApp] 📞 Formatting phone number - Input: phone="${phone}", countryCode="${countryCode}"`);
-    
-    if (!phone || !countryCode) {
-      const error = 'Phone number and country code are required';
-      console.error(`[WhatsApp] ❌ Validation failed: ${error}`);
-      throw new Error(error);
-    }
-
-    const cleanCountryCode = countryCode.replace(/\D/g, '');
-    console.log(`[WhatsApp] 🔧 Clean country code: "${cleanCountryCode}"`);
-    
-    const normalizedPhone = this.normalizePhone(phone, countryCode);
-    console.log(`[WhatsApp] 🔧 Normalized phone: "${normalizedPhone}"`);
-    
-    if (!normalizedPhone || normalizedPhone.length < 6 || normalizedPhone.length > 14) {
-      const error = 'Invalid phone number length (must be 6-14 digits after normalization)';
-      console.error(`[WhatsApp] ❌ Validation failed: ${error} - Got ${normalizedPhone?.length || 0} digits`);
-      throw new Error(error);
-    }
-    
-    if (!cleanCountryCode || cleanCountryCode.length === 0) {
-      const error = 'Invalid country code';
-      console.error(`[WhatsApp] ❌ Validation failed: ${error}`);
-      throw new Error(error);
-    }
-    
-    const fullNumber = cleanCountryCode + normalizedPhone;
-    console.log(`[WhatsApp] 🔧 Full E.164 number: "+${fullNumber}"`);
-    
-    if (fullNumber.length < 8 || fullNumber.length > 15) {
-      const error = `Invalid E.164 phone number length: ${fullNumber.length} digits (must be 8-15)`;
-      console.error(`[WhatsApp] ❌ Validation failed: ${error}`);
-      throw new Error(error);
-    }
-    
-    const formattedNumber = `whatsapp:+${fullNumber}`;
-    console.log(`[WhatsApp] ✅ Formatted WhatsApp number: "${formattedNumber}"`);
-    
-    return formattedNumber;
   }
 
   /**
@@ -378,12 +364,6 @@ Need help? Just reply to this message!
 *Ronak Motor Garage* - Your automotive partner`;
   }
 
-  /**
-   * Generate OTP verification message
-   */
-  private static generateOTPMessage(otpCode: string): string {
-    return `Your Ronak Motor verification code is: ${otpCode}. Valid for 5 minutes.`;
-  }
 
   /**
    * Generate service provider booking notification message
@@ -420,37 +400,28 @@ Please prepare for this service appointment. Contact the customer if you need an
     messageType: WhatsAppMessageType,
     appointmentId?: string
   ): Promise<TwilioMessageResponse> {
-    console.log(`[WhatsApp] 📤 Sending ${messageType} message...`);
-    console.log(`[WhatsApp] 📋 Message parameters:`);
+    console.log('[WhatsApp] 📤 Attempting to send message:');
     console.log(`[WhatsApp]    - To: ${to}`);
-    console.log(`[WhatsApp]    - From: ${this.TWILIO_PHONE}`);
-    console.log(`[WhatsApp]    - Message type: ${messageType}`);
+    console.log(`[WhatsApp]    - Type: ${messageType}`);
     console.log(`[WhatsApp]    - Message length: ${message.length} chars`);
-    console.log(`[WhatsApp]    - Message preview: ${message.substring(0, 100)}${message.length > 100 ? '...' : ''}`);
     if (appointmentId) {
       console.log(`[WhatsApp]    - Appointment ID: ${appointmentId}`);
     }
     
     const client = await this.getTwilioClient();
+    const fromPhone = await this.getWhatsAppPhone();
     
     const messageParams = {
       body: message,
-      from: this.TWILIO_PHONE,
+      from: fromPhone,
       to: to
     };
     
-    console.log(`[WhatsApp] 🚀 Calling Twilio API with params:`, JSON.stringify(messageParams, null, 2));
+    console.log(`[WhatsApp]    - From: ${fromPhone}`);
     
     try {
       const result = await client.messages.create(messageParams);
-      
-      console.log(`[WhatsApp] ✅ Message sent successfully!`);
-      console.log(`[WhatsApp] 📋 Twilio response:`);
-      console.log(`[WhatsApp]    - SID: ${result.sid}`);
-      console.log(`[WhatsApp]    - Status: ${result.status || 'N/A'}`);
-      console.log(`[WhatsApp]    - Direction: ${result.direction || 'N/A'}`);
-      console.log(`[WhatsApp]    - Price: ${result.price || 'N/A'}`);
-      
+      console.log(`[WhatsApp] ✅ Message sent successfully! SID: ${result.sid}`);
       return result;
     } catch (error) {
       const twilioError = error as TwilioError;
@@ -459,56 +430,29 @@ Please prepare for this service appointment. Contact the customer if you need an
       console.error(`[WhatsApp]    - Error code: ${twilioError.code || 'N/A'}`);
       console.error(`[WhatsApp]    - HTTP status: ${twilioError.status || 'N/A'}`);
       console.error(`[WhatsApp]    - More info: ${twilioError.moreInfo || 'N/A'}`);
-      console.error(`[WhatsApp]    - Full error:`, JSON.stringify(twilioError, null, 2));
+      
+      // Provide helpful guidance for common errors
+      if (twilioError.code === 63007) {
+        console.error(`[WhatsApp] 📋 SOLUTION: Error 63007 means the WhatsApp sender number is not configured.`);
+        console.error(`[WhatsApp]    To fix this:`);
+        console.error(`[WhatsApp]    1. Go to Twilio Console: https://console.twilio.com/us1/develop/sms/senders/whatsapp-senders`);
+        console.error(`[WhatsApp]    2. Enable WhatsApp for your number: ${fromPhone}`);
+        console.error(`[WhatsApp]    3. OR use Twilio WhatsApp Sandbox for testing`);
+        console.error(`[WhatsApp]    4. Update your Twilio connection settings in Replit with the enabled WhatsApp number`);
+      } else if (twilioError.code === 21211) {
+        console.error(`[WhatsApp] 📋 SOLUTION: Error 21211 - Invalid 'To' phone number.`);
+        console.error(`[WhatsApp]    The recipient number must be in WhatsApp format: whatsapp:+[country code][number]`);
+      } else if (twilioError.code === 21608) {
+        console.error(`[WhatsApp] 📋 SOLUTION: Error 21608 - The number is not a valid WhatsApp number.`);
+        console.error(`[WhatsApp]    The recipient must have an active WhatsApp account.`);
+      }
+      
       throw error;
     }
   }
 
   /**
-   * Attempt SMS fallback when WhatsApp fails
-   * 
-   * NOTE: SMS fallback is currently NOT IMPLEMENTED
-   * - OTPService only supports sending OTP verification codes, not arbitrary messages
-   * - To enable SMS fallback:
-   *   1. Extend OTPService with a generic sendSMS(phone, message) method
-   *   2. OR create a generic SMS gateway service
-   *   3. Set WHATSAPP_ENABLE_SMS_FALLBACK=true in environment
-   * 
-   * Current behavior: Returns failure immediately if enabled
-   * Recommended: Keep disabled and rely on Email fallback (fully functional)
-   * 
-   * @param phone - Phone number (national format)
-   * @param countryCode - Country code with + prefix
-   * @param message - Message content
-   * @returns CommunicationResult indicating SMS is not available
-   */
-  private static async attemptSMSFallback(
-    phone: string,
-    countryCode: string,
-    message: string
-  ): Promise<CommunicationResult> {
-    if (!this.ENABLE_SMS_FALLBACK) {
-      console.log('[WhatsApp] 🚫 SMS fallback is disabled (not implemented)');
-      return createCommunicationResult('sms', false, 'SMS fallback disabled - not yet implemented', {
-        errorType: 'service_unavailable'
-      });
-    }
-    
-    // SMS fallback is enabled but not implemented
-    console.log('[WhatsApp] ⚠️ SMS fallback is enabled but NOT IMPLEMENTED');
-    console.log('[WhatsApp] ℹ️ OTPService only supports OTP messages, not arbitrary messages');
-    console.log('[WhatsApp] 📝 To implement: Extend OTPService with sendSMS method or create SMS gateway');
-    
-    return createCommunicationResult('sms', false, 'SMS fallback not yet implemented - requires OTPService extension', {
-      errorType: 'service_unavailable',
-      metadata: { 
-        needsImplementation: true
-      }
-    });
-  }
-
-  /**
-   * Attempt email fallback when WhatsApp and SMS fail
+   * Attempt email fallback when WhatsApp fails
    * 
    * @param email - Email address (if available)
    * @param message - Message content
@@ -521,20 +465,16 @@ Please prepare for this service appointment. Contact the customer if you need an
     subject: string
   ): Promise<CommunicationResult> {
     if (!this.ENABLE_EMAIL_FALLBACK) {
-      console.log('[WhatsApp] 🚫 Email fallback is disabled');
       return createCommunicationResult('email', false, 'Email fallback disabled', {
         errorType: 'service_unavailable'
       });
     }
     
     if (!email) {
-      console.log('[WhatsApp] ⚠️ Email fallback skipped - no email address provided');
       return createCommunicationResult('email', false, 'No email address available', {
         errorType: 'validation'
       });
     }
-    
-    console.log('[WhatsApp] 📧 Attempting email fallback');
     
     try {
       const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'noreply@ronakmotorgarage.com';
@@ -547,9 +487,7 @@ Please prepare for this service appointment. Contact the customer if you need an
       });
       
       if (result.success) {
-        console.log('[WhatsApp] ✅ Email fallback succeeded');
       } else {
-        console.log('[WhatsApp] ❌ Email fallback failed');
       }
       
       return result;
@@ -579,31 +517,15 @@ Please prepare for this service appointment. Contact the customer if you need an
     appointmentId?: string,
     fallbackEmail?: string
   ): Promise<WhatsAppSendResult> {
-    console.log(`[WhatsApp] 📱 Sending ${messageType} message to ${to}${appointmentId ? ` (Appointment: ${appointmentId})` : ''}`);
-    
-    // Extract phone number for database logging
+
     const phoneMatch = to.match(/whatsapp:\+([1-9]\d{6,14})$/);
     const fullNumber = phoneMatch ? phoneMatch[1] : to.replace(/[^\d]/g, '');
     const countryCode = this.extractCountryCode(fullNumber);
     const nationalNumber = fullNumber.substring(countryCode.length);
-    
-    // Check circuit breaker before attempting
+
     if (!this.helper['circuitBreaker'].canAttempt()) {
       const state = this.helper['circuitBreaker'].getState();
-      console.log(`[WhatsApp] ⚡ Circuit breaker is ${state} - fast failing without retry`);
-      
-      // Attempt fallback immediately
-      console.log('[WhatsApp] 🔄 Attempting fallback due to circuit breaker open');
-      const smsFallback = await this.attemptSMSFallback(nationalNumber, `+${countryCode}`, message);
-      if (smsFallback.success) {
-        return {
-          success: true,
-          message: 'Message delivered via SMS fallback (circuit breaker open)',
-          service: 'sms' as const,
-          fallbackUsed: 'sms'
-        };
-      }
-      
+
       const emailSubject = `${messageType.replace('_', ' ')} - Ronak Motor Garage`;
       const emailFallback = await this.attemptEmailFallback(fallbackEmail, message, emailSubject);
       if (emailFallback.success) {
@@ -617,14 +539,13 @@ Please prepare for this service appointment. Contact the customer if you need an
       
       return {
         success: false,
-        message: `WhatsApp circuit breaker is ${state}, all fallbacks failed`,
+        message: `WhatsApp circuit breaker is ${state}, email fallback failed`,
         service: 'whatsapp' as const,
         error: 'Circuit breaker open, service unavailable',
         circuitBreakerOpen: true
       };
     }
-    
-    // Log initial message in database
+
     let messageId: string | null = null;
     try {
       const storage = await getStorage();
@@ -638,21 +559,18 @@ Please prepare for this service appointment. Contact the customer if you need an
         providerResponse: JSON.stringify({ initiatedAt: new Date().toISOString() })
       });
       messageId = messageRecord.id;
-      console.log(`[WhatsApp] 💾 Message logged in database (ID: ${messageId})`);
     } catch (dbError) {
       const err = dbError as Error;
       console.error(`[WhatsApp] ⚠️ Database logging failed: ${err.message}`);
     }
-    
-    // Attempt to send with retries
+
     const operationName = `send ${messageType} to ${to}`;
     const { result, success, error, attempts } = await this.helper['executeWithProtection'](
       () => this.sendMessageCore(to, message, messageType, appointmentId),
       operationName,
       { skipCircuitBreaker: true }
     );
-    
-    // Update database with final result
+
     if (messageId) {
       try {
         const storage = await getStorage();
@@ -689,8 +607,7 @@ Please prepare for this service appointment. Contact the customer if you need an
         console.error(`[WhatsApp] ⚠️ Failed to update database: ${err.message}`);
       }
     }
-    
-    // Return success if WhatsApp worked
+
     if (success && result) {
       return {
         success: true,
@@ -701,49 +618,15 @@ Please prepare for this service appointment. Contact the customer if you need an
         totalAttempts: attempts
       };
     }
-    
-    // WhatsApp failed - attempt fallbacks
+
     const twilioError = error as TwilioError;
     console.error(`[WhatsApp] ❌ Failed after ${attempts} attempts: ${twilioError.message}`);
-    
-    // Try SMS fallback
-    console.log('[WhatsApp] 🔄 Attempting SMS fallback');
-    const smsFallback = await this.attemptSMSFallback(nationalNumber, `+${countryCode}`, message);
-    
-    if (smsFallback.success) {
-      // Update database to reflect SMS fallback was used
-      if (messageId) {
-        try {
-          const storage = await getStorage();
-          await storage.updateWhatsAppMessage(messageId, {
-            status: 'fallback_sent',
-            providerResponse: JSON.stringify({ 
-              originalError: twilioError.message,
-              fallbackMethod: 'sms',
-              fallbackSuccess: true
-            })
-          });
-        } catch (dbError) {
-          console.error(`[WhatsApp] ⚠️ Failed to update fallback status: ${(dbError as Error).message}`);
-        }
-      }
-      
-      return {
-        success: true,
-        message: 'Message delivered via SMS fallback',
-        service: 'sms' as const,
-        fallbackUsed: 'sms',
-        originalError: twilioError.message
-      };
-    }
-    
-    // Try email fallback
-    console.log('[WhatsApp] 🔄 Attempting email fallback');
+
     const emailSubject = `${messageType.replace('_', ' ')} - Ronak Motor Garage`;
     const emailFallback = await this.attemptEmailFallback(fallbackEmail, message, emailSubject);
     
     if (emailFallback.success) {
-      // Update database to reflect email fallback was used
+
       if (messageId) {
         try {
           const storage = await getStorage();
@@ -768,9 +651,8 @@ Please prepare for this service appointment. Contact the customer if you need an
         originalError: twilioError.message
       };
     }
-    
-    // All attempts failed
-    console.error('[WhatsApp] ❌ All delivery methods failed (WhatsApp, SMS, Email)');
+
+    console.error('[WhatsApp] ❌ All delivery methods failed (WhatsApp, Email)');
     
     return {
       success: false,
@@ -789,14 +671,12 @@ Please prepare for this service appointment. Contact the customer if you need an
    * Uses longest match from known country codes
    */
   private static extractCountryCode(fullNumber: string): string {
-    // Remove any non-digit characters
+
     const digits = fullNumber.replace(/\D/g, '');
-    
-    // Try matching country codes from longest to shortest (1-4 digits)
+
     for (let length = 4; length >= 1; length--) {
       const possibleCode = digits.substring(0, length);
-      
-      // Check against known country codes (simplified list - extend as needed)
+
       const knownCodes = [
         '1', '7', '20', '27', '30', '31', '32', '33', '34', '36', '39', '40', '41', '43', '44', 
         '45', '46', '47', '48', '49', '51', '52', '53', '54', '55', '56', '57', '58', '60', '61',
@@ -820,8 +700,7 @@ Please prepare for this service appointment. Contact the customer if you need an
         return possibleCode;
       }
     }
-    
-    // Default to single digit if no match (covers most NANP countries)
+
     return digits.substring(0, 1);
   }
 
@@ -834,7 +713,7 @@ Please prepare for this service appointment. Contact the customer if you need an
     data: AppointmentConfirmationData,
     fallbackEmail?: string
   ): Promise<WhatsAppSendResult> {
-    const whatsappNumber = this.formatWhatsAppNumber(phone, countryCode);
+    const whatsappNumber = this.formatWhatsAppNumberWithLogging(phone, countryCode);
     const message = this.generateAppointmentConfirmationMessage(data);
     return this.sendMessage(whatsappNumber, message, 'appointment_confirmation', data.bookingId, fallbackEmail);
   }
@@ -848,7 +727,7 @@ Please prepare for this service appointment. Contact the customer if you need an
     data: StatusUpdateData,
     fallbackEmail?: string
   ): Promise<WhatsAppSendResult> {
-    const whatsappNumber = this.formatWhatsAppNumber(phone, countryCode);
+    const whatsappNumber = this.formatWhatsAppNumberWithLogging(phone, countryCode);
     const message = this.generateStatusUpdateMessage(data);
     return this.sendMessage(whatsappNumber, message, 'status_update', undefined, fallbackEmail);
   }
@@ -862,7 +741,7 @@ Please prepare for this service appointment. Contact the customer if you need an
     data: BidNotificationData,
     fallbackEmail?: string
   ): Promise<WhatsAppSendResult> {
-    const whatsappNumber = this.formatWhatsAppNumber(phone, countryCode);
+    const whatsappNumber = this.formatWhatsAppNumberWithLogging(phone, countryCode);
     const message = this.generateBidNotificationMessage(data);
     return this.sendMessage(whatsappNumber, message, 'bid_notification', undefined, fallbackEmail);
   }
@@ -876,7 +755,7 @@ Please prepare for this service appointment. Contact the customer if you need an
     customerName: string,
     fallbackEmail?: string
   ): Promise<WhatsAppSendResult> {
-    const whatsappNumber = this.formatWhatsAppNumber(phone, countryCode);
+    const whatsappNumber = this.formatWhatsAppNumberWithLogging(phone, countryCode);
     const message = this.generateWelcomeMessage(customerName);
     return this.sendMessage(whatsappNumber, message, 'welcome_message', undefined, fallbackEmail);
   }
@@ -890,54 +769,44 @@ Please prepare for this service appointment. Contact the customer if you need an
     data: ServiceProviderBookingData,
     fallbackEmail?: string
   ): Promise<WhatsAppSendResult> {
-    const whatsappNumber = this.formatWhatsAppNumber(phone, countryCode);
+    const whatsappNumber = this.formatWhatsAppNumberWithLogging(phone, countryCode);
     const message = this.generateServiceProviderBookingMessage(data);
     return this.sendMessage(whatsappNumber, message, 'booking_request', data.bookingId, fallbackEmail);
   }
 
-  /**
-   * Send OTP verification code via WhatsApp
-   */
-  static async sendOTPMessage(
-    phone: string,
-    countryCode: string,
-    otpCode: string
-  ): Promise<WhatsAppSendResult> {
-    console.log(`[WhatsApp] 🔐 Initiating OTP message send...`);
-    console.log(`[WhatsApp] 📋 OTP Details:`);
-    console.log(`[WhatsApp]    - Phone: ${phone}`);
-    console.log(`[WhatsApp]    - Country Code: ${countryCode}`);
-    console.log(`[WhatsApp]    - OTP Code: ${otpCode.substring(0, 2)}****`);
-    
-    // Validate and log TWILIO_WHATSAPP_NUMBER configuration
-    console.log(`[WhatsApp] 📞 TWILIO_WHATSAPP_NUMBER configuration:`);
-    console.log(`[WhatsApp]    - Value: ${this.TWILIO_PHONE}`);
-    console.log(`[WhatsApp]    - Format valid: ${this.TWILIO_PHONE.startsWith('whatsapp:+')}`);
-    
-    if (!this.TWILIO_PHONE.startsWith('whatsapp:+')) {
-      console.error(`[WhatsApp] ❌ TWILIO_WHATSAPP_NUMBER has invalid format!`);
-      console.error(`[WhatsApp]    - Expected format: whatsapp:+14155238886`);
-      console.error(`[WhatsApp]    - Actual value: ${this.TWILIO_PHONE}`);
-    }
-    
-    const whatsappNumber = this.formatWhatsAppNumber(phone, countryCode);
-    const message = this.generateOTPMessage(otpCode);
-    
-    console.log(`[WhatsApp] 📨 Generated OTP message: "${message}"`);
-    
-    return this.sendMessage(whatsappNumber, message, 'otp');
-  }
 
   /**
    * Validate phone number format for WhatsApp
    */
   static validatePhoneNumber(phone: string, countryCode: string): { valid: boolean; message?: string } {
     try {
-      this.formatWhatsAppNumber(phone, countryCode);
+      formatWhatsAppNumber(phone, countryCode);
       return { valid: true };
     } catch (error) {
       const err = error as Error;
       return { valid: false, message: err.message };
+    }
+  }
+
+  /**
+   * Validate WhatsApp phone number (alias for validatePhoneNumber for compatibility)
+   */
+  static validateWhatsAppNumber(phone: string, countryCode: string): { valid: boolean; message?: string } {
+    return this.validatePhoneNumber(phone, countryCode);
+  }
+
+  /**
+   * Get WhatsApp message history for a phone number
+   */
+  static async getMessageHistory(phone: string, limit: number = 20): Promise<any[]> {
+    try {
+      const storage = await getStorage();
+      const messages = await storage.getWhatsAppMessageHistory(phone, limit);
+      return messages;
+    } catch (error) {
+      const err = error as Error;
+      console.error(`[WhatsApp] ❌ Failed to get message history: ${err.message}`);
+      return [];
     }
   }
   
@@ -963,5 +832,131 @@ Please prepare for this service appointment. Contact the customer if you need an
    */
   static resetCircuitBreaker(): void {
     this.helper.resetCircuitBreaker();
+  }
+
+  /**
+   * Send bulk promotional WhatsApp messages to multiple users
+   * 
+   * @param recipients - Array of recipient objects with phone, countryCode, name, and optional email
+   * @param message - Message content to send
+   * @param messageSubject - Subject for email fallback
+   * @returns Object with success/failure counts and detailed results
+   */
+  static async sendBulkPromotionalMessages(
+    recipients: Array<{
+      phone: string;
+      countryCode: string;
+      name: string;
+      email?: string;
+    }>,
+    message: string,
+    messageSubject: string = 'Special Offer from Ronak Motor Garage'
+  ): Promise<{
+    total: number;
+    successful: number;
+    failed: number;
+    results: Array<{
+      phone: string;
+      name: string;
+      success: boolean;
+      method: 'whatsapp' | 'email' | 'none';
+      error?: string;
+    }>;
+  }> {
+    console.log(`[WhatsApp] 📢 Starting bulk promotional message to ${recipients.length} recipients`);
+    
+    const results: Array<{
+      phone: string;
+      name: string;
+      success: boolean;
+      method: 'whatsapp' | 'email' | 'none';
+      error?: string;
+    }> = [];
+
+    let successful = 0;
+    let failed = 0;
+
+    for (const recipient of recipients) {
+      try {
+        const personalizedMessage = message.replace(/\{name\}/g, recipient.name);
+        
+        const whatsappNumber = this.formatWhatsAppNumberWithLogging(
+          recipient.phone,
+          recipient.countryCode
+        );
+        
+        const result = await this.sendMessage(
+          whatsappNumber,
+          personalizedMessage,
+          'welcome_message',
+          undefined,
+          recipient.email
+        );
+
+        if (result.success) {
+          successful++;
+          results.push({
+            phone: recipient.phone,
+            name: recipient.name,
+            success: true,
+            method: result.service as 'whatsapp' | 'email'
+          });
+        } else {
+          failed++;
+          results.push({
+            phone: recipient.phone,
+            name: recipient.name,
+            success: false,
+            method: 'none',
+            error: result.error || 'Unknown error'
+          });
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+      } catch (error) {
+        const err = error as Error;
+        failed++;
+        results.push({
+          phone: recipient.phone,
+          name: recipient.name,
+          success: false,
+          method: 'none',
+          error: err.message
+        });
+        console.error(`[WhatsApp] ❌ Failed to send to ${recipient.name}: ${err.message}`);
+      }
+    }
+
+    console.log(`[WhatsApp] ✅ Bulk send complete: ${successful} successful, ${failed} failed out of ${recipients.length} total`);
+
+    return {
+      total: recipients.length,
+      successful,
+      failed,
+      results
+    };
+  }
+
+  /**
+   * Generate promotional message template
+   */
+  static generatePromotionalMessage(
+    recipientName: string,
+    offerTitle: string,
+    offerDetails: string,
+    validUntil?: string
+  ): string {
+    const validityText = validUntil ? `\n⏰ *Valid Until:* ${validUntil}` : '';
+    
+    return `🎉 *${offerTitle}*
+
+Hi ${recipientName}!
+
+${offerDetails}${validityText}
+
+📱 Visit us or call to avail this exclusive offer!
+
+*Ronak Motor Garage* - Your trusted automotive partner`;
   }
 }

@@ -109,7 +109,6 @@ export function AppointmentCard({
         description: `Appointment ${newStatus} successfully.`,
       });
 
-      // Refresh appointments
       queryClient.invalidateQueries({ 
         predicate: (query) => 
           typeof query.queryKey?.[0] === 'string' && 

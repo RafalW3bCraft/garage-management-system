@@ -24,7 +24,7 @@ import { User, Settings, Phone, Mail, MapPin, Calendar, Car, Camera, Save, Edit3
  * for date formatting and registration number validation
  */
 const profileSchema = updateProfileSchema.extend({
-  dateOfBirth: z.string().optional(), // UI uses YYYY-MM-DD format
+  dateOfBirth: z.string().optional(),
   registrationNumbers: z.string().optional().refine((regNumbers) => {
     if (!regNumbers) return true;
     const numbers = regNumbers.split(',').map(n => n.trim()).filter(n => n.length > 0);
@@ -69,7 +69,6 @@ export default function Profile() {
     },
   });
 
-  // Reset form with latest user data when user changes or entering edit mode
   useEffect(() => {
     if (user && isEditing) {
       form.reset({
@@ -90,12 +89,11 @@ export default function Profile() {
 
   const updateProfileMutation = useMutation({
     mutationFn: async (data: ProfileFormData) => {
-      // Process registration numbers
+
       const registrationNumbers = data.registrationNumbers 
         ? data.registrationNumbers.split(',').map(n => n.trim()).filter(n => n.length > 0)
         : [];
 
-      // Transform dateOfBirth from YYYY-MM-DD to RFC3339 format for server
       let formattedDateOfBirth: string | undefined = undefined;
       if (data.dateOfBirth) {
         formattedDateOfBirth = `${data.dateOfBirth}T00:00:00.000Z`;
@@ -140,8 +138,8 @@ export default function Profile() {
    * @returns {string} Up to 2 uppercase initials from the name
    * 
    * @example
-   * getInitials("John Doe") // Returns "JD"
-   * getInitials("Jane") // Returns "JA"
+   * getInitials("John Doe")
+   * getInitials("Jane")
    */
   const getInitials = (name: string) => {
     return name
@@ -160,8 +158,7 @@ export default function Profile() {
    */
   const getImageUrls = (profileImage: string | null | undefined) => {
     if (!profileImage) return null;
-    
-    // Handle object format (new imageUrls structure)
+
     if (typeof profileImage === 'object' && profileImage !== null) {
       const imgUrls = profileImage as { webp?: string; jpeg?: string; jpg?: string };
       return {
@@ -169,8 +166,7 @@ export default function Profile() {
         jpeg: imgUrls.jpeg || imgUrls.jpg || null
       };
     }
-    
-    // Legacy string format - convert to imageUrls format
+
     const baseUrl = profileImage.replace(/\.(jpg|jpeg|png|webp)$/i, '');
     return {
       webp: `${baseUrl}.webp`,
@@ -559,7 +555,7 @@ export default function Profile() {
                 </form>
               </Form>
             ) : (
-              // View Mode
+
               <div className="space-y-6">
                 {/* Contact Details */}
                 <div className="space-y-4">

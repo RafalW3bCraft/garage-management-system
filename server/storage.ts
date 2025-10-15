@@ -18,8 +18,6 @@ import {
   type InsertLocation,
   type Bid,
   type InsertBid,
-  type OtpVerification,
-  type InsertOtpVerification,
   type EmailVerificationToken,
   type InsertEmailVerificationToken,
   type WhatsAppMessage,
@@ -32,6 +30,11 @@ import {
   type InsertSiteSetting,
   type MediaLibrary,
   type InsertMediaLibrary,
+  type Invoice,
+  type InsertInvoice,
+  type InvoiceItem,
+  type InsertInvoiceItem,
+  type InvoiceWithItems,
   users,
   services,
   appointments,
@@ -41,26 +44,25 @@ import {
   contacts,
   locations,
   bids,
-  otpVerifications,
   emailVerificationTokens,
   whatsappMessages,
   adminAuditLogs,
   adminRateLimits,
   siteSettings,
-  mediaLibrary
+  mediaLibrary,
+  invoices,
+  invoiceItems
 } from "@shared/schema";
 import { getDb } from "./db";
-import { eq, and, desc, asc, gte, lte, ne, isNull, or, sql } from "drizzle-orm";
+import { eq, and, desc, asc, gte, lte, ne, isNull, or, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { LRUCache } from "lru-cache";
 
-// Database error interface
 interface DatabaseError extends Error {
   code?: string;
   constraint?: string;
 }
 
-// Car filter and sort options
 export interface CarFilterOptions {
   transmission?: string;
   bodyType?: string;
@@ -73,47 +75,64 @@ export interface CarFilterOptions {
   sortOrder?: 'asc' | 'desc';
 }
 
+export interface ContactFilterOptions {
+  page?: number;
+  limit?: number;
+  status?: string;
+  startDate?: string;
+  endDate?: string;
+  search?: string;
+}
+
+export interface InvoiceFilterOptions {
+  page?: number;
+  limit?: number;
+  status?: string;
+  startDate?: string;
+  endDate?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+}
+
 export interface IStorage {
-  // Users
+
   getUser(id: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByGoogleId(googleId: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
   updateUser(id: string, updates: Partial<User>): Promise<User | undefined>;
   linkGoogleAccount(userId: string, googleId: string): Promise<User | undefined>;
-  // Admin user management methods
+  deleteUser(id: string): Promise<boolean>;
+
   getUserCount(): Promise<number>;
   getAllUsers(offset?: number, limit?: number): Promise<User[]>;
 
-  // Customers
   getCustomer(id: string): Promise<Customer | undefined>;
   getCustomerByEmail(email: string): Promise<Customer | undefined>;
   getCustomerByUserId(userId: string): Promise<Customer | undefined>;
   createCustomer(customer: InsertCustomer): Promise<Customer>;
   updateCustomer(id: string, updates: Partial<InsertCustomer>): Promise<Customer | undefined>;
-  
-  // Services
+
   getAllServices(): Promise<Service[]>;
   getService(id: string): Promise<Service | undefined>;
   getServicesByCategory(category: string): Promise<Service[]>;
   createService(service: InsertService): Promise<Service>;
   updateService(id: string, updates: Partial<Service>): Promise<Service | undefined>;
   deleteService(id: string): Promise<void>;
-  
-  // Appointments
+
   getAllAppointments(offset?: number, limit?: number): Promise<AppointmentWithDetails[]>;
   getAppointmentCount(): Promise<number>;
   getAppointment(id: string): Promise<Appointment | undefined>;
   getAppointmentWithDetails(id: string): Promise<AppointmentWithDetails | undefined>;
   getAppointmentsByCustomer(customerId: string): Promise<AppointmentWithDetails[]>;
   getAppointmentsByService(serviceId: string): Promise<Appointment[]>;
+  getAppointmentsByLocation(locationId: string): Promise<Appointment[]>;
   createAppointment(appointment: InsertAppointment): Promise<Appointment>;
   updateAppointmentStatus(id: string, status: string): Promise<Appointment | undefined>;
   rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined>;
   checkAppointmentConflict(locationId: string, dateTime: Date, excludeAppointmentId?: string): Promise<boolean>;
   deleteAppointment(id: string): Promise<boolean>;
-  
-  // Cars
+
   getAllCars(offset?: number, limit?: number, filters?: CarFilterOptions): Promise<Car[]>;
   getCarCount(filters?: CarFilterOptions): Promise<number>;
   getCar(id: string): Promise<Car | undefined>;
@@ -122,49 +141,40 @@ export interface IStorage {
   createCar(car: InsertCar): Promise<Car>;
   updateCar(id: string, updates: Partial<Car>): Promise<Car | undefined>;
   deleteCar(id: string): Promise<boolean>;
-  
-  // Car Images
+
   getCarImages(carId: string): Promise<CarImage[]>;
   createCarImage(data: InsertCarImage): Promise<CarImage>;
   deleteCarImage(id: string): Promise<void>;
   updateCarImageOrder(id: string, displayOrder: number): Promise<void>;
   setCarImagePrimary(carId: string, imageId: string): Promise<void>;
-  
-  // Contacts
+
   createContact(contact: InsertContact): Promise<Contact>;
   getAllContacts(): Promise<Contact[]>;
   updateContact(id: string, updates: Partial<Contact>): Promise<Contact | undefined>;
-  getContactsWithFilter(options: { page?: number; limit?: number; status?: string }): Promise<{ contacts: Contact[]; total: number; hasMore: boolean }>;
-  
-  // Locations
+  getContactsWithFilter(options: ContactFilterOptions): Promise<{ contacts: Contact[]; total: number; hasMore: boolean }>;
+  getContactsForExport(options: ContactFilterOptions): Promise<Contact[]>;
+  deleteContact(id: string): Promise<boolean>;
+  deleteContacts(ids: string[]): Promise<number>;
+
   getAllLocations(): Promise<Location[]>;
   getLocation(id: string): Promise<Location | undefined>;
   createLocation(location: InsertLocation): Promise<Location>;
   updateLocation(id: string, updates: Partial<Location>): Promise<Location | undefined>;
   deleteLocation(id: string): Promise<boolean>;
   hasLocationAppointments(locationId: string): Promise<boolean>;
-  
-  // Bids
+
   placeBid(bid: InsertBid): Promise<Bid>;
   getBidsForCar(carId: string): Promise<Bid[]>;
   getHighestBidForCar(carId: string): Promise<Bid | undefined>;
   updateCarCurrentBid(carId: string, bidAmount: number): Promise<Car | undefined>;
   hasActiveBids(carId: string): Promise<boolean>;
+  getAllBids(options: { page?: number; limit?: number; status?: string; carId?: string; startDate?: string; endDate?: string; minAmount?: number; maxAmount?: number }): Promise<{ bids: any[]; total: number; hasMore: boolean }>;
+  updateBidStatus(bidId: string, status: string): Promise<Bid | undefined>;
+  getBidById(bidId: string): Promise<Bid | undefined>;
+  getBidAnalytics(): Promise<{ totalBids: number; pendingBids: number; acceptedBids: number; rejectedBids: number; totalValue: number; avgBidAmount: number }>;
 
-  // OTP Verification
-  storeOTPVerification(otp: InsertOtpVerification): Promise<OtpVerification>;
-  getActiveOtpVerification(phone: string, countryCode: string, purpose: string): Promise<OtpVerification | undefined>;
-  incrementOtpAttempts(otpId: string): Promise<boolean>;
-  markOtpAsVerified(otpId: string): Promise<boolean>;
-  markOtpAsExpired(otpId: string): Promise<boolean>;
-  expireAllActiveOtpsForTarget(phone: string, countryCode: string, purpose: string): Promise<number>;
-  getRecentOtpAttempts(phone: string, countryCode: string, since: Date): Promise<OtpVerification[]>;
-  cleanupExpiredOtps(cutoffDate: Date): Promise<number>;
-
-  // Phone-based user operations
   getUserByPhone(phone: string, countryCode: string): Promise<User | undefined>;
 
-  // Email Verification Tokens
   createVerificationToken(userId: string, email: string, purpose?: string): Promise<{ token: string; tokenHash: string }>;
   getVerificationToken(tokenHash: string, email: string, purpose?: string): Promise<EmailVerificationToken | undefined>;
   consumeVerificationToken(tokenHash: string, purpose?: string): Promise<boolean>;
@@ -172,35 +182,38 @@ export interface IStorage {
   incrementResendCount(userId: string): Promise<boolean>;
   getActiveVerificationToken(userId: string): Promise<EmailVerificationToken | undefined>;
 
-  // WhatsApp Messages
   logWhatsAppMessage(message: InsertWhatsAppMessage): Promise<WhatsAppMessage>;
   getWhatsAppMessageHistory(phone: string, limit?: number): Promise<WhatsAppMessage[]>;
   updateWhatsAppMessage(id: string, updates: Partial<WhatsAppMessage>): Promise<boolean>;
   getWhatsAppMessage(id: string): Promise<WhatsAppMessage | null>;
   updateWhatsAppMessageStatus(messageSid: string, updates: { status: string; providerResponse?: string }): Promise<boolean>;
   getWhatsAppMessages(options: { page: number; limit: number; status?: string }): Promise<WhatsAppMessage[]>;
-  
-  // Admin Audit Logs
+
   logAdminAction(auditLog: InsertAdminAuditLog): Promise<AdminAuditLog>;
   getAdminAuditLogs(adminUserId?: string, limit?: number, offset?: number): Promise<AdminAuditLog[]>;
   getAdminAuditLogsCount(adminUserId?: string): Promise<number>;
   getResourceAuditLogs(resource: string, resourceId: string, limit?: number): Promise<AdminAuditLog[]>;
-  // Rate limiting storage - atomic operations
+
   checkAndIncrementRateLimit(userId: string, windowMs: number): Promise<{ count: number; resetTime: number; withinWindow: boolean }>;
   cleanupExpiredRateLimits(): Promise<number>;
 
-  // Site Settings
   getAllSiteSettings(): Promise<SiteSetting[]>;
   getSiteSettingByKey(key: string): Promise<SiteSetting | undefined>;
   updateSiteSetting(key: string, value: string, category?: string, description?: string): Promise<SiteSetting>;
 
-  // Media Library
   getAllMediaLibraryImages(filters?: { imageType?: string; uploadedBy?: string; isActive?: boolean }): Promise<MediaLibrary[]>;
   getMediaLibraryImageById(id: string): Promise<MediaLibrary | undefined>;
   createMediaLibraryImage(data: InsertMediaLibrary): Promise<MediaLibrary>;
   updateMediaLibraryImage(id: string, data: Partial<MediaLibrary>): Promise<MediaLibrary | undefined>;
   deleteMediaLibraryImage(id: string): Promise<boolean>;
   incrementMediaUsageCount(id: string): Promise<boolean>;
+
+  createInvoice(invoiceData: InsertInvoice, items: InsertInvoiceItem[]): Promise<InvoiceWithItems>;
+  getInvoices(filters?: InvoiceFilterOptions): Promise<{ invoices: InvoiceWithItems[]; total: number; hasMore: boolean }>;
+  getInvoiceById(id: string): Promise<InvoiceWithItems | undefined>;
+  updateInvoice(id: string, invoiceData: Partial<InsertInvoice>): Promise<InvoiceWithItems | undefined>;
+  deleteInvoice(id: string): Promise<boolean>;
+  getEligibleTransactionsForInvoicing(): Promise<{ appointments: any[]; bids: any[]; cars: any[] }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -225,7 +238,6 @@ export class DatabaseStorage implements IStorage {
     this.cache.delete('all_locations');
   }
 
-  // Users
   async getUser(id: string): Promise<User | undefined> {
     const db = await getDb();
     const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
@@ -251,9 +263,9 @@ export class DatabaseStorage implements IStorage {
       return result[0];
     } catch (error) {
       const err = error as DatabaseError;
-      // Handle database constraint violations
+
       if (err.code === '23505') {
-        // Unique constraint violation
+
         if (err.constraint?.includes('email')) {
           throw {
             status: 409,
@@ -274,13 +286,13 @@ export class DatabaseStorage implements IStorage {
         }
       }
       if (err.code === '23502') {
-        // Not null constraint violation
+
         throw {
           status: 400,
           message: "Missing required user information. Please provide all required fields."
         };
       }
-      // Re-throw other errors to be handled by route handlers
+
       throw err;
     }
   }
@@ -297,8 +309,7 @@ export class DatabaseStorage implements IStorage {
   async linkGoogleAccount(userId: string, googleId: string): Promise<User | undefined> {
     const db = await getDb();
     try {
-      // Atomic update with condition to prevent race conditions
-      // Only update if the user exists and googleId is not already set
+
       const result = await db.update(users)
         .set({
           googleId,
@@ -307,12 +318,12 @@ export class DatabaseStorage implements IStorage {
         })
         .where(and(
           eq(users.id, userId),
-          isNull(users.googleId) // Only link if not already linked
+          isNull(users.googleId)
         ))
         .returning();
       
       if (result.length === 0) {
-        // Either user doesn't exist or already has googleId
+
         const existingUser = await this.getUser(userId);
         if (!existingUser) {
           throw new Error("User not found");
@@ -326,7 +337,7 @@ export class DatabaseStorage implements IStorage {
       return result[0];
     } catch (error) {
       const err = error as DatabaseError;
-      // Handle unique constraint violations
+
       if (err.code === '23505' && err.constraint?.includes('google')) {
         throw new Error("This Google account is already linked to another user");
       }
@@ -334,7 +345,6 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  // Admin user management methods
   async getUserCount(): Promise<number> {
     const db = await getDb();
     const result = await db.select({ count: sql<number>`cast(count(*) as integer)` }).from(users);
@@ -349,7 +359,24 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
-  // Customers
+  async deleteUser(id: string): Promise<boolean> {
+    const db = await getDb();
+    try {
+      await db.delete(users).where(eq(users.id, id));
+      return true;
+    } catch (error) {
+      const err = error as DatabaseError;
+      if (err.code === '23503') {
+        throw {
+          status: 409,
+          message: "Cannot delete user with existing related records. Please remove or reassign their appointments, bids, and other data first.",
+          code: "FOREIGN_KEY_VIOLATION"
+        };
+      }
+      throw err;
+    }
+  }
+
   async getCustomer(id: string): Promise<Customer | undefined> {
     const db = await getDb();
     const result = await db.select().from(customers).where(eq(customers.id, id)).limit(1);
@@ -380,7 +407,6 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  // Services
   async getAllServices(): Promise<Service[]> {
     const cacheKey = 'all_services';
     const cached = this.cache.get(cacheKey);
@@ -425,22 +451,22 @@ export class DatabaseStorage implements IStorage {
       return result[0];
     } catch (error) {
       const err = error as DatabaseError;
-      // Handle database constraint violations
+
       if (err.code === '23505') {
-        // Unique constraint violation
+
         throw {
           status: 409,
           message: "A service with this name or identifier already exists."
         };
       }
       if (err.code === '23502') {
-        // Not null constraint violation
+
         throw {
           status: 400,
           message: "Missing required service information. Please provide all required fields."
         };
       }
-      // Re-throw other errors to be handled by route handlers
+
       throw err;
     }
   }
@@ -461,14 +487,12 @@ export class DatabaseStorage implements IStorage {
     this.invalidateServicesCache();
   }
 
-  // Appointments
   async getAllAppointments(offset: number = 0, limit: number = 100): Promise<AppointmentWithDetails[]> {
     const db = await getDb();
-    
-    // Get all appointments with service, location, and customer names resolved
+
     const result = await db
       .select({
-        // Appointment fields
+
         id: appointments.id,
         customerId: appointments.customerId,
         serviceId: appointments.serviceId,
@@ -481,7 +505,7 @@ export class DatabaseStorage implements IStorage {
         price: appointments.price,
         notes: appointments.notes,
         createdAt: appointments.createdAt,
-        // Resolved names
+
         serviceName: services.title,
         locationName: locations.name,
         customerName: customers.name
@@ -511,11 +535,10 @@ export class DatabaseStorage implements IStorage {
 
   async getAppointmentWithDetails(id: string): Promise<AppointmentWithDetails | undefined> {
     const db = await getDb();
-    
-    // Get single appointment with service, location, and customer names resolved
+
     const result = await db
       .select({
-        // Appointment fields
+
         id: appointments.id,
         customerId: appointments.customerId,
         serviceId: appointments.serviceId,
@@ -528,7 +551,7 @@ export class DatabaseStorage implements IStorage {
         price: appointments.price,
         notes: appointments.notes,
         createdAt: appointments.createdAt,
-        // Resolved names
+
         serviceName: services.title,
         locationName: locations.name,
         customerName: customers.name
@@ -545,11 +568,10 @@ export class DatabaseStorage implements IStorage {
 
   async getAppointmentsByCustomer(customerId: string): Promise<AppointmentWithDetails[]> {
     const db = await getDb();
-    
-    // Join appointments with services, locations, and customers to get names
+
     const result = await db
       .select({
-        // Appointment fields
+
         id: appointments.id,
         customerId: appointments.customerId,
         serviceId: appointments.serviceId,
@@ -562,7 +584,7 @@ export class DatabaseStorage implements IStorage {
         price: appointments.price,
         notes: appointments.notes,
         createdAt: appointments.createdAt,
-        // Resolved names
+
         serviceName: services.title,
         locationName: locations.name,
         customerName: customers.name
@@ -583,16 +605,20 @@ export class DatabaseStorage implements IStorage {
     return result;
   }
 
+  async getAppointmentsByLocation(locationId: string): Promise<Appointment[]> {
+    const db = await getDb();
+    const result = await db.select().from(appointments).where(eq(appointments.locationId, locationId));
+    return result;
+  }
+
   async createAppointment(appointment: InsertAppointment): Promise<Appointment> {
     const db = await getDb();
-    
-    // Use a database transaction to ensure atomicity
+
     return await db.transaction(async (tx) => {
       const targetDateTime = new Date(appointment.dateTime);
-      const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
-      const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
-      
-      // Check for conflicts within the transaction (ensuring consistency)
+      const startWindow = new Date(targetDateTime.getTime() - 30 * 60000);
+      const endWindow = new Date(targetDateTime.getTime() + 30 * 60000);
+
       const conflictingAppointments = await tx.select()
         .from(appointments)
         .where(and(
@@ -608,8 +634,7 @@ export class DatabaseStorage implements IStorage {
           message: "Appointment time conflicts with existing booking. Please choose a different time."
         };
       }
-      
-      // No conflicts found, safe to create appointment
+
       const result = await tx.insert(appointments).values(appointment).returning();
       return result[0];
     });
@@ -617,16 +642,13 @@ export class DatabaseStorage implements IStorage {
 
   async updateAppointmentStatus(id: string, status: string): Promise<Appointment | undefined> {
     const db = await getDb();
-    
-    // For "confirmed" status, we need atomic conflict checking to prevent race conditions
+
     if (status === "confirmed") {
       return await this.updateAppointmentStatusWithConflictCheck(id, status);
     }
-    
-    // Wrap all status updates in transactions for consistency
-    // This ensures atomicity if future enhancements add related data changes
+
     return await db.transaction(async (tx) => {
-      // Get current appointment to verify it exists
+
       const currentAppointment = await tx.select()
         .from(appointments)
         .where(eq(appointments.id, id))
@@ -638,15 +660,11 @@ export class DatabaseStorage implements IStorage {
           message: "Appointment not found"
         };
       }
-      
-      // Update status within transaction
+
       const result = await tx.update(appointments)
         .set({ status })
         .where(eq(appointments.id, id))
         .returning();
-      
-      // Future enhancement point: Add related data updates here
-      // For example: notification logs, audit trails, related service updates
       
       return result[0];
     });
@@ -654,10 +672,9 @@ export class DatabaseStorage implements IStorage {
 
   async updateAppointmentStatusWithConflictCheck(id: string, status: string): Promise<Appointment | undefined> {
     const db = await getDb();
-    
-    // Use a database transaction to ensure atomicity
+
     return await db.transaction(async (tx) => {
-      // First, get the current appointment details
+
       const currentAppointment = await tx.select()
         .from(appointments)
         .where(eq(appointments.id, id))
@@ -672,10 +689,9 @@ export class DatabaseStorage implements IStorage {
       
       const appointment = currentAppointment[0];
       const targetDateTime = new Date(appointment.dateTime);
-      const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
-      const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
-      
-      // Check for conflicts within the transaction (ensuring consistency)
+      const startWindow = new Date(targetDateTime.getTime() - 30 * 60000);
+      const endWindow = new Date(targetDateTime.getTime() + 30 * 60000);
+
       const conflictingAppointments = await tx.select()
         .from(appointments)
         .where(and(
@@ -683,7 +699,7 @@ export class DatabaseStorage implements IStorage {
           gte(appointments.dateTime, startWindow),
           lte(appointments.dateTime, endWindow),
           eq(appointments.status, "confirmed"),
-          ne(appointments.id, id) // Exclude current appointment
+          ne(appointments.id, id)
         ));
       
       if (conflictingAppointments.length > 0) {
@@ -692,8 +708,7 @@ export class DatabaseStorage implements IStorage {
           message: "Cannot confirm appointment: time conflicts with existing confirmed booking"
         };
       }
-      
-      // No conflicts found, safe to update status
+
       const result = await tx.update(appointments)
         .set({ status })
         .where(eq(appointments.id, id))
@@ -705,14 +720,12 @@ export class DatabaseStorage implements IStorage {
 
   async rescheduleAppointment(id: string, dateTime: string, locationId: string): Promise<Appointment | undefined> {
     const db = await getDb();
-    
-    // Use a database transaction to ensure atomicity
+
     return await db.transaction(async (tx) => {
       const targetDateTime = new Date(dateTime);
-      const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
-      const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
-      
-      // Check for conflicts within the transaction (ensuring consistency)
+      const startWindow = new Date(targetDateTime.getTime() - 30 * 60000);
+      const endWindow = new Date(targetDateTime.getTime() + 30 * 60000);
+
       const conflictingAppointments = await tx.select()
         .from(appointments)
         .where(and(
@@ -720,7 +733,7 @@ export class DatabaseStorage implements IStorage {
           gte(appointments.dateTime, startWindow),
           lte(appointments.dateTime, endWindow),
           eq(appointments.status, "confirmed"),
-          ne(appointments.id, id) // Exclude current appointment from conflict check
+          ne(appointments.id, id)
         ));
       
       if (conflictingAppointments.length > 0) {
@@ -729,8 +742,7 @@ export class DatabaseStorage implements IStorage {
           message: "Rescheduled time conflicts with existing booking. Please choose a different time."
         };
       }
-      
-      // No conflicts found, safe to reschedule appointment
+
       const result = await tx.update(appointments)
         .set({ 
           dateTime: new Date(dateTime),
@@ -745,28 +757,25 @@ export class DatabaseStorage implements IStorage {
   async checkAppointmentConflict(locationId: string, dateTime: Date, excludeAppointmentId?: string): Promise<boolean> {
     const db = await getDb();
     const targetDateTime = new Date(dateTime);
-    // Check for appointments within 1 hour window to avoid overlaps
-    const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
-    const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
+
+    const startWindow = new Date(targetDateTime.getTime() - 30 * 60000);
+    const endWindow = new Date(targetDateTime.getTime() + 30 * 60000);
     
-    let whereConditions = [
-      eq(appointments.locationId, locationId),
-      // Check for overlapping time slots
-      gte(appointments.dateTime, startWindow),
-      lte(appointments.dateTime, endWindow),
-      // Only check confirmed appointments
-      eq(appointments.status, "confirmed")
-    ];
+    // Use SQL EXISTS for efficient conflict checking with composite index
+    let query = sql`
+      SELECT EXISTS (
+        SELECT 1 
+        FROM ${appointments}
+        WHERE ${appointments.locationId} = ${locationId}
+          AND ${appointments.dateTime} >= ${startWindow}
+          AND ${appointments.dateTime} <= ${endWindow}
+          AND ${appointments.status} = 'confirmed'
+          ${excludeAppointmentId ? sql`AND ${appointments.id} != ${excludeAppointmentId}` : sql``}
+      ) as conflict_exists
+    `;
     
-    if (excludeAppointmentId) {
-      // Exclude the current appointment from conflict check
-      whereConditions.push(ne(appointments.id, excludeAppointmentId));
-    }
-    
-    const query = db.select().from(appointments).where(and(...whereConditions));
-    
-    const conflictingAppointments = await query;
-    return conflictingAppointments.length > 0;
+    const result = await db.execute<{ conflict_exists: boolean }>(query);
+    return result.rows[0]?.conflict_exists || false;
   }
 
   async deleteAppointment(id: string): Promise<boolean> {
@@ -775,7 +784,6 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  // Cars
   async getAllCars(offset: number = 0, limit: number = 100, filters?: CarFilterOptions): Promise<Car[]> {
     const db = await getDb();
     
@@ -873,36 +881,111 @@ export class DatabaseStorage implements IStorage {
 
   async getCar(id: string): Promise<Car | undefined> {
     const db = await getDb();
-    const result = await db.select().from(cars).where(eq(cars.id, id)).limit(1);
-    const car = result[0];
     
-    if (!car) {
+    // Use LEFT JOIN with JSON aggregation to fetch car and images in one query
+    const result = await db
+      .select({
+        car: cars,
+        images: sql<CarImage[]>`
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', ${carImages.id},
+                'carId', ${carImages.carId},
+                'imageUrl', ${carImages.imageUrl},
+                'displayOrder', ${carImages.displayOrder},
+                'isPrimary', ${carImages.isPrimary},
+                'createdAt', ${carImages.createdAt}
+              ) ORDER BY ${carImages.displayOrder}
+            ) FILTER (WHERE ${carImages.id} IS NOT NULL),
+            '[]'::json
+          )
+        `
+      })
+      .from(cars)
+      .leftJoin(carImages, eq(cars.id, carImages.carId))
+      .where(eq(cars.id, id))
+      .groupBy(cars.id)
+      .limit(1);
+    
+    if (!result || result.length === 0) {
       return undefined;
     }
     
-    const images = await db.select()
-      .from(carImages)
-      .where(eq(carImages.carId, id))
-      .orderBy(asc(carImages.displayOrder));
-    
     return {
-      ...car,
-      images
+      ...result[0].car,
+      images: result[0].images
     } as any;
   }
 
   async getCarsForSale(): Promise<Car[]> {
     const db = await getDb();
-    return await db.select().from(cars)
+    
+    // Use LEFT JOIN with JSON aggregation to fetch cars and images in one query
+    const result = await db
+      .select({
+        car: cars,
+        images: sql<CarImage[]>`
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', ${carImages.id},
+                'carId', ${carImages.carId},
+                'imageUrl', ${carImages.imageUrl},
+                'displayOrder', ${carImages.displayOrder},
+                'isPrimary', ${carImages.isPrimary},
+                'createdAt', ${carImages.createdAt}
+              ) ORDER BY ${carImages.displayOrder}
+            ) FILTER (WHERE ${carImages.id} IS NOT NULL),
+            '[]'::json
+          )
+        `
+      })
+      .from(cars)
+      .leftJoin(carImages, eq(cars.id, carImages.carId))
       .where(eq(cars.isAuction, false))
+      .groupBy(cars.id)
       .orderBy(desc(cars.createdAt));
+    
+    return result.map(r => ({
+      ...r.car,
+      images: r.images
+    })) as any;
   }
 
   async getAuctionCars(): Promise<Car[]> {
     const db = await getDb();
-    return await db.select().from(cars)
+    
+    // Use LEFT JOIN with JSON aggregation to fetch cars and images in one query
+    const result = await db
+      .select({
+        car: cars,
+        images: sql<CarImage[]>`
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', ${carImages.id},
+                'carId', ${carImages.carId},
+                'imageUrl', ${carImages.imageUrl},
+                'displayOrder', ${carImages.displayOrder},
+                'isPrimary', ${carImages.isPrimary},
+                'createdAt', ${carImages.createdAt}
+              ) ORDER BY ${carImages.displayOrder}
+            ) FILTER (WHERE ${carImages.id} IS NOT NULL),
+            '[]'::json
+          )
+        `
+      })
+      .from(cars)
+      .leftJoin(carImages, eq(cars.id, carImages.carId))
       .where(eq(cars.isAuction, true))
+      .groupBy(cars.id)
       .orderBy(desc(cars.createdAt));
+    
+    return result.map(r => ({
+      ...r.car,
+      images: r.images
+    })) as any;
   }
 
   async createCar(car: InsertCar): Promise<Car> {
@@ -921,29 +1004,29 @@ export class DatabaseStorage implements IStorage {
       return result[0];
     } catch (error) {
       const err = error as DatabaseError;
-      // Handle database constraint violations
+
       if (err.code === '23505') {
-        // Unique constraint violation
+
         throw {
           status: 409,
           message: "A car with this registration number or identifier already exists."
         };
       }
       if (err.code === '23503') {
-        // Foreign key constraint violation
+
         throw {
           status: 400,
           message: "Invalid reference in car data. Please check that all related records exist."
         };
       }
       if (err.code === '23502') {
-        // Not null constraint violation
+
         throw {
           status: 400,
           message: "Missing required car information. Please provide all required fields."
         };
       }
-      // Re-throw other errors to be handled by route handlers
+
       throw err;
     }
   }
@@ -955,20 +1038,19 @@ export class DatabaseStorage implements IStorage {
       return result.length > 0;
     } catch (error) {
       const err = error as DatabaseError;
-      // Handle database constraint violations
+
       if (err.code === '23503') {
-        // Foreign key constraint violation - car is referenced by other records
+
         throw {
           status: 409,
           message: "Cannot delete car as it is referenced by other records (appointments, bids, etc.). Please remove related records first."
         };
       }
-      // Re-throw other errors to be handled by route handlers
+
       throw err;
     }
   }
 
-  // Car Images
   async getCarImages(carId: string): Promise<CarImage[]> {
     const db = await getDb();
     const images = await db.select()
@@ -1030,7 +1112,6 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  // Contacts
   async createContact(contact: InsertContact): Promise<Contact> {
     const db = await getDb();
     const result = await db.insert(contacts).values(contact).returning();
@@ -1044,28 +1125,60 @@ export class DatabaseStorage implements IStorage {
 
   async updateContact(id: string, updates: Partial<Contact>): Promise<Contact | undefined> {
     const db = await getDb();
+    const updateData: Partial<Contact> = { ...updates };
+    
+    if ('notes' in updates) {
+      updateData.notesUpdatedAt = new Date();
+    }
+    
     const result = await db.update(contacts)
-      .set(updates)
+      .set(updateData)
       .where(eq(contacts.id, id))
       .returning();
     return result[0];
   }
 
-  async getContactsWithFilter(options: { page?: number; limit?: number; status?: string }): Promise<{ contacts: Contact[]; total: number; hasMore: boolean }> {
+  async getContactsWithFilter(options: ContactFilterOptions): Promise<{ contacts: Contact[]; total: number; hasMore: boolean }> {
     const db = await getDb();
-    const { page = 1, limit = 50, status } = options;
+    const { page = 1, limit = 50, status, startDate, endDate, search } = options;
     const offset = (page - 1) * limit;
 
-    // Build the query with optional status filter
-    const baseQuery = db.select().from(contacts);
-    const query = status ? baseQuery.where(eq(contacts.status, status)) : baseQuery;
+    const conditions = [];
+    
+    if (status) {
+      conditions.push(eq(contacts.status, status));
+    }
+    
+    if (startDate) {
+      conditions.push(gte(contacts.createdAt, new Date(startDate)));
+    }
+    
+    if (endDate) {
+      const endDateTime = new Date(endDate);
+      endDateTime.setHours(23, 59, 59, 999);
+      conditions.push(lte(contacts.createdAt, endDateTime));
+    }
+    
+    if (search) {
+      const searchPattern = `%${search}%`;
+      conditions.push(
+        or(
+          sql`${contacts.name} ILIKE ${searchPattern}`,
+          sql`${contacts.email} ILIKE ${searchPattern}`,
+          sql`${contacts.subject} ILIKE ${searchPattern}`
+        )
+      );
+    }
 
-    // Get the total count for pagination
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    
+    const baseQuery = db.select().from(contacts);
+    const query = whereClause ? baseQuery.where(whereClause) : baseQuery;
+
     const totalQuery = db.select({ count: sql<number>`cast(count(*) as integer)` }).from(contacts);
-    const totalWithFilter = status ? totalQuery.where(eq(contacts.status, status)) : totalQuery;
+    const totalWithFilter = whereClause ? totalQuery.where(whereClause) : totalQuery;
     const [{ count: total }] = await totalWithFilter;
 
-    // Get the paginated results
     const contactsResult = await query
       .orderBy(desc(contacts.createdAt))
       .offset(offset)
@@ -1078,7 +1191,63 @@ export class DatabaseStorage implements IStorage {
     };
   }
 
-  // Locations
+  async getContactsForExport(options: ContactFilterOptions): Promise<Contact[]> {
+    const db = await getDb();
+    const { status, startDate, endDate, search } = options;
+    const exportLimit = 10000;
+
+    const conditions = [];
+    
+    if (status) {
+      conditions.push(eq(contacts.status, status));
+    }
+    
+    if (startDate) {
+      conditions.push(gte(contacts.createdAt, new Date(startDate)));
+    }
+    
+    if (endDate) {
+      const endDateTime = new Date(endDate);
+      endDateTime.setHours(23, 59, 59, 999);
+      conditions.push(lte(contacts.createdAt, endDateTime));
+    }
+    
+    if (search) {
+      const searchPattern = `%${search}%`;
+      conditions.push(
+        or(
+          sql`${contacts.name} ILIKE ${searchPattern}`,
+          sql`${contacts.email} ILIKE ${searchPattern}`,
+          sql`${contacts.subject} ILIKE ${searchPattern}`
+        )
+      );
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+    
+    const baseQuery = db.select().from(contacts);
+    const query = whereClause ? baseQuery.where(whereClause) : baseQuery;
+
+    const contactsResult = await query
+      .orderBy(desc(contacts.createdAt))
+      .limit(exportLimit);
+
+    return contactsResult;
+  }
+
+  async deleteContact(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.delete(contacts).where(eq(contacts.id, id)).returning();
+    return result.length > 0;
+  }
+
+  async deleteContacts(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const db = await getDb();
+    const result = await db.delete(contacts).where(inArray(contacts.id, ids)).returning();
+    return result.length;
+  }
+
   async getAllLocations(): Promise<Location[]> {
     const cacheKey = 'all_locations';
     const cached = this.cache.get(cacheKey);
@@ -1137,7 +1306,6 @@ export class DatabaseStorage implements IStorage {
     return result[0]?.count > 0;
   }
 
-  // Bids
   async placeBid(bid: InsertBid): Promise<Bid> {
     const db = await getDb();
     const result = await db.insert(bids).values(bid).returning();
@@ -1171,14 +1339,12 @@ export class DatabaseStorage implements IStorage {
 
   async hasActiveBids(carId: string): Promise<boolean> {
     const db = await getDb();
-    
-    // Get the car to check if it's an auction car and if auction is still active
+
     const car = await db.select().from(cars).where(eq(cars.id, carId)).limit(1);
     if (!car[0]) {
       return false;
     }
-    
-    // Only check for bids if car is in auction and auction hasn't ended
+
     const now = new Date();
     const isActiveAuction = car[0].isAuction && 
                            car[0].auctionEndTime && 
@@ -1187,99 +1353,121 @@ export class DatabaseStorage implements IStorage {
     if (!isActiveAuction) {
       return false;
     }
-    
-    // Check if there are any bids for this active auction car
+
     const bidRows = await db.select().from(bids).where(eq(bids.carId, carId)).limit(1);
     return bidRows.length > 0;
   }
 
-  // OTP Verification
-  async storeOTPVerification(otp: InsertOtpVerification): Promise<OtpVerification> {
+  async getAllBids(options: { page?: number; limit?: number; status?: string; carId?: string; startDate?: string; endDate?: string; minAmount?: number; maxAmount?: number }): Promise<{ bids: any[]; total: number; hasMore: boolean }> {
     const db = await getDb();
-    const result = await db.insert(otpVerifications).values(otp).returning();
+    const page = options.page || 1;
+    const limit = options.limit || 20;
+    const offset = (page - 1) * limit;
+
+    const conditions = [];
+
+    if (options.status && options.status !== "all") {
+      conditions.push(eq(bids.status, options.status));
+    }
+
+    if (options.carId) {
+      conditions.push(eq(bids.carId, options.carId));
+    }
+
+    if (options.startDate) {
+      conditions.push(gte(bids.bidTime, new Date(options.startDate)));
+    }
+
+    if (options.endDate) {
+      const endDate = new Date(options.endDate);
+      endDate.setHours(23, 59, 59, 999);
+      conditions.push(lte(bids.bidTime, endDate));
+    }
+
+    if (options.minAmount !== undefined) {
+      conditions.push(gte(bids.bidAmount, options.minAmount));
+    }
+
+    if (options.maxAmount !== undefined) {
+      conditions.push(lte(bids.bidAmount, options.maxAmount));
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const [bidsData, totalResult] = await Promise.all([
+      db.select({
+        id: bids.id,
+        carId: bids.carId,
+        userId: bids.userId,
+        bidderEmail: bids.bidderEmail,
+        bidAmount: bids.bidAmount,
+        status: bids.status,
+        bidTime: bids.bidTime,
+        userName: users.name,
+        userEmail: users.email,
+        carMake: cars.make,
+        carModel: cars.model,
+        carYear: cars.year
+      })
+        .from(bids)
+        .leftJoin(users, eq(bids.userId, users.id))
+        .leftJoin(cars, eq(bids.carId, cars.id))
+        .where(whereClause)
+        .orderBy(desc(bids.bidTime))
+        .limit(limit)
+        .offset(offset),
+      db.select({ count: sql<number>`count(*)` })
+        .from(bids)
+        .where(whereClause)
+    ]);
+
+    const total = totalResult[0]?.count || 0;
+    const hasMore = offset + bidsData.length < total;
+
+    return { bids: bidsData, total, hasMore };
+  }
+
+  async updateBidStatus(bidId: string, status: string): Promise<Bid | undefined> {
+    const db = await getDb();
+    const result = await db.update(bids)
+      .set({ status })
+      .where(eq(bids.id, bidId))
+      .returning();
     return result[0];
   }
 
-  async getActiveOtpVerification(phone: string, countryCode: string, purpose: string): Promise<OtpVerification | undefined> {
+  async getBidById(bidId: string): Promise<Bid | undefined> {
     const db = await getDb();
-    const result = await db.select().from(otpVerifications)
-      .where(and(
-        eq(otpVerifications.phone, phone),
-        eq(otpVerifications.countryCode, countryCode),
-        eq(otpVerifications.purpose, purpose),
-        eq(otpVerifications.verified, false),
-        gte(otpVerifications.expiresAt, new Date())
-      ))
-      .orderBy(desc(otpVerifications.createdAt))
+    const result = await db.select().from(bids)
+      .where(eq(bids.id, bidId))
       .limit(1);
     return result[0];
   }
 
-  async incrementOtpAttempts(otpId: string): Promise<boolean> {
+  async getBidAnalytics(): Promise<{ totalBids: number; pendingBids: number; acceptedBids: number; rejectedBids: number; totalValue: number; avgBidAmount: number }> {
     const db = await getDb();
-    const result = await db.update(otpVerifications)
-      .set({ attempts: sql`${otpVerifications.attempts} + 1` })
-      .where(eq(otpVerifications.id, otpId))
-      .returning();
-    return result.length > 0;
+    
+    const [totalResult, pendingResult, acceptedResult, rejectedResult, valueResult] = await Promise.all([
+      db.select({ count: sql<number>`count(*)` }).from(bids),
+      db.select({ count: sql<number>`count(*)` }).from(bids).where(eq(bids.status, "pending")),
+      db.select({ count: sql<number>`count(*)` }).from(bids).where(eq(bids.status, "accepted")),
+      db.select({ count: sql<number>`count(*)` }).from(bids).where(eq(bids.status, "rejected")),
+      db.select({ 
+        totalValue: sql<number>`COALESCE(SUM(${bids.bidAmount}), 0)`,
+        avgBidAmount: sql<number>`COALESCE(AVG(${bids.bidAmount}), 0)`
+      }).from(bids)
+    ]);
+
+    return {
+      totalBids: totalResult[0]?.count || 0,
+      pendingBids: pendingResult[0]?.count || 0,
+      acceptedBids: acceptedResult[0]?.count || 0,
+      rejectedBids: rejectedResult[0]?.count || 0,
+      totalValue: valueResult[0]?.totalValue || 0,
+      avgBidAmount: valueResult[0]?.avgBidAmount || 0
+    };
   }
 
-  async markOtpAsVerified(otpId: string): Promise<boolean> {
-    const db = await getDb();
-    const result = await db.update(otpVerifications)
-      .set({ verified: true })
-      .where(eq(otpVerifications.id, otpId))
-      .returning();
-    return result.length > 0;
-  }
-
-  async markOtpAsExpired(otpId: string): Promise<boolean> {
-    const db = await getDb();
-    const result = await db.update(otpVerifications)
-      .set({ expiresAt: new Date() })
-      .where(eq(otpVerifications.id, otpId))
-      .returning();
-    return result.length > 0;
-  }
-
-  async expireAllActiveOtpsForTarget(phone: string, countryCode: string, purpose: string): Promise<number> {
-    const db = await getDb();
-    const result = await db.update(otpVerifications)
-      .set({ expiresAt: new Date() })
-      .where(and(
-        eq(otpVerifications.phone, phone),
-        eq(otpVerifications.countryCode, countryCode),
-        eq(otpVerifications.purpose, purpose),
-        eq(otpVerifications.verified, false),
-        gte(otpVerifications.expiresAt, new Date())
-      ))
-      .returning();
-    return result.length;
-  }
-
-  async getRecentOtpAttempts(phone: string, countryCode: string, since: Date): Promise<OtpVerification[]> {
-    const db = await getDb();
-    return await db.select().from(otpVerifications)
-      .where(and(
-        eq(otpVerifications.phone, phone),
-        eq(otpVerifications.countryCode, countryCode),
-        gte(otpVerifications.createdAt, since)
-      ))
-      .orderBy(desc(otpVerifications.createdAt));
-  }
-
-  async cleanupExpiredOtps(cutoffDate: Date): Promise<number> {
-    const db = await getDb();
-    const result = await db.delete(otpVerifications)
-      .where(or(
-        lte(otpVerifications.createdAt, cutoffDate),
-        lte(otpVerifications.expiresAt, new Date())
-      ))
-      .returning();
-    return result.length;
-  }
-
-  // Phone-based user operations
   async getUserByPhone(phone: string, countryCode: string): Promise<User | undefined> {
     const db = await getDb();
     const result = await db.select().from(users)
@@ -1291,21 +1479,16 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  // Email Verification Tokens
   async createVerificationToken(userId: string, email: string, purpose: string = 'email_verification'): Promise<{ token: string; tokenHash: string }> {
     const db = await getDb();
     const crypto = await import('crypto');
-    
-    // Generate a secure random token (32 bytes = 64 hex characters)
+
     const token = crypto.randomBytes(32).toString('hex');
-    
-    // Hash the token for storage
+
     const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-    
-    // Set expiration to 24 hours from now
+
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    
-    // Store the hashed token
+
     await db.insert(emailVerificationTokens).values({
       userId,
       email,
@@ -1314,29 +1497,25 @@ export class DatabaseStorage implements IStorage {
       expiresAt,
       resendCount: 0
     });
-    
-    // Return the plain token (to be sent via email) and hash (for reference)
+
     return { token, tokenHash };
   }
 
   async getVerificationToken(tokenHash: string, email: string, purpose?: string): Promise<EmailVerificationToken | undefined> {
     const db = await getDb();
     const now = new Date();
-    
-    // Build where conditions
+
     const conditions = [
       eq(emailVerificationTokens.tokenHash, tokenHash),
       eq(emailVerificationTokens.email, email),
       isNull(emailVerificationTokens.consumedAt),
       gte(emailVerificationTokens.expiresAt, now)
     ];
-    
-    // Optionally filter by purpose
+
     if (purpose) {
       conditions.push(eq(emailVerificationTokens.purpose, purpose));
     }
-    
-    // Fetch active token (not consumed, not expired)
+
     const result = await db.select()
       .from(emailVerificationTokens)
       .where(and(...conditions))
@@ -1349,7 +1528,7 @@ export class DatabaseStorage implements IStorage {
     const db = await getDb();
     
     return await db.transaction(async (tx) => {
-      // Get the token with user info
+
       const tokenResult = await tx.select()
         .from(emailVerificationTokens)
         .where(eq(emailVerificationTokens.tokenHash, tokenHash))
@@ -1360,13 +1539,11 @@ export class DatabaseStorage implements IStorage {
       }
       
       const token = tokenResult[0];
-      
-      // Mark token as consumed
+
       await tx.update(emailVerificationTokens)
         .set({ consumedAt: new Date() })
         .where(eq(emailVerificationTokens.id, token.id));
-      
-      // Mark user as email verified only if purpose is email_verification
+
       if (token.purpose === 'email_verification') {
         await tx.update(users)
           .set({ emailVerified: true })
@@ -1389,8 +1566,7 @@ export class DatabaseStorage implements IStorage {
 
   async incrementResendCount(userId: string): Promise<boolean> {
     const db = await getDb();
-    
-    // Increment resend count for the most recent unconsumed token for this user
+
     const result = await db.update(emailVerificationTokens)
       .set({ 
         resendCount: sql`${emailVerificationTokens.resendCount} + 1` 
@@ -1421,7 +1597,6 @@ export class DatabaseStorage implements IStorage {
     return result[0];
   }
 
-  // WhatsApp Messages
   async logWhatsAppMessage(message: InsertWhatsAppMessage): Promise<WhatsAppMessage> {
     const db = await getDb();
     const result = await db.insert(whatsappMessages).values(message).returning();
@@ -1435,8 +1610,7 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(whatsappMessages.sentAt))
       .limit(limit);
   }
-  
-  // Additional WhatsApp message methods for webhook and admin functionality
+
   async updateWhatsAppMessageStatus(messageSid: string, updates: { status: string; providerResponse?: string }): Promise<boolean> {
     const db = await getDb();
     const result = await db.update(whatsappMessages)
@@ -1451,8 +1625,7 @@ export class DatabaseStorage implements IStorage {
   
   async getWhatsAppMessages(options: { page: number; limit: number; status?: string }): Promise<WhatsAppMessage[]> {
     const db = await getDb();
-    
-    // Build query with proper TypeScript support
+
     const baseQuery = db.select().from(whatsappMessages)
       .orderBy(desc(whatsappMessages.sentAt))
       .offset((options.page - 1) * options.limit)
@@ -1481,8 +1654,7 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return result.length > 0;
   }
-  
-  // Admin Audit Logs
+
   async logAdminAction(auditLog: InsertAdminAuditLog): Promise<AdminAuditLog> {
     const db = await getDb();
     const result = await db.insert(adminAuditLogs).values(auditLog).returning();
@@ -1531,15 +1703,12 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
-  // Atomic rate limiting storage implementation
   async checkAndIncrementRateLimit(userId: string, windowMs: number): Promise<{ count: number; resetTime: number; withinWindow: boolean }> {
     const db = await getDb();
     const now = Date.now();
     const newResetTime = new Date(now + windowMs);
     const nowDate = new Date(now);
-    
-    // Atomic operation: INSERT ON CONFLICT with conditional logic
-    // This handles both increment and window reset in a single atomic operation
+
     const result = await db.insert(adminRateLimits)
       .values({
         userId,
@@ -1550,7 +1719,7 @@ export class DatabaseStorage implements IStorage {
       .onConflictDoUpdate({
         target: adminRateLimits.userId,
         set: {
-          // Use CASE to handle window expiry atomically
+
           count: sql`CASE 
             WHEN ${adminRateLimits.resetTime} > ${nowDate} THEN ${adminRateLimits.count} + 1
             ELSE 1
@@ -1588,9 +1757,271 @@ export class DatabaseStorage implements IStorage {
     
     return result.length;
   }
+
+  async getAllSiteSettings(): Promise<SiteSetting[]> {
+    const db = await getDb();
+    return await db.select().from(siteSettings).orderBy(asc(siteSettings.settingKey));
+  }
+
+  async getSiteSettingByKey(key: string): Promise<SiteSetting | undefined> {
+    const db = await getDb();
+    const result = await db.select().from(siteSettings)
+      .where(eq(siteSettings.settingKey, key))
+      .limit(1);
+    return result[0];
+  }
+
+  async updateSiteSetting(key: string, value: string, category?: string, description?: string): Promise<SiteSetting> {
+    const db = await getDb();
+    const updates: any = { 
+      settingValue: value,
+      updatedAt: new Date()
+    };
+    if (category !== undefined) updates.category = category;
+    if (description !== undefined) updates.description = description;
+
+    const result = await db.update(siteSettings)
+      .set(updates)
+      .where(eq(siteSettings.settingKey, key))
+      .returning();
+    
+    return result[0];
+  }
+
+  async getAllMediaLibraryImages(filters?: { imageType?: string; uploadedBy?: string; isActive?: boolean }): Promise<MediaLibrary[]> {
+    const db = await getDb();
+    const conditions = [];
+    
+    if (filters?.imageType) {
+      conditions.push(eq(mediaLibrary.imageType, filters.imageType));
+    }
+    if (filters?.uploadedBy) {
+      conditions.push(eq(mediaLibrary.uploadedBy, filters.uploadedBy));
+    }
+    if (filters?.isActive !== undefined) {
+      conditions.push(eq(mediaLibrary.isActive, filters.isActive));
+    }
+
+    if (conditions.length > 0) {
+      return await db.select().from(mediaLibrary)
+        .where(and(...conditions))
+        .orderBy(desc(mediaLibrary.uploadedAt));
+    }
+    
+    return await db.select().from(mediaLibrary)
+      .orderBy(desc(mediaLibrary.uploadedAt));
+  }
+
+  async getMediaLibraryImageById(id: string): Promise<MediaLibrary | undefined> {
+    const db = await getDb();
+    const result = await db.select().from(mediaLibrary)
+      .where(eq(mediaLibrary.id, id))
+      .limit(1);
+    return result[0];
+  }
+
+  async createMediaLibraryImage(data: InsertMediaLibrary): Promise<MediaLibrary> {
+    const db = await getDb();
+    const result = await db.insert(mediaLibrary).values(data).returning();
+    return result[0];
+  }
+
+  async updateMediaLibraryImage(id: string, data: Partial<MediaLibrary>): Promise<MediaLibrary | undefined> {
+    const db = await getDb();
+    const result = await db.update(mediaLibrary)
+      .set(data)
+      .where(eq(mediaLibrary.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteMediaLibraryImage(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.delete(mediaLibrary)
+      .where(eq(mediaLibrary.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async incrementMediaUsageCount(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.update(mediaLibrary)
+      .set({ usageCount: sql`${mediaLibrary.usageCount} + 1` })
+      .where(eq(mediaLibrary.id, id))
+      .returning();
+    return result.length > 0;
+  }
+
+  async createInvoice(invoiceData: InsertInvoice, items: InsertInvoiceItem[]): Promise<InvoiceWithItems> {
+    const db = await getDb();
+    
+    return await db.transaction(async (tx) => {
+      const [invoice] = await tx.insert(invoices).values(invoiceData).returning();
+      
+      const itemsWithInvoiceId = items.map(item => ({
+        ...item,
+        invoiceId: invoice.id
+      }));
+      
+      const createdItems = await tx.insert(invoiceItems).values(itemsWithInvoiceId).returning();
+      
+      return {
+        ...invoice,
+        items: createdItems
+      };
+    });
+  }
+
+  async getInvoices(filters?: InvoiceFilterOptions): Promise<{ invoices: InvoiceWithItems[]; total: number; hasMore: boolean }> {
+    const db = await getDb();
+    const page = filters?.page || 1;
+    const limit = filters?.limit || 20;
+    const offset = (page - 1) * limit;
+
+    const conditions = [];
+    
+    if (filters?.status) {
+      conditions.push(eq(invoices.status, filters.status));
+    }
+    if (filters?.customerEmail) {
+      conditions.push(eq(invoices.customerEmail, filters.customerEmail));
+    }
+    if (filters?.customerPhone) {
+      conditions.push(eq(invoices.customerPhone, filters.customerPhone));
+    }
+    if (filters?.startDate) {
+      conditions.push(gte(invoices.invoiceDate, new Date(filters.startDate)));
+    }
+    if (filters?.endDate) {
+      conditions.push(lte(invoices.invoiceDate, new Date(filters.endDate)));
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    const invoicesList = whereClause
+      ? await db.select().from(invoices).where(whereClause).orderBy(desc(invoices.invoiceDate)).limit(limit + 1).offset(offset)
+      : await db.select().from(invoices).orderBy(desc(invoices.invoiceDate)).limit(limit + 1).offset(offset);
+
+    const hasMore = invoicesList.length > limit;
+    const paginatedInvoices = hasMore ? invoicesList.slice(0, limit) : invoicesList;
+
+    const invoicesWithItems: InvoiceWithItems[] = await Promise.all(
+      paginatedInvoices.map(async (invoice) => {
+        const items = await db.select().from(invoiceItems)
+          .where(eq(invoiceItems.invoiceId, invoice.id))
+          .orderBy(asc(invoiceItems.displayOrder));
+        
+        return {
+          ...invoice,
+          items
+        };
+      })
+    );
+
+    const totalResult = whereClause
+      ? await db.select({ count: sql<number>`count(*)` }).from(invoices).where(whereClause)
+      : await db.select({ count: sql<number>`count(*)` }).from(invoices);
+    
+    const total = Number(totalResult[0]?.count || 0);
+
+    return {
+      invoices: invoicesWithItems,
+      total,
+      hasMore
+    };
+  }
+
+  async getInvoiceById(id: string): Promise<InvoiceWithItems | undefined> {
+    const db = await getDb();
+    
+    const [invoice] = await db.select().from(invoices).where(eq(invoices.id, id)).limit(1);
+    
+    if (!invoice) {
+      return undefined;
+    }
+
+    const items = await db.select().from(invoiceItems)
+      .where(eq(invoiceItems.invoiceId, invoice.id))
+      .orderBy(asc(invoiceItems.displayOrder));
+
+    return {
+      ...invoice,
+      items
+    };
+  }
+
+  async deleteInvoice(id: string): Promise<boolean> {
+    const db = await getDb();
+    const result = await db.delete(invoices).where(eq(invoices.id, id));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async updateInvoice(id: string, invoiceData: Partial<InsertInvoice>): Promise<InvoiceWithItems | undefined> {
+    const db = await getDb();
+    
+    const [updatedInvoice] = await db.update(invoices)
+      .set({ ...invoiceData, updatedAt: new Date() })
+      .where(eq(invoices.id, id))
+      .returning();
+
+    if (!updatedInvoice) {
+      return undefined;
+    }
+
+    const items = await db.select().from(invoiceItems)
+      .where(eq(invoiceItems.invoiceId, updatedInvoice.id))
+      .orderBy(asc(invoiceItems.displayOrder));
+
+    return {
+      ...updatedInvoice,
+      items
+    };
+  }
+
+  async getEligibleTransactionsForInvoicing(): Promise<{ appointments: any[]; bids: any[]; cars: any[] }> {
+    const db = await getDb();
+    
+    const completedAppointments = await db
+      .select({
+        id: appointments.id,
+        customerName: customers.name,
+        customerEmail: customers.email,
+        customerPhone: customers.phone,
+        customerCountryCode: customers.countryCode,
+        serviceName: services.title,
+        servicePrice: services.price,
+        status: appointments.status,
+        dateTime: appointments.dateTime,
+        type: sql<string>`'service'`.as('type')
+      })
+      .from(appointments)
+      .leftJoin(customers, eq(appointments.customerId, customers.id))
+      .leftJoin(services, eq(appointments.serviceId, services.id))
+      .where(eq(appointments.status, 'completed'));
+
+    const acceptedBids = await db
+      .select({
+        id: bids.id,
+        customerEmail: bids.bidderEmail,
+        bidAmount: bids.bidAmount,
+        carMake: cars.make,
+        carModel: cars.model,
+        carYear: cars.year,
+        status: bids.status,
+        bidTime: bids.bidTime,
+        type: sql<string>`'auction'`.as('type')
+      })
+      .from(bids)
+      .leftJoin(cars, eq(bids.carId, cars.id))
+      .where(eq(bids.status, 'accepted'));
+
+    return {
+      appointments: completedAppointments,
+      bids: acceptedBids,
+      cars: []
+    };
+  }
 }
 
-// MemStorage with sample data for fallback
 export class MemStorage implements IStorage {
   private users: Map<string, User> = new Map();
   private customers: Map<string, Customer> = new Map();
@@ -1608,7 +2039,7 @@ export class MemStorage implements IStorage {
   }
 
   private seedData() {
-    // Seed sample locations
+
     const location1: Location = {
       id: "loc-1",
       name: "Mumbai Branch",
@@ -1620,7 +2051,6 @@ export class MemStorage implements IStorage {
     };
     this.locations.set(location1.id, location1);
 
-    // Seed sample services
     const services: Service[] = [
       {
         id: "svc-1",
@@ -1654,9 +2084,8 @@ export class MemStorage implements IStorage {
 
     services.forEach(service => this.services.set(service.id, service));
 
-    // Seed sample cars
     const cars: Car[] = [
-      // Cars for sale
+
       {
         id: "car-1",
         make: "Maruti Suzuki",
@@ -1772,7 +2201,7 @@ export class MemStorage implements IStorage {
         features: null,
         createdAt: new Date()
       },
-      // Auction cars
+
       {
         id: "car-auction-1",
         make: "BMW",
@@ -1786,7 +2215,7 @@ export class MemStorage implements IStorage {
         image: "https://images.unsplash.com/photo-1555215695-3004980ad54e?w=400&h=300&fit=crop&crop=center",
         isAuction: true,
         currentBid: 1650000,
-        auctionEndTime: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days from now
+        auctionEndTime: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
         description: "Luxury sedan with premium features",
         transmission: null,
         numOwners: null,
@@ -1809,7 +2238,7 @@ export class MemStorage implements IStorage {
         image: "https://images.unsplash.com/photo-1503376821350-e25f4b67162f?w=400&h=300&fit=crop&crop=center",
         isAuction: true,
         currentBid: 720000,
-        auctionEndTime: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000), // 1 day from now
+        auctionEndTime: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000),
         description: "Compact SUV perfect for city driving",
         transmission: null,
         numOwners: null,
@@ -1832,7 +2261,7 @@ export class MemStorage implements IStorage {
         image: "https://images.unsplash.com/photo-1593941707882-a5bac6861d75?w=400&h=300&fit=crop&crop=center",
         isAuction: true,
         currentBid: 1580000,
-        auctionEndTime: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000), // 5 days from now
+        auctionEndTime: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
         description: "Reliable MPV with excellent build quality",
         transmission: null,
         numOwners: null,
@@ -1846,10 +2275,8 @@ export class MemStorage implements IStorage {
 
     cars.forEach(car => this.cars.set(car.id, car));
 
-    console.log("MemStorage initialized with sample data");
   }
 
-  // Users
   async getUser(id: string): Promise<User | undefined> {
     return this.users.get(id);
   }
@@ -1869,7 +2296,6 @@ export class MemStorage implements IStorage {
       id, 
       email: user.email ?? null,
       phone: user.phone ?? null,
-      phoneVerified: user.phoneVerified ?? false,
       countryCode: user.countryCode ?? "+91",
       registrationNumbers: user.registrationNumbers ?? null,
       dateOfBirth: user.dateOfBirth ?? null,
@@ -1883,7 +2309,9 @@ export class MemStorage implements IStorage {
       emailVerified: user.emailVerified ?? false,
       password: user.password ?? null,
       googleId: user.googleId ?? null,
-      role: user.role ?? "customer"
+      role: user.role ?? "customer",
+      preferredNotificationChannel: user.preferredNotificationChannel ?? "whatsapp",
+      isActive: user.isActive ?? true
     };
     this.users.set(id, newUser);
     return newUser;
@@ -1909,14 +2337,12 @@ export class MemStorage implements IStorage {
     if (existingUser.googleId) {
       throw new Error("User already linked to Google account");
     }
-    
-    // Check if this googleId is already linked to another user
+
     const duplicateUser = Array.from(this.users.values()).find(user => user.googleId === googleId);
     if (duplicateUser) {
       throw new Error("This Google account is already linked to another user");
     }
-    
-    // Atomic update in memory
+
     const updatedUser: User = {
       ...existingUser,
       googleId,
@@ -1928,7 +2354,6 @@ export class MemStorage implements IStorage {
     return updatedUser;
   }
 
-  // Admin user management methods
   async getUserCount(): Promise<number> {
     return this.users.size;
   }
@@ -1938,7 +2363,11 @@ export class MemStorage implements IStorage {
     return allUsers.slice(offset, offset + limit);
   }
 
-  // Customers
+  async deleteUser(id: string): Promise<boolean> {
+    this.users.delete(id);
+    return true;
+  }
+
   async getCustomer(id: string): Promise<Customer | undefined> {
     return this.customers.get(id);
   }
@@ -1979,7 +2408,6 @@ export class MemStorage implements IStorage {
     return updatedCustomer;
   }
 
-  // Services
   async getAllServices(): Promise<Service[]> {
     return Array.from(this.services.values()).sort((a, b) => a.category.localeCompare(b.category) || a.title.localeCompare(b.title));
   }
@@ -2022,12 +2450,10 @@ export class MemStorage implements IStorage {
     this.services.delete(id);
   }
 
-  // Appointments
   async getAllAppointments(): Promise<AppointmentWithDetails[]> {
     const allAppointments = Array.from(this.appointments.values())
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-    
-    // Resolve service, location, and customer names
+
     return allAppointments.map(apt => {
       const service = this.services.get(apt.serviceId);
       const location = this.locations.get(apt.locationId);
@@ -2051,8 +2477,7 @@ export class MemStorage implements IStorage {
     if (!appointment) {
       return undefined;
     }
-    
-    // Resolve service, location, and customer names
+
     const service = this.services.get(appointment.serviceId);
     const location = this.locations.get(appointment.locationId);
     const customer = this.customers.get(appointment.customerId);
@@ -2069,8 +2494,7 @@ export class MemStorage implements IStorage {
     const customerAppointments = Array.from(this.appointments.values())
       .filter(apt => apt.customerId === customerId)
       .sort((a, b) => b.dateTime.getTime() - a.dateTime.getTime());
-    
-    // Resolve service, location, and customer names
+
     return customerAppointments.map(apt => {
       const service = this.services.get(apt.serviceId);
       const location = this.locations.get(apt.locationId);
@@ -2088,6 +2512,11 @@ export class MemStorage implements IStorage {
   async getAppointmentsByService(serviceId: string): Promise<Appointment[]> {
     return Array.from(this.appointments.values())
       .filter(apt => apt.serviceId === serviceId);
+  }
+
+  async getAppointmentsByLocation(locationId: string): Promise<Appointment[]> {
+    return Array.from(this.appointments.values())
+      .filter(apt => apt.locationId === locationId);
   }
 
   async createAppointment(appointment: InsertAppointment): Promise<Appointment> {
@@ -2120,21 +2549,18 @@ export class MemStorage implements IStorage {
 
   async checkAppointmentConflict(locationId: string, dateTime: Date, excludeAppointmentId?: string): Promise<boolean> {
     const targetDateTime = new Date(dateTime);
-    // Check for appointments within 1 hour window to avoid overlaps
-    const startWindow = new Date(targetDateTime.getTime() - 30 * 60000); // 30 minutes before
-    const endWindow = new Date(targetDateTime.getTime() + 30 * 60000); // 30 minutes after
+
+    const startWindow = new Date(targetDateTime.getTime() - 30 * 60000);
+    const endWindow = new Date(targetDateTime.getTime() + 30 * 60000);
     
     const conflictingAppointments = Array.from(this.appointments.values()).filter(apt => {
-      // Skip cancelled or pending appointments
+
       if (apt.status !== "confirmed") return false;
-      
-      // Skip if different location
+
       if (apt.locationId !== locationId) return false;
-      
-      // Skip the current appointment being rescheduled
+
       if (excludeAppointmentId && apt.id === excludeAppointmentId) return false;
-      
-      // Check if appointment falls within the time window
+
       return apt.dateTime >= startWindow && apt.dateTime <= endWindow;
     });
     
@@ -2145,7 +2571,6 @@ export class MemStorage implements IStorage {
     return this.appointments.delete(id);
   }
 
-  // Cars
   async getAllCars(offset: number = 0, limit: number = 100, filters?: CarFilterOptions): Promise<Car[]> {
     let carsArray = Array.from(this.cars.values());
     
@@ -2274,7 +2699,6 @@ export class MemStorage implements IStorage {
     return this.appointments.size;
   }
 
-  // Car Images
   async getCarImages(carId: string): Promise<CarImage[]> {
     return Array.from(this.carImages.values())
       .filter(img => img.carId === carId)
@@ -2317,10 +2741,16 @@ export class MemStorage implements IStorage {
     });
   }
 
-  // Contacts
   async createContact(contact: InsertContact): Promise<Contact> {
     const id = randomUUID();
-    const newContact: Contact = { ...contact, id, status: "new", createdAt: new Date() };
+    const newContact: Contact = { 
+      ...contact, 
+      id, 
+      status: "new", 
+      createdAt: new Date(),
+      notes: contact.notes ?? null,
+      notesUpdatedAt: contact.notesUpdatedAt ?? null
+    };
     this.contacts.set(id, newContact);
     return newContact;
   }
@@ -2342,13 +2772,11 @@ export class MemStorage implements IStorage {
     const { page = 1, limit = 50, status } = options;
     const offset = (page - 1) * limit;
 
-    // Get all contacts and filter by status if specified
     let allContacts = Array.from(this.contacts.values());
     if (status) {
       allContacts = allContacts.filter(contact => contact.status === status);
     }
 
-    // Sort by creation date (newest first)
     allContacts.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
     const total = allContacts.length;
@@ -2361,7 +2789,20 @@ export class MemStorage implements IStorage {
     };
   }
 
-  // Locations
+  async deleteContact(id: string): Promise<boolean> {
+    return this.contacts.delete(id);
+  }
+
+  async deleteContacts(ids: string[]): Promise<number> {
+    let count = 0;
+    for (const id of ids) {
+      if (this.contacts.delete(id)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   async getAllLocations(): Promise<Location[]> {
     return Array.from(this.locations.values()).sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -2395,7 +2836,6 @@ export class MemStorage implements IStorage {
     return appointmentsList.some(appointment => appointment.locationId === locationId);
   }
 
-  // Bids
   private bids: Map<string, Bid> = new Map();
 
   async placeBid(bid: InsertBid): Promise<Bid> {
@@ -2403,7 +2843,9 @@ export class MemStorage implements IStorage {
     const newBid: Bid = { 
       ...bid, 
       id, 
-      bidTime: new Date() 
+      bidTime: new Date(),
+      status: bid.status || "pending",
+      userId: bid.userId || null
     };
     this.bids.set(id, newBid);
     return newBid;
@@ -2433,13 +2875,12 @@ export class MemStorage implements IStorage {
   }
 
   async hasActiveBids(carId: string): Promise<boolean> {
-    // Get the car to check if it's an auction car and if auction is still active
+
     const car = this.cars.get(carId);
     if (!car) {
       return false;
     }
-    
-    // Only check for bids if car is in auction and auction hasn't ended
+
     const now = new Date();
     const isActiveAuction = car.isAuction && 
                            car.auctionEndTime && 
@@ -2448,117 +2889,74 @@ export class MemStorage implements IStorage {
     if (!isActiveAuction) {
       return false;
     }
-    
-    // Check if there are any bids for this active auction car
+
     const carBids = Array.from(this.bids.values()).filter(bid => bid.carId === carId);
     return carBids.length > 0;
   }
 
-  // OTP Verification
-  private otpVerifications: Map<string, OtpVerification> = new Map();
-
-  async storeOTPVerification(otp: InsertOtpVerification): Promise<OtpVerification> {
-    const id = randomUUID();
-    const newOtp: OtpVerification = {
-      ...otp,
-      id,
-      verified: false,
-      attempts: 0,
-      maxAttempts: otp.maxAttempts ?? 3,
-      otpCodeHash: otp.otpCodeHash ?? null,
-      verificationId: otp.verificationId ?? null,
-      createdAt: new Date()
+  async getAllBids(options: { page?: number; limit?: number; status?: string; carId?: string; startDate?: string; endDate?: string; minAmount?: number; maxAmount?: number }): Promise<{ bids: any[]; total: number; hasMore: boolean }> {
+    let filteredBids = Array.from(this.bids.values());
+    
+    if (options.status && options.status !== "all") {
+      filteredBids = filteredBids.filter(bid => (bid as any).status === options.status);
+    }
+    
+    if (options.carId) {
+      filteredBids = filteredBids.filter(bid => bid.carId === options.carId);
+    }
+    
+    filteredBids.sort((a, b) => b.bidTime.getTime() - a.bidTime.getTime());
+    
+    const total = filteredBids.length;
+    const page = options.page || 1;
+    const limit = options.limit || 20;
+    const offset = (page - 1) * limit;
+    
+    return {
+      bids: filteredBids.slice(offset, offset + limit),
+      total,
+      hasMore: offset + limit < total
     };
-    this.otpVerifications.set(id, newOtp);
-    return newOtp;
   }
 
-  async getActiveOtpVerification(phone: string, countryCode: string, purpose: string): Promise<OtpVerification | undefined> {
-    return Array.from(this.otpVerifications.values())
-      .filter(otp => 
-        otp.phone === phone && 
-        otp.countryCode === countryCode && 
-        otp.purpose === purpose && 
-        !otp.verified && 
-        new Date() < otp.expiresAt
-      )
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
-  }
-
-  async incrementOtpAttempts(otpId: string): Promise<boolean> {
-    const otp = this.otpVerifications.get(otpId);
-    if (otp) {
-      otp.attempts = (otp.attempts ?? 0) + 1;
-      this.otpVerifications.set(otpId, otp);
-      return true;
+  async updateBidStatus(bidId: string, status: string): Promise<Bid | undefined> {
+    const bid = this.bids.get(bidId);
+    if (bid) {
+      const updatedBid = { ...bid, status } as Bid;
+      this.bids.set(bidId, updatedBid);
+      return updatedBid;
     }
-    return false;
+    return undefined;
   }
 
-  async markOtpAsVerified(otpId: string): Promise<boolean> {
-    const otp = this.otpVerifications.get(otpId);
-    if (otp) {
-      otp.verified = true;
-      this.otpVerifications.set(otpId, otp);
-      return true;
-    }
-    return false;
+  async getBidById(bidId: string): Promise<Bid | undefined> {
+    return this.bids.get(bidId);
   }
 
-  async markOtpAsExpired(otpId: string): Promise<boolean> {
-    const otp = this.otpVerifications.get(otpId);
-    if (otp) {
-      otp.expiresAt = new Date(); // Mark as expired by setting expiry to now
-      this.otpVerifications.set(otpId, otp);
-      return true;
-    }
-    return false;
-  }
-
-  async expireAllActiveOtpsForTarget(phone: string, countryCode: string, purpose: string): Promise<number> {
-    let expiredCount = 0;
-    const now = new Date();
+  async getBidAnalytics(): Promise<{ totalBids: number; pendingBids: number; acceptedBids: number; rejectedBids: number; totalValue: number; avgBidAmount: number }> {
+    const allBids = Array.from(this.bids.values());
+    const totalBids = allBids.length;
+    const pendingBids = allBids.filter(b => (b as any).status === "pending").length;
+    const acceptedBids = allBids.filter(b => (b as any).status === "accepted").length;
+    const rejectedBids = allBids.filter(b => (b as any).status === "rejected").length;
+    const totalValue = allBids.reduce((sum, b) => sum + b.bidAmount, 0);
+    const avgBidAmount = totalBids > 0 ? totalValue / totalBids : 0;
     
-    Array.from(this.otpVerifications.entries()).forEach(([id, otp]) => {
-      if (otp.phone === phone && 
-          otp.countryCode === countryCode && 
-          otp.purpose === purpose && 
-          !otp.verified && 
-          otp.expiresAt > now) {
-        otp.expiresAt = now;
-        this.otpVerifications.set(id, otp);
-        expiredCount++;
-      }
-    });
-    
-    return expiredCount;
+    return {
+      totalBids,
+      pendingBids,
+      acceptedBids,
+      rejectedBids,
+      totalValue,
+      avgBidAmount
+    };
   }
 
-  async getRecentOtpAttempts(phone: string, countryCode: string, since: Date): Promise<OtpVerification[]> {
-    return Array.from(this.otpVerifications.values())
-      .filter(otp => 
-        otp.phone === phone && 
-        otp.countryCode === countryCode && 
-        otp.createdAt >= since
-      )
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }
-
-  async cleanupExpiredOtps(cutoffDate: Date): Promise<number> {
-    const expired = Array.from(this.otpVerifications.entries())
-      .filter(([_, otp]) => otp.createdAt < cutoffDate || otp.expiresAt < new Date());
-    
-    expired.forEach(([id]) => this.otpVerifications.delete(id));
-    return expired.length;
-  }
-
-  // Phone-based user operations
   async getUserByPhone(phone: string, countryCode: string): Promise<User | undefined> {
     return Array.from(this.users.values())
       .find(user => user.phone === phone && user.countryCode === countryCode);
   }
 
-  // WhatsApp Messages
   private whatsappMessages: Map<string, WhatsAppMessage> = new Map();
 
   async logWhatsAppMessage(message: InsertWhatsAppMessage): Promise<WhatsAppMessage> {
@@ -2588,8 +2986,7 @@ export class MemStorage implements IStorage {
       .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())
       .slice(0, limit);
   }
-  
-  // Additional WhatsApp message methods for webhook and admin functionality
+
   async updateWhatsAppMessageStatus(messageSid: string, updates: { status: string; providerResponse?: string }): Promise<boolean> {
     for (const [id, message] of Array.from(this.whatsappMessages.entries())) {
       if (message.messageSid === messageSid) {
@@ -2627,8 +3024,7 @@ export class MemStorage implements IStorage {
     this.whatsappMessages.set(id, { ...message, ...updates });
     return true;
   }
-  
-  // Admin Audit Logs
+
   private adminAuditLogs: Map<string, AdminAuditLog> = new Map();
 
   async logAdminAction(auditLog: InsertAdminAuditLog): Promise<AdminAuditLog> {
@@ -2677,7 +3073,6 @@ export class MemStorage implements IStorage {
       .slice(0, limit);
   }
 
-  // Atomic rate limiting storage implementation
   async checkAndIncrementRateLimit(userId: string, windowMs: number): Promise<{ count: number; resetTime: number; withinWindow: boolean }> {
     const now = Date.now();
     const newResetTime = now + windowMs;
@@ -2685,18 +3080,17 @@ export class MemStorage implements IStorage {
     const existing = this.rateLimits.get(userId);
     
     if (!existing) {
-      // First request - initialize
+
       this.rateLimits.set(userId, { count: 1, resetTime: newResetTime });
       return { count: 1, resetTime: newResetTime, withinWindow: true };
     }
     
     if (now >= existing.resetTime) {
-      // Window expired - reset
+
       this.rateLimits.set(userId, { count: 1, resetTime: newResetTime });
       return { count: 1, resetTime: newResetTime, withinWindow: true };
     }
-    
-    // Within window - increment
+
     const newCount = existing.count + 1;
     this.rateLimits.set(userId, { count: newCount, resetTime: existing.resetTime });
     return { count: newCount, resetTime: existing.resetTime, withinWindow: true };
@@ -2714,6 +3108,137 @@ export class MemStorage implements IStorage {
     }
     
     return cleanedCount;
+  }
+
+  async getContactsForExport(options: ContactFilterOptions): Promise<Contact[]> {
+    const { status, startDate, endDate, search } = options;
+    const exportLimit = 10000;
+    
+    let filtered = Array.from(this.contacts.values());
+    
+    if (status) {
+      filtered = filtered.filter(contact => contact.status === status);
+    }
+    
+    if (startDate) {
+      const start = new Date(startDate);
+      filtered = filtered.filter(contact => contact.createdAt >= start);
+    }
+    
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      filtered = filtered.filter(contact => contact.createdAt <= end);
+    }
+    
+    if (search) {
+      const searchLower = search.toLowerCase();
+      filtered = filtered.filter(contact =>
+        contact.name.toLowerCase().includes(searchLower) ||
+        contact.email.toLowerCase().includes(searchLower) ||
+        contact.subject.toLowerCase().includes(searchLower)
+      );
+    }
+    
+    return filtered
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, exportLimit);
+  }
+
+  private emailVerificationTokens: Map<string, EmailVerificationToken> = new Map();
+
+  async createVerificationToken(userId: string, email: string, purpose: string = 'email_verification'): Promise<{ token: string; tokenHash: string }> {
+    const crypto = await import('crypto');
+    const token = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    
+    const id = randomUUID();
+    const newToken: EmailVerificationToken = {
+      id,
+      userId,
+      email,
+      tokenHash,
+      purpose,
+      expiresAt,
+      consumedAt: null,
+      resendCount: 0,
+      createdAt: new Date()
+    };
+    
+    this.emailVerificationTokens.set(id, newToken);
+    return { token, tokenHash };
+  }
+
+  async getVerificationToken(tokenHash: string, email: string, purpose?: string): Promise<EmailVerificationToken | undefined> {
+    const now = new Date();
+    
+    return Array.from(this.emailVerificationTokens.values()).find(token =>
+      token.tokenHash === tokenHash &&
+      token.email === email &&
+      token.consumedAt === null &&
+      token.expiresAt >= now &&
+      (!purpose || token.purpose === purpose)
+    );
+  }
+
+  async consumeVerificationToken(tokenHash: string, purpose?: string): Promise<boolean> {
+    const token = Array.from(this.emailVerificationTokens.values()).find(t =>
+      t.tokenHash === tokenHash &&
+      (!purpose || t.purpose === purpose)
+    );
+    
+    if (!token) return false;
+    
+    this.emailVerificationTokens.set(token.id, {
+      ...token,
+      consumedAt: new Date()
+    });
+    
+    if (token.purpose === 'email_verification') {
+      const user = this.users.get(token.userId);
+      if (user) {
+        this.users.set(token.userId, {
+          ...user,
+          emailVerified: true
+        });
+      }
+    }
+    
+    return true;
+  }
+
+  async cleanupExpiredVerificationTokens(cutoffDate: Date): Promise<number> {
+    const expired = Array.from(this.emailVerificationTokens.entries())
+      .filter(([_, token]) => token.expiresAt <= cutoffDate);
+    
+    expired.forEach(([id]) => this.emailVerificationTokens.delete(id));
+    return expired.length;
+  }
+
+  async incrementResendCount(userId: string): Promise<boolean> {
+    for (const [id, token] of Array.from(this.emailVerificationTokens.entries())) {
+      if (token.userId === userId && token.consumedAt === null) {
+        this.emailVerificationTokens.set(id, {
+          ...token,
+          resendCount: token.resendCount + 1
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async getActiveVerificationToken(userId: string): Promise<EmailVerificationToken | undefined> {
+    const now = new Date();
+    
+    return Array.from(this.emailVerificationTokens.values())
+      .filter(token =>
+        token.userId === userId &&
+        token.consumedAt === null &&
+        token.expiresAt >= now
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
   }
 
   async getAllSiteSettings(): Promise<SiteSetting[]> {
@@ -2817,29 +3342,46 @@ export class MemStorage implements IStorage {
       .returning();
     return result.length > 0;
   }
+
+  async createInvoice(invoiceData: InsertInvoice, items: InsertInvoiceItem[]): Promise<InvoiceWithItems> {
+    throw new Error("Invoice operations not supported in memory storage");
+  }
+
+  async getInvoices(filters?: InvoiceFilterOptions): Promise<{ invoices: InvoiceWithItems[]; total: number; hasMore: boolean }> {
+    throw new Error("Invoice operations not supported in memory storage");
+  }
+
+  async getInvoiceById(id: string): Promise<InvoiceWithItems | undefined> {
+    throw new Error("Invoice operations not supported in memory storage");
+  }
+
+  async deleteInvoice(id: string): Promise<boolean> {
+    throw new Error("Invoice operations not supported in memory storage");
+  }
+
+  async updateInvoice(id: string, invoiceData: Partial<InsertInvoice>): Promise<InvoiceWithItems | undefined> {
+    throw new Error("Invoice operations not supported in memory storage");
+  }
+
+  async getEligibleTransactionsForInvoicing(): Promise<{ appointments: any[]; bids: any[]; cars: any[] }> {
+    throw new Error("Invoice operations not supported in memory storage");
+  }
 }
 
-// Factory function to create storage instance
 async function createStorage(): Promise<IStorage> {
   try {
-    console.log("Attempting database connection...");
     const db = await getDb();
-    console.log("Database connection successful - using DatabaseStorage");
-    
-    // Test the connection with a simple query
+
     await db.select().from(users).limit(1);
-    console.log("Database query test successful");
     
     return new DatabaseStorage();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.error("Full error:", error);
-    console.log("Falling back to MemStorage with sample data");
     return new MemStorage();
   }
 }
 
-// Export storage instance
 let storageInstance: IStorage | null = null;
 
 export async function getStorage(): Promise<IStorage> {
@@ -2849,7 +3391,6 @@ export async function getStorage(): Promise<IStorage> {
   return storageInstance;
 }
 
-// For backward compatibility - this will be lazy-initialized on first use
 export const storage = new Proxy({} as IStorage, {
   get(target, prop) {
     throw new Error("Use getStorage() instead of direct storage access for lazy initialization.");

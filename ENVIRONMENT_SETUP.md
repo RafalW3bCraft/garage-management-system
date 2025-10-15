@@ -14,37 +14,13 @@ Your application is **fully functional** with the following services:
 - Session management - Secure and working
 
 ⚠️ **Services needing API keys:**
-- SMS/OTP verification (MessageCentral)
 - WhatsApp notifications (Twilio)
 
 ---
 
 ## 🔑 Required API Keys
 
-### 1. SMS/OTP Verification (MessageCentral)
-
-**What it does:** Sends SMS verification codes for mobile phone registration
-
-**Required variables:**
-```bash
-MESSAGECENTRAL_AUTH_TOKEN="your_messagecentral_auth_token"
-MESSAGECENTRAL_CUSTOMER_ID="your_customer_id"
-OTP_SECRET="your_secure_32_character_secret_minimum"
-```
-
-**How to get MessageCentral credentials:**
-1. Sign up at [MessageCentral](https://cpaas.messagecentral.com/)
-2. Go to your dashboard
-3. Get your Auth Token (JWT token for API authentication)
-4. Get your Customer ID (starts with C-)
-
-**Generate OTP Secret:**
-```bash
-# Generate a secure 32+ character secret
-openssl rand -base64 32
-```
-
-### 2. WhatsApp Notifications (Twilio)
+### WhatsApp Notifications (Twilio)
 
 **What it does:** Sends WhatsApp messages for appointment confirmations and updates
 
@@ -68,14 +44,12 @@ WHATSAPP_CIRCUIT_THRESHOLD="5"              # Failures before opening circuit (d
 WHATSAPP_CIRCUIT_RECOVERY_MIN="5"          # Minutes before retry after circuit opens (default: 5)
 
 # Fallback configuration
-WHATSAPP_ENABLE_SMS_FALLBACK="true"        # Enable SMS fallback (default: true)
 WHATSAPP_ENABLE_EMAIL_FALLBACK="true"      # Enable email fallback (default: true)
 ```
 
 **Circuit Breaker & Fallback Features:**
 - **Circuit Breaker**: Automatically detects sustained WhatsApp failures and prevents wasted retry attempts
-- **SMS Fallback**: If WhatsApp fails after retries, attempts to send via SMS (requires OTP service)
-- **Email Fallback**: If both WhatsApp and SMS fail, attempts to send via email (requires SendGrid)
+- **Email Fallback**: If WhatsApp fails, attempts to send via email (requires SendGrid)
 - **Simplified Retry**: Exponential backoff without database overhead during retries
 
 **How to get Twilio credentials:**
@@ -103,11 +77,7 @@ WHATSAPP_ENABLE_EMAIL_FALLBACK="true"      # Enable email fallback (default: tru
 Add these to your Replit Secrets or `.env` file:
 
 ```bash
-# SMS/OTP Service
-MESSAGECENTRAL_API_KEY="your_actual_api_key_here"
-OTP_SECRET="your_generated_32_character_secret"
-
-# WhatsApp Service  
+# WhatsApp Service (Twilio)
 TWILIO_ACCOUNT_SID="your_account_sid_here"
 TWILIO_AUTH_TOKEN="your_auth_token_here"
 TWILIO_WHATSAPP_NUMBER="whatsapp:+your_whatsapp_number"
@@ -128,11 +98,6 @@ After adding the environment variables:
    - `- WhatsApp Service: ⚠ Disabled (mock mode)`
 
 ### Step 3: Test the Services
-
-**Test SMS/OTP:**
-1. Try registering with a mobile phone number
-2. Check if you receive the SMS verification code
-3. Complete the verification process
 
 **Test WhatsApp:**
 1. Ensure phone numbers are in E.164 format with "whatsapp:" prefix
@@ -157,7 +122,6 @@ After adding the environment variables:
 
 ### Features Requiring API Keys
 
-- **Mobile Registration** (Needs MessageCentral for SMS)
 - **WhatsApp Notifications** (Needs Twilio for messages)
 
 ---
@@ -189,12 +153,11 @@ node scripts/create-admin-user.js
 ## 🔧 Development vs Production
 
 **Development Mode (Current):**
-- SMS codes are logged to console instead of sent
 - WhatsApp messages are logged to console instead of sent
 - Perfect for testing without spending credits
 
 **Production Mode:**
-- Real SMS and WhatsApp messages are sent
+- Real WhatsApp messages are sent
 - Requires actual API credentials
 - Set NODE_ENV=production for full functionality
 
@@ -204,8 +167,7 @@ node scripts/create-admin-user.js
 
 If you need help getting API keys or have questions:
 
-1. **MessageCentral Support:** Check their documentation for API setup
-2. **Twilio Support:** Their WhatsApp Business API has detailed guides
-3. **Application Issues:** Check the console logs for specific error messages
+1. **Twilio Support:** Their WhatsApp Business API has detailed guides
+2. **Application Issues:** Check the console logs for specific error messages
 
 Your application is fully functional - these API keys just enable the external messaging features!

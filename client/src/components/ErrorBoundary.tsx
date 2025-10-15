@@ -43,7 +43,7 @@ interface ErrorBoundaryState {
  *     <CustomErrorUI error={error} onReset={reset} />
  *   )}
  *   onError={(error, errorInfo) => {
- *     // Send to error tracking service
+ *
  *     trackError(error, errorInfo);
  *   }}
  * >
@@ -81,13 +81,11 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
    * @param {React.ErrorInfo} errorInfo - React error information with component stack
    */
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
-    // Log error with context
+
     logError(error, "ErrorBoundary - React Component Error");
-    
-    // Log component stack for debugging
+
     console.error("Component stack:", errorInfo.componentStack);
-    
-    // Call optional error callback
+
     if (this.props.onError) {
       this.props.onError(error, errorInfo);
     }
@@ -163,7 +161,7 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
     const { children, fallback } = this.props;
 
     if (hasError && error) {
-      // Use custom fallback if provided, otherwise use default
+
       if (fallback) {
         return fallback(error, this.resetError);
       }

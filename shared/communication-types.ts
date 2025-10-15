@@ -10,31 +10,30 @@ export interface CommunicationResult {
   retryCount?: number;
   totalAttempts?: number;
   timestamp?: Date;
-  service: 'whatsapp' | 'email' | 'otp' | 'sms';
-  // Service-specific metadata
+  service: 'whatsapp' | 'email';
+
   metadata?: {
-    // WhatsApp specific
+
     messageSid?: string;
     finalFailure?: boolean;
-    // OTP specific  
+
     rateLimited?: boolean;
     expiresIn?: number;
     maxAttempts?: number;
     attempts?: number;
     expired?: boolean;
-    // Email specific
+
     emailId?: string;
     statusCode?: number;
-    // Fallback specific
-    fallbackUsed?: 'sms' | 'email';
+
+    fallbackUsed?: 'whatsapp' | 'email';
     originalError?: string;
     fallbackAttempted?: boolean;
-    // Circuit breaker specific
+
     circuitBreakerOpen?: boolean;
     needsImplementation?: boolean;
   };
-  
-  // Legacy compatibility fields (deprecated - use metadata instead)
+
   messageSid?: string;
   error?: string;
   finalFailure?: boolean;
@@ -43,8 +42,8 @@ export interface CommunicationResult {
   attempts?: number;
   maxAttempts?: number;
   expired?: boolean;
-  // Fallback fields
-  fallbackUsed?: 'sms' | 'email';
+
+  fallbackUsed?: 'whatsapp' | 'email';
   originalError?: string;
   fallbackAttempted?: boolean;
   circuitBreakerOpen?: boolean;
@@ -54,7 +53,7 @@ export interface CommunicationResult {
  * Helper function to create standardized communication results
  */
 export function createCommunicationResult(
-  service: 'whatsapp' | 'email' | 'otp' | 'sms',
+  service: 'whatsapp' | 'email',
   success: boolean,
   message: string,
   options: {
@@ -73,8 +72,7 @@ export function createCommunicationResult(
     timestamp: new Date(),
     ...options,
   };
-  
-  // Add legacy compatibility fields from metadata
+
   if (options.metadata) {
     if (options.metadata.messageSid) result.messageSid = options.metadata.messageSid;
     if (options.metadata.finalFailure) result.finalFailure = options.metadata.finalFailure;
@@ -84,8 +82,7 @@ export function createCommunicationResult(
     if (options.metadata.maxAttempts) result.maxAttempts = options.metadata.maxAttempts;
     if (options.metadata.expired) result.expired = options.metadata.expired;
   }
-  
-  // Set error field for backward compatibility
+
   if (!success && !result.error) {
     result.error = message;
   }
@@ -101,33 +98,27 @@ export function categorizeError(errorCode?: string, errorMessage?: string): Comm
   
   const code = String(errorCode || '').toLowerCase();
   const message = (errorMessage || '').toLowerCase();
-  
-  // Authentication errors
+
   if (code.includes('401') || code.includes('20003') || message.includes('authentication') || message.includes('unauthorized')) {
     return 'authentication';
   }
-  
-  // Rate limiting errors
+
   if (code.includes('429') || code.includes('63021') || message.includes('rate limit') || message.includes('too many')) {
     return 'rate_limit';
   }
-  
-  // Validation errors
+
   if (code.includes('400') || code.startsWith('21') || message.includes('invalid') || message.includes('validation')) {
     return 'validation';
   }
-  
-  // Policy violations
+
   if (code.includes('403') || code.includes('63018') || code.includes('63032') || message.includes('policy') || message.includes('violation')) {
     return 'policy_violation';
   }
-  
-  // Service unavailable
+
   if (code.includes('500') || code.includes('503') || message.includes('unavailable') || message.includes('timeout')) {
     return 'service_unavailable';
   }
-  
-  // Network errors
+
   if (message.includes('network') || message.includes('connection') || message.includes('dns')) {
     return 'network';
   }
@@ -139,7 +130,7 @@ export function categorizeError(errorCode?: string, errorMessage?: string): Comm
  * Determine if error is retryable based on error type and code
  */
 export function isErrorRetryable(errorType: CommunicationResult['errorType'], errorCode?: string): boolean {
-  // Never retry these error types
+
   const nonRetryableTypes: CommunicationResult['errorType'][] = [
     'validation',
     'authentication', 
@@ -149,20 +140,17 @@ export function isErrorRetryable(errorType: CommunicationResult['errorType'], er
   if (nonRetryableTypes.includes(errorType)) {
     return false;
   }
-  
-  // Rate limit errors are temporarily retryable (but with backoff)
+
   if (errorType === 'rate_limit') {
     return true;
   }
-  
-  // Service and network errors are generally retryable
+
   if (errorType === 'service_unavailable' || errorType === 'network') {
     return true;
   }
-  
-  // For unknown errors, check specific error codes if available
+
   if (errorType === 'unknown' && errorCode) {
-    // Twilio-specific non-retryable codes
+
     const nonRetryableCodes = [
       '21211', '21212', '21614', '21610', '21408', '21623', '21609',
       '63013', '63016', '63018', '63021', '63024', '63032',
@@ -170,7 +158,6 @@ export function isErrorRetryable(errorType: CommunicationResult['errorType'], er
     ];
     return !nonRetryableCodes.includes(String(errorCode));
   }
-  
-  // Default to retryable for unknown cases
+
   return true;
 }

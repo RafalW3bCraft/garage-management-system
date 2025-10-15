@@ -63,21 +63,18 @@ export default function ServiceDetail() {
   const { id } = useParams<{ id: string }>();
   const [, setLocation] = useLocation();
 
-  // Fetch service details
   const { data: service, isLoading: serviceLoading, error: serviceError } = useQuery<Service>({
     queryKey: [`/api/services/${id}`],
     enabled: !!id,
     retry: 3,
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    staleTime: 5 * 60 * 1000,
   });
 
-  // Fetch locations for additional info
   const { data: locations = [] } = useQuery<Location[]>({
     queryKey: ["/api/locations"],
-    staleTime: 10 * 60 * 1000, // 10 minutes
+    staleTime: 10 * 60 * 1000,
   });
 
-  // Fetch all services for related services
   const { data: allServices = [] } = useQuery<Service[]>({
     queryKey: ["/api/services"],
     staleTime: 5 * 60 * 1000,
@@ -115,7 +112,6 @@ export default function ServiceDetail() {
     );
   }
 
-  // Get related services (same category, exclude current)
   const relatedServices = allServices
     .filter(s => s.category === service.category && s.id !== service.id)
     .slice(0, 3);

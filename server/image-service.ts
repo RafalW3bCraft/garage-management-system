@@ -2,20 +2,12 @@ import sharp from 'sharp';
 import multer from 'multer';
 import path from 'path';
 import { promises as fs } from 'fs';
+import { FileValidator } from './file-validator';
 
-// Image configuration with progressive loading support
 export const IMAGE_CONFIG = {
-  // Standard storage limit: 5MB per file for all image types
-  // This ensures consistent storage management across the platform
-  maxFileSize: 5 * 1024 * 1024, // 5MB
-  
-  // Supported image types - comprehensive format support for branding and site images
-  // JPEG/PNG/WebP: Standard web images with good compression
-  // GIF: Animated images and simple graphics
-  // SVG: Vector graphics for logos and icons (no size limit, scalable)
-  // BMP/TIFF: High-quality images for professional photography
-  // ICO: Favicons and small icons
-  // AVIF: Modern format with superior compression
+
+  maxFileSize: 5 * 1024 * 1024,
+
   allowedTypes: [
     'image/jpeg', 
     'image/jpg', 
@@ -42,8 +34,7 @@ export const IMAGE_CONFIG = {
     '.ico',
     '.avif'
   ],
-  
-  // Image dimensions with progressive loading sizes
+
   profile: {
     width: 400,
     height: 400,
@@ -62,7 +53,7 @@ export const IMAGE_CONFIG = {
     quality: 80,
     webpQuality: 75
   },
-  // Progressive loading sizes
+
   progressive: {
     small: { width: 400, height: 300, quality: 85, webpQuality: 80 },
     medium: { width: 600, height: 450, quality: 85, webpQuality: 80 },
@@ -70,7 +61,6 @@ export const IMAGE_CONFIG = {
   }
 };
 
-// Multer configuration for file uploads
 export const createMulterConfig = (destinationPath: string) => {
   return multer({
     storage: multer.diskStorage({
@@ -89,11 +79,28 @@ export const createMulterConfig = (destinationPath: string) => {
       }
     }),
     fileFilter: (req, file, cb) => {
-      if (IMAGE_CONFIG.allowedTypes.includes(file.mimetype)) {
-        cb(null, true);
-      } else {
-        cb(new Error(`Invalid file type. Only ${IMAGE_CONFIG.allowedTypes.join(', ')} are allowed.`));
+
+      const doubleExtResult = FileValidator.validateDoubleExtension(file.originalname);
+      if (!doubleExtResult.isValid) {
+        console.error(`[UPLOAD_SECURITY] ${doubleExtResult.securityIssue}: ${file.originalname}`);
+        cb(new Error(doubleExtResult.error || 'Invalid file name'));
+        return;
       }
+
+      if (!IMAGE_CONFIG.allowedTypes.includes(file.mimetype)) {
+        console.error(`[UPLOAD_SECURITY] Rejected MIME type: ${file.mimetype} for ${file.originalname}`);
+        cb(new Error(`Invalid file type. Only image files are allowed.`));
+        return;
+      }
+
+      const ext = path.extname(file.originalname).toLowerCase();
+      if (!IMAGE_CONFIG.allowedExtensions.includes(ext)) {
+        console.error(`[UPLOAD_SECURITY] Rejected extension: ${ext} for ${file.originalname}`);
+        cb(new Error(`Invalid file extension. Only ${IMAGE_CONFIG.allowedExtensions.join(', ')} are allowed.`));
+        return;
+      }
+      
+      cb(null, true);
     },
     limits: {
       fileSize: IMAGE_CONFIG.maxFileSize
@@ -101,7 +108,6 @@ export const createMulterConfig = (destinationPath: string) => {
   });
 };
 
-// Image processing service with WebP support
 export class ImageService {
   /**
    * Process image with WebP conversion for optimal web delivery
@@ -119,65 +125,48 @@ export class ImageService {
     const jpegPath = `${baseOutputPath}.jpg`;
     const webpPath = `${baseOutputPath}.webp`;
 
-    // Check file extension for special handling
     const ext = path.extname(inputPath).toLowerCase();
-    
-    // Special handling for SVG (vector graphics)
+
     if (ext === '.svg') {
-      // For SVG, just copy the file as-is (no processing needed for vector graphics)
-      // SVG files are already optimized and don't need resizing
+
       const svgPath = `${baseOutputPath}.svg`;
       await fs.copyFile(inputPath, svgPath);
-      
-      // Return SVG path for both (frontend will handle SVG display)
+
       return { jpeg: svgPath, webp: svgPath };
     }
-    
-    // Special handling for GIF (preserve animations)
+
     if (ext === '.gif') {
-      // Check if GIF is animated using Sharp metadata
+
       const metadata = await sharp(inputPath).metadata();
-      
-      // If GIF has multiple pages/frames, it's animated - preserve original
+
       if (metadata.pages && metadata.pages > 1) {
-        console.log(`[IMAGE] Preserving animated GIF with ${metadata.pages} frames`);
         const gifPath = `${baseOutputPath}.gif`;
         await fs.copyFile(inputPath, gifPath);
-        
-        // Return GIF path for both (frontend will use original animated GIF)
+
         return { jpeg: gifPath, webp: gifPath };
       }
-      
-      // Static GIF can be processed normally
-      console.log('[IMAGE] Processing static GIF');
+
     }
-    
-    // Special handling for ICO (multi-resolution icons)
+
     if (ext === '.ico') {
-      // ICO files contain multiple sizes - preserve original
-      console.log('[IMAGE] Preserving ICO multi-resolution icon');
+
       const icoPath = `${baseOutputPath}.ico`;
       await fs.copyFile(inputPath, icoPath);
-      
-      // Return ICO path for both
+
       return { jpeg: icoPath, webp: icoPath };
     }
 
-    // Standard processing for other raster images (JPEG, PNG, BMP, TIFF, AVIF)
-    // Create Sharp instance with resizing
     const sharpInstance = sharp(inputPath)
       .resize(config.width, config.height, {
         fit: 'cover',
         position: 'center'
       });
 
-    // Generate WebP version (smaller, better compression)
     await sharpInstance
       .clone()
       .webp({ quality: webpQuality, effort: 4 })
       .toFile(webpPath);
 
-    // Generate JPEG fallback for browser compatibility
     await sharpInstance
       .clone()
       .jpeg({ quality: config.quality, progressive: true })
@@ -274,14 +263,13 @@ export class ImageService {
   static async deleteImage(imagePath: string): Promise<{ success: boolean; error?: string }> {
     try {
       await fs.unlink(imagePath);
-      console.log(`Successfully deleted image: ${imagePath}`);
       return { success: true };
     } catch (error: unknown) {
-      // Handle different types of file deletion errors
+
       const nodeError = error as NodeJS.ErrnoException;
       if (nodeError.code === 'ENOENT') {
         console.warn(`Image file not found (already deleted): ${imagePath}`);
-        return { success: true }; // Treat as success since file doesn't exist
+        return { success: true };
       } else if (nodeError.code === 'EACCES' || nodeError.code === 'EPERM') {
         console.error(`Permission denied deleting image: ${imagePath}`, error);
         return { success: false, error: 'Permission denied' };
@@ -297,15 +285,13 @@ export class ImageService {
     imageType: 'profiles' | 'cars'
   ): Promise<{ success: boolean; mainDeleted: boolean; thumbDeleted: boolean; errors: string[] }> {
     const errors: string[] = [];
-    
-    // Delete main image
+
     const mainResult = await this.deleteImage(mainImagePath);
     const mainDeleted = mainResult.success;
     if (!mainResult.success && mainResult.error) {
       errors.push(`Main image: ${mainResult.error}`);
     }
 
-    // Generate thumbnail path and delete it - thumbnails are created with 'thumb-' prefix
     const filename = path.basename(mainImagePath);
     const thumbnailPath = path.join('public/uploads/thumbs', `thumb-${filename}`);
     
@@ -314,9 +300,6 @@ export class ImageService {
     if (!thumbResult.success && thumbResult.error) {
       errors.push(`Thumbnail: ${thumbResult.error}`);
     }
-
-    // Log the operation
-    console.log(`Image deletion complete - Main: ${mainDeleted}, Thumbnail: ${thumbDeleted}, Errors: ${errors.length}`);
 
     return {
       success: mainDeleted && thumbDeleted,
@@ -330,11 +313,11 @@ export class ImageService {
     const errors: string[] = [];
     
     if (!profileImageUrl) {
-      return { success: true, errors: [] }; // No image to delete
+      return { success: true, errors: [] };
     }
 
     try {
-      // Extract filename from URL (format: /uploads/profiles/filename.ext)
+
       const filename = profileImageUrl.split('/').pop();
       if (!filename) {
         errors.push('Invalid profile image URL format');
@@ -348,8 +331,6 @@ export class ImageService {
         errors.push(...result.errors);
       }
 
-      console.log(`Profile image cleanup for user ${userId}: ${result.success ? 'success' : 'partial/failed'}`);
-      
       return {
         success: result.success,
         errors
@@ -366,11 +347,11 @@ export class ImageService {
     const errors: string[] = [];
     
     if (!carImageUrl) {
-      return { success: true, errors: [] }; // No image to delete
+      return { success: true, errors: [] };
     }
 
     try {
-      // Extract filename from URL (format: /uploads/cars/filename.ext)
+
       const filename = carImageUrl.split('/').pop();
       if (!filename) {
         errors.push('Invalid car image URL format');
@@ -384,8 +365,6 @@ export class ImageService {
         errors.push(...result.errors);
       }
 
-      console.log(`Car image cleanup for car ${carId}: ${result.success ? 'success' : 'partial/failed'}`);
-      
       return {
         success: result.success,
         errors
@@ -407,7 +386,7 @@ export class ImageService {
     return {
       webp: `/uploads/${type}/${baseFilename}.webp`,
       jpeg: `/uploads/${type}/${baseFilename}.jpg`,
-      fallback: `/uploads/${type}/${baseFilename}.jpg` // JPEG as fallback
+      fallback: `/uploads/${type}/${baseFilename}.jpg`
     };
   }
 
@@ -419,46 +398,111 @@ export class ImageService {
     return `/uploads/${type}/${baseFilename}.jpg`;
   }
 
+  /**
+   * Comprehensive security validation for uploaded files
+   * Validates file content, magic numbers, MIME types, and sanitizes SVG files
+   */
+  static async validateUploadedFile(
+    filePath: string,
+    originalFilename: string,
+    mimeType: string
+  ): Promise<{ isValid: boolean; error?: string; securityIssue?: string }> {
+
+    const sizeResult = await FileValidator.validateFileSize(filePath, IMAGE_CONFIG.maxFileSize);
+    if (!sizeResult.isValid) {
+      console.error(`[IMAGE_SECURITY] File size validation failed: ${sizeResult.error}`);
+      await this.deleteImage(filePath);
+      return sizeResult;
+    }
+
+    const validationResult = await FileValidator.validateUploadedFile(
+      filePath,
+      originalFilename,
+      mimeType
+    );
+    
+    if (!validationResult.isValid) {
+      console.error(`[IMAGE_SECURITY] File validation failed: ${validationResult.error} (${validationResult.securityIssue})`);
+      await this.deleteImage(filePath);
+      return validationResult;
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (!['.svg', '.gif', '.ico'].includes(ext)) {
+      try {
+        const metadata = await sharp(filePath).metadata();
+        
+        if (!metadata.width || !metadata.height) {
+          console.error('[IMAGE_SECURITY] Invalid image: no dimensions');
+          await this.deleteImage(filePath);
+          return {
+            isValid: false,
+            error: 'Invalid image file',
+            securityIssue: 'NO_DIMENSIONS'
+          };
+        }
+
+        if (metadata.width < 100 || metadata.height < 100) {
+          console.error(`[IMAGE_SECURITY] Image too small: ${metadata.width}x${metadata.height}`);
+          await this.deleteImage(filePath);
+          return {
+            isValid: false,
+            error: 'Image dimensions too small (minimum 100x100 pixels)',
+            securityIssue: 'DIMENSIONS_TOO_SMALL'
+          };
+        }
+
+        if (metadata.width > 4000 || metadata.height > 4000) {
+          console.error(`[IMAGE_SECURITY] Image too large: ${metadata.width}x${metadata.height}`);
+          await this.deleteImage(filePath);
+          return {
+            isValid: false,
+            error: 'Image dimensions too large (maximum 4000x4000 pixels)',
+            securityIssue: 'DIMENSIONS_TOO_LARGE'
+          };
+        }
+        
+      } catch (error) {
+        console.error('[IMAGE_SECURITY] Sharp validation failed:', error);
+        await this.deleteImage(filePath);
+        return {
+          isValid: false,
+          error: 'Unable to process image file',
+          securityIssue: 'PROCESSING_FAILED'
+        };
+      }
+    }
+    
+    return { isValid: true };
+  }
+
+  /**
+   * Legacy validation method - now uses comprehensive FileValidator
+   * @deprecated Use validateUploadedFile instead for better security
+   */
   static async validateImage(filePath: string): Promise<boolean> {
     try {
       const ext = path.extname(filePath).toLowerCase();
-      
-      // Special handling for SVG files
-      if (ext === '.svg') {
-        // Basic SVG validation - check file size and basic structure
-        const stats = await fs.stat(filePath);
-        if (stats.size > IMAGE_CONFIG.maxFileSize) {
-          return false;
-        }
-        
-        // Read first few bytes to check for SVG signature
-        const content = await fs.readFile(filePath, 'utf8');
-        if (!content.includes('<svg') && !content.includes('<?xml')) {
-          return false;
-        }
-        
-        return true;
-      }
-      
-      // For raster images, use Sharp validation
-      const metadata = await sharp(filePath).metadata();
-      
-      // Check if it's a valid image
-      if (!metadata.width || !metadata.height) {
-        return false;
-      }
+      const filename = path.basename(filePath);
 
-      // Check dimensions (minimum requirements)
-      if (metadata.width < 100 || metadata.height < 100) {
-        return false;
-      }
-
-      // Check max dimensions (reasonable limits)
-      if (metadata.width > 4000 || metadata.height > 4000) {
-        return false;
-      }
-
-      return true;
+      const mimeTypeMap: Record<string, string> = {
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.webp': 'image/webp',
+        '.gif': 'image/gif',
+        '.svg': 'image/svg+xml',
+        '.bmp': 'image/bmp',
+        '.tiff': 'image/tiff',
+        '.tif': 'image/tiff',
+        '.ico': 'image/x-icon',
+        '.avif': 'image/avif'
+      };
+      
+      const mimeType = mimeTypeMap[ext] || 'application/octet-stream';
+      
+      const result = await this.validateUploadedFile(filePath, filename, mimeType);
+      return result.isValid;
     } catch (error) {
       console.error('Image validation failed:', error);
       return false;
@@ -466,6 +510,5 @@ export class ImageService {
   }
 }
 
-// Multer instances for different upload types
 export const profileUpload = createMulterConfig('public/uploads/profiles');
 export const carUpload = createMulterConfig('public/uploads/cars');

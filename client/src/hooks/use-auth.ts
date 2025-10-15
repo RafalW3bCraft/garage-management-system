@@ -24,7 +24,7 @@ import type { User } from "@shared/schema";
  * ```
  */
 export function useAuth() {
-  // Get current user
+
   const { data: user, isLoading } = useQuery<User | null>({
     queryKey: ["/api/auth/me"],
     queryFn: async () => {
@@ -44,7 +44,6 @@ export function useAuth() {
     retry: false,
   });
 
-  // Get available auth providers
   const { data: providers } = useQuery<string[]>({
     queryKey: ["/api/auth/providers"],
     queryFn: async () => {
@@ -56,15 +55,14 @@ export function useAuth() {
           const data = await response.json();
           return data.data?.providers || ["email"];
         }
-        return ["email"]; // fallback to email only
+        return ["email"];
       } catch {
         return ["email"];
       }
     },
-    staleTime: 5 * 60 * 1000, // 5 minutes - providers don't change often
+    staleTime: 5 * 60 * 1000,
   });
 
-  // Google login redirect
   const googleLogin = () => {
     window.location.href = "/api/auth/google";
   };

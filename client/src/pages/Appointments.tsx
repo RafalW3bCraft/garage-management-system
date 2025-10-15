@@ -25,20 +25,18 @@ export default function Appointments() {
   const [activeTab, setActiveTab] = useState("upcoming");
   const { user, isLoading: authLoading } = useAuth();
 
-  // First, get the customer record for the current user
   const { data: customer, isLoading: customerLoading } = useQuery<Customer>({
     queryKey: ["/api/customer/by-user", user?.id],
-    enabled: !!user?.id, // Only fetch when user is authenticated
+    enabled: !!user?.id,
     retry: 1,
-    staleTime: 5 * 60 * 1000 // 5 minutes - customer data changes infrequently
+    staleTime: 5 * 60 * 1000
   });
 
-  // Then fetch user's appointments using the customer ID
   const { data: appointments = [], isLoading: appointmentsLoading, error } = useQuery<AppointmentWithDetails[]>({
     queryKey: ["/api/appointments/customer", customer?.id],
-    enabled: !!customer?.id, // Only fetch when we have customer ID
+    enabled: !!customer?.id,
     retry: 3,
-    staleTime: 30 * 1000 // 30 seconds
+    staleTime: 30 * 1000
   });
 
   const isLoading = customerLoading || appointmentsLoading;
@@ -62,7 +60,6 @@ export default function Appointments() {
 
   const stats = getStatusStats();
 
-  // Show loading state while checking authentication
   if (authLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -74,7 +71,6 @@ export default function Appointments() {
     );
   }
 
-  // Show message for unauthenticated users
   if (!user) {
     return (
       <div className="min-h-screen bg-background">

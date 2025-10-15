@@ -3,6 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useEffect, useMemo } from "react";
 import type { AuthStep, AuthMode, AuthContext } from "./useAuthFlow";
+import { passwordValidation } from "@shared/schema";
 
 /**
  * Validation schema for email input step
@@ -15,26 +16,14 @@ const emailSchema = z.object({
  * Validation schema for password input step with strength requirements
  */
 const passwordSchema = z.object({
-  password: z.string()
-    .min(8, "Password must be at least 8 characters")
-    .max(100, "Password cannot exceed 100 characters")
-    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-    .regex(/[0-9]/, "Password must contain at least one number")
-    .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character"),
+  password: passwordValidation,
 });
 
 /**
  * Validation schema for password confirmation (registration) with strength requirements
  */
 const confirmPasswordSchema = z.object({
-  password: z.string()
-    .min(8, "Password must be at least 8 characters")
-    .max(100, "Password cannot exceed 100 characters")
-    .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-    .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-    .regex(/[0-9]/, "Password must contain at least one number")
-    .regex(/[^A-Za-z0-9]/, "Password must contain at least one special character"),
+  password: passwordValidation,
   confirmPassword: z.string().min(1, "Please confirm your password"),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
@@ -48,52 +37,16 @@ const nameSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
 });
 
-/**
- * Validation schema for phone input step
- */
-const phoneSchema = z.object({
-  channel: z.enum(['whatsapp', 'email'], {
-    required_error: "Please select a channel",
-  }).default('whatsapp'),
-  phone: z
-    .string()
-    .min(7, "Phone number must be at least 7 digits")
-    .max(15, "Phone number cannot exceed 15 digits")
-    .regex(/^[0-9]+$/, "Phone number must contain only digits")
-    .optional(),
-  countryCode: z.string().min(1, "Please select a country").optional(),
-  email: z.string().email("Please enter a valid email address").optional(),
-}).refine((data) => {
-  if (data.channel === 'whatsapp') {
-    return !!data.phone && !!data.countryCode;
-  }
-  if (data.channel === 'email') {
-    return !!data.email;
-  }
-  return true;
-}, {
-  message: "Please provide the required information for the selected channel",
-  path: ["phone"],
-});
-
-/**
- * Validation schema for OTP verification step
- */
-const otpSchema = z.object({
-  otp: z.string().length(6, "OTP must be 6 digits"),
-});
 
 /**
  * Schema mapping for each authentication step
  */
 const STEP_SCHEMAS: Record<AuthStep, z.ZodSchema> = {
-  "method-selection": z.object({}), // No validation needed
+  "method-selection": z.object({}),
   "email-input": emailSchema,
   "password-input": passwordSchema,
   "name-input": nameSchema,
-  "phone-input": phoneSchema,
-  "otp-verification": otpSchema,
-  "profile-setup": nameSchema, // Reuse name schema
+  "profile-setup": nameSchema,
 };
 
 /**
@@ -114,10 +67,6 @@ type AuthFormData = {
   password?: string;
   confirmPassword?: string;
   name?: string;
-  phone?: string;
-  countryCode?: string;
-  channel?: 'whatsapp' | 'email';
-  otp?: string;
 };
 
 /**
@@ -149,17 +98,6 @@ const getStepDefaultValues = (
     case "name-input":
     case "profile-setup":
       return { name: context.name || "" };
-      
-    case "phone-input":
-      return { 
-        channel: 'whatsapp' as const,
-        phone: context.phone || "", 
-        countryCode: context.countryCode || defaultCountryCode,
-        email: context.email || ""
-      };
-      
-    case "otp-verification":
-      return { otp: "" };
       
     default:
       return {};
@@ -213,36 +151,30 @@ export function useAuthForm(
   defaultEmail: string = "",
   defaultCountryCode: string = "+91"
 ) {
-  // Get the appropriate schema for the current step
+
   const schema = useMemo(() => {
     if (step === "password-input") {
       return getPasswordStepSchema(mode);
     }
     return STEP_SCHEMAS[step] || z.object({});
   }, [step, mode]);
-  
-  // Get default values for the current step
+
   const defaultValues = useMemo(() => 
     getStepDefaultValues(step, mode, context, defaultEmail, defaultCountryCode),
     [step, mode, context, defaultEmail, defaultCountryCode]
   );
-  
-  // Create the form with dynamic schema and default values
+
   const form = useForm<AuthFormData>({
     resolver: zodResolver(schema),
     defaultValues,
-    mode: "onChange", // Validate on change for better UX
+    mode: "onChange",
   });
-  
-  // Update form values when step or context changes
+
   useEffect(() => {
     const newDefaults = getStepDefaultValues(step, mode, context, defaultEmail, defaultCountryCode);
-    
-    // Reset form with new schema and defaults
     form.reset(newDefaults);
-  }, [step, mode, context, defaultEmail, defaultCountryCode, form]);
-  
-  // Helper to get step-specific field configurations
+  }, [step, mode, context.email, context.password, context.name, defaultEmail, defaultCountryCode]);
+
   const getFieldConfig = (fieldName: keyof AuthFormData) => {
     const configs = {
       email: {
@@ -271,36 +203,11 @@ export function useAuthForm(
         type: "text" as const,
         testId: "input-name",
       },
-      phone: {
-        label: "Phone number",
-        placeholder: "Enter your phone number",
-        type: "tel" as const,
-        testId: "input-phone",
-      },
-      countryCode: {
-        label: "Country",
-        placeholder: "Select country",
-        type: "select" as const,
-        testId: "select-country-code",
-      },
-      otp: {
-        label: "Verification code",
-        placeholder: "Enter 6-digit code",
-        type: "text" as const,
-        testId: "input-otp",
-      },
-      channel: {
-        label: "Verification method",
-        placeholder: "Select channel",
-        type: "radio" as const,
-        testId: "radio-channel",
-      },
     } as const;
     
     return configs[fieldName] as typeof configs[keyof typeof configs] | undefined;
   };
-  
-  // Get fields that should be rendered for the current step
+
   const getStepFields = (): (keyof AuthFormData)[] => {
     switch (step) {
       case "email-input":
@@ -315,18 +222,11 @@ export function useAuthForm(
       case "profile-setup":
         return ["name"];
         
-      case "phone-input":
-        return ["channel"];
-        
-      case "otp-verification":
-        return ["otp"];
-        
       default:
         return [];
     }
   };
-  
-  // Helper to extract only the relevant data for the current step
+
   const getStepData = (formData: AuthFormData) => {
     const fields = getStepFields();
     const stepData: Partial<AuthFormData> = {};
@@ -339,8 +239,7 @@ export function useAuthForm(
     
     return stepData;
   };
-  
-  // Get button configuration for the current step
+
   const getSubmitButtonConfig = () => {
     const configs: Record<AuthStep, { text: string; testId: string }> = {
       "method-selection": {
@@ -359,14 +258,6 @@ export function useAuthForm(
         text: "Create account",
         testId: "button-complete-registration",
       },
-      "phone-input": {
-        text: "Send code",
-        testId: "button-send-otp",
-      },
-      "otp-verification": {
-        text: "Verify",
-        testId: "button-verify-otp",
-      },
       "profile-setup": {
         text: "Complete registration",
         testId: "button-complete-profile",
@@ -377,24 +268,20 @@ export function useAuthForm(
   };
   
   return {
-    // Form instance
+
     form,
-    
-    // Validation
+
     schema,
-    
-    // Helpers
+
     getFieldConfig,
     getStepFields,
     getStepData,
     getSubmitButtonConfig,
-    
-    // State
+
     isValid: form.formState.isValid,
     isSubmitting: form.formState.isSubmitting,
     errors: form.formState.errors,
-    
-    // Values
+
     values: form.getValues(),
     watchedValues: form.watch(),
   };

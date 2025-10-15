@@ -92,7 +92,6 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  // Fetch available locations with loading state
   const { 
     data: locations = [], 
     isLoading: locationsLoading,
@@ -112,14 +111,12 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
     },
   });
 
-  // Available time slots
   const timeSlots = [
     "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
     "12:00", "12:30", "14:00", "14:30", "15:00", "15:30",
     "16:00", "16:30", "17:00", "17:30", "18:00"
   ];
 
-  // Real-time availability checking when date/location changes
   useEffect(() => {
     const checkTimeSlotAvailability = async () => {
       const selectedLocation = form.watch("locationId");
@@ -133,7 +130,7 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
       setCheckingAvailability(true);
       
       try {
-        // Check availability for all time slots
+
         const availabilityChecks = await Promise.all(
           timeSlots.map(async (timeSlot) => {
             const [hours, minutes] = timeSlot.split(':').map(Number);
@@ -149,7 +146,7 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               return { timeSlot, available: !result.hasConflict };
             } catch (error) {
               console.warn(`Failed to check availability for ${timeSlot}:`, error);
-              return { timeSlot, available: false }; // Mark unavailable if check fails for safety
+              return { timeSlot, available: false };
             }
           })
         );
@@ -162,20 +159,19 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
         setTimeSlotAvailability(availability);
       } catch (error) {
         console.error("Failed to check time slot availability:", error);
-        // Show user-friendly error message
+
         toast({
           title: "Availability Check Failed",
           description: "Unable to verify time slot availability. Please refresh and try again.",
           variant: "destructive",
         });
-        // Reset availability on error - slots will appear without availability indicators
+
         setTimeSlotAvailability({});
       } finally {
         setCheckingAvailability(false);
       }
     };
 
-    // Debounce the availability check
     const timeoutId = setTimeout(checkTimeSlotAvailability, 300);
     return () => clearTimeout(timeoutId);
   }, [selectedDate, form.watch("locationId")]);
@@ -183,16 +179,13 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
   const createAppointmentMutation = useMutation({
     mutationFn: async (data: BookingData) => {
       if (!user) throw new Error("User not authenticated");
-      
-      // Ensure customer exists for authenticated user (secure endpoint)
+
       const customer = await apiRequestJson<Customer>("POST", "/api/customers/ensure-own", {});
-      
-      // Combine date and time
+
       const [hours, minutes] = data.timeSlot.split(':').map(Number);
       const appointmentDateTime = new Date(data.dateTime);
       appointmentDateTime.setHours(hours, minutes, 0, 0);
 
-      // Check for conflicts before creating appointment
       const conflictCheck = await apiRequestJson<{ hasConflict: boolean }>("POST", "/api/appointments/check-conflict", {
         locationId: data.locationId,
         dateTime: appointmentDateTime.toISOString()
@@ -220,15 +213,13 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
         title: "Appointment Booked!",
         description: `Your ${service.title} appointment has been scheduled successfully.`,
       });
-      
-      // Invalidate appointments cache to refresh the list
+
       queryClient.invalidateQueries({ 
         predicate: (query) => 
           typeof query.queryKey?.[0] === 'string' && 
           (query.queryKey[0] as string).startsWith('/api/appointments')
       });
-      
-      // Close dialog and reset form
+
       setOpen(false);
       form.reset();
       setSelectedDate(undefined);
