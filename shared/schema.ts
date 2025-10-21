@@ -730,7 +730,7 @@ export const invoiceItems = pgTable("invoice_items", {
 export const insertInvoiceSchema = createInsertSchema(invoices, {
   customerName: z.string().min(1, "Customer name is required"),
   customerState: z.string().min(1, "Customer state is required for GST calculation"),
-  invoiceNumber: z.string().min(1, "Invoice number is required"),
+  invoiceNumber: z.string().min(1, "Invoice number is required").optional(),
   subtotal: z.coerce.number().nonnegative("Subtotal must be non-negative").transform(val => String(val)),
   cgstAmount: z.coerce.number().nonnegative("CGST amount must be non-negative").transform(val => String(val)).optional(),
   sgstAmount: z.coerce.number().nonnegative("SGST amount must be non-negative").transform(val => String(val)).optional(),

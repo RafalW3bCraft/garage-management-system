@@ -58,12 +58,12 @@ export async function getDb() {
       max: isProduction ? 15 : 8,
 
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
-      allowExitOnIdle: true,
+      connectionTimeoutMillis: 10000,
+      allowExitOnIdle: false,
 
-      statement_timeout: 10000,
+      statement_timeout: 30000,
 
-      query_timeout: 10000,
+      query_timeout: 30000,
 
       keepAlive: true,
       keepAliveInitialDelayMillis: 10000,
@@ -77,6 +77,10 @@ export async function getDb() {
         stack: err.stack,
         timestamp: new Date().toISOString()
       });
+      
+      if (err.message === 'Connection terminated unexpectedly') {
+        console.log('[DB_POOL] Attempting to reconnect...');
+      }
     });
     
     cachedDb = drizzle(cachedPool, { schema });

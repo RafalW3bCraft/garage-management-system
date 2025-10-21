@@ -476,6 +476,25 @@ const getCachedServicesByCategory = memoizee(async (category: string) => {
   return result;
 }, { ...CACHE_CONFIG.long, promise: true, primitive: true, max: 100 });
 
+const getCachedBidAnalytics = memoizee(async () => {
+  const result = await withRetry(async () => {
+    const storage = await getStorage();
+    return await storage.getBidAnalytics();
+  }, 'getBidAnalytics');
+  
+  if (!result.success) {
+    logAdminStatsError({
+      operation: 'getBidAnalytics',
+      timestamp: new Date().toISOString(),
+      error: result.error?.message || 'Unknown error',
+      code: (result.error as DatabaseError | undefined)?.code,
+      attempts: result.attempts
+    });
+  }
+  
+  return result;
+}, { ...CACHE_CONFIG.medium, promise: true });
+
 class CacheManager {
   private static instance: CacheManager;
   private cacheCounters: {
@@ -484,6 +503,7 @@ class CacheManager {
     cars: { bulk: number; individual: number; };
     appointments: number;
     users: number;
+    bids: number;
     hits: number;
     misses: number;
   };
@@ -496,6 +516,7 @@ class CacheManager {
       cars: { bulk: 0, individual: 0 },
       appointments: 0,
       users: 0,
+      bids: 0,
       hits: 0,
       misses: 0
     };
@@ -639,6 +660,16 @@ class CacheManager {
     }
   }
 
+  invalidateBidCaches(): void {
+    
+    try {
+      getCachedBidAnalytics.clear();
+      this.cacheCounters.bids = 0;
+    } catch (error) {
+      console.error('[CACHE_INVALIDATION] Error clearing bid caches:', error);
+    }
+  }
+
   clearAllCaches(): void {
     
     try {
@@ -651,6 +682,7 @@ class CacheManager {
       getCachedCar.clear();
       getCachedAppointments.clear();
       getCachedUserCount.clear();
+      getCachedBidAnalytics.clear();
 
       this.cacheCounters = {
         services: { bulk: 0, individual: 0, categories: 0 },
@@ -658,6 +690,7 @@ class CacheManager {
         cars: { bulk: 0, individual: 0 },
         appointments: 0,
         users: 0,
+        bids: 0,
         hits: 0,
         misses: 0
       };
@@ -3791,6 +3824,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       await storage.updateCarCurrentBid(carId, bidAmount);
+      
+      cacheManager.invalidateBidCaches();
 
       setImmediate(async () => {
         try {
@@ -3898,9 +3933,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/admin/bids/analytics", requireAdmin, async (req: Request, res: Response) => {
     try {
-      const storage = await getStorage();
-      const analytics = await storage.getBidAnalytics();
-      res.json(analytics);
+      const startTime = Date.now();
+      const analyticsResult = await getCachedBidAnalytics();
+      
+      if (!analyticsResult.success) {
+        throw analyticsResult.error || new Error('Failed to fetch bid analytics');
+      }
+      
+      const duration = Date.now() - startTime;
+      console.log(`[PERF] GET /api/admin/bids/analytics completed in ${duration}ms`);
+      
+      res.json(analyticsResult.data);
     } catch (error) {
       console.error("Get bid analytics error:", error);
       res.status(500).json({ message: "Failed to fetch bid analytics" });
@@ -3932,6 +3975,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!updatedBid) {
         return res.status(500).json({ message: "Failed to update bid status" });
       }
+      
+      cacheManager.invalidateBidCaches();
 
       if (updatedBid.userId) {
         const car = await storage.getCar(updatedBid.carId);
@@ -4945,6 +4990,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }),
     asyncRoute("get admin contacts", withStorage(async (storage, req: Request, res: Response) => {
+      const startTime = Date.now();
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 50;
       const status = req.query.status as string;
@@ -4960,6 +5006,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         endDate,
         search
       });
+
+      const duration = Date.now() - startTime;
+      console.log(`[PERF] GET /api/admin/contacts completed in ${duration}ms`);
+      if (duration > 500) {
+        console.warn(`[SLOW_REQUEST] GET /api/admin/contacts 200 in ${duration}ms`);
+      }
 
       await logAdminAction(req, res, {
         additionalInfo: `Viewed contacts page ${page}, filters: ${JSON.stringify({ status, startDate, endDate, search })}`
@@ -5768,7 +5820,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/admin/invoices",
     requireAdmin,
     asyncRoute("create invoice", async (req: Request, res: Response) => {
-      const validationResult = insertInvoiceSchema.safeParse(req.body.invoice);
+      const invoiceInput = {
+        ...req.body.invoice,
+        invoiceNumber: req.body.invoice?.invoiceNumber || invoiceService.generateInvoiceNumber()
+      };
+      
+      const validationResult = insertInvoiceSchema.safeParse(invoiceInput);
       
       if (!validationResult.success) {
         const errorMessage = fromZodError(validationResult.error).toString();
@@ -5782,6 +5839,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const storage = await getStorage();
       const invoice = await storage.createInvoice(validationResult.data, items);
+      
+      if (invoice.customerPhone) {
+        try {
+          const baseUrl = process.env.REPLIT_DEV_DOMAIN 
+            ? `https://${process.env.REPLIT_DEV_DOMAIN}` 
+            : 'http://localhost:5000';
+          const invoiceUrl = `${baseUrl}/invoices/${invoice.id}`;
+          
+          const { extractCountryCode } = await import('@shared/phone-utils');
+          const cleanPhone = invoice.customerPhone.replace(/\D/g, '');
+          const countryCode = extractCountryCode(cleanPhone);
+          
+          const { WhatsAppService } = await import('./whatsapp-service');
+          await WhatsAppService.sendInvoiceNotification(
+            invoice.customerPhone,
+            `+${countryCode}`,
+            invoice.customerName,
+            invoice.invoiceNumber,
+            invoice.totalAmount,
+            invoiceUrl,
+            invoice.customerEmail || undefined
+          );
+          console.log(`[Invoice] WhatsApp notification sent to ${invoice.customerPhone}`);
+        } catch (whatsappError) {
+          console.error(`[Invoice] Failed to send WhatsApp notification:`, whatsappError);
+        }
+      }
       
       await logAdminAction(req, res, {
         resourceId: invoice.id,

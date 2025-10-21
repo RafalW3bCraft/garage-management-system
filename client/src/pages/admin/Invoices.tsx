@@ -76,19 +76,20 @@ export default function AdminInvoices() {
     }
   ]);
 
-  const { data: invoices, isLoading: loadingInvoices } = useQuery({
+  const { data: invoices, isLoading: loadingInvoices } = useQuery<Invoice[]>({
     queryKey: ["/api/admin/invoices"],
     queryFn: async () => {
       const response = await apiRequestJson("GET", "/api/admin/invoices");
-      return response.data;
+      return (response as any).data || [];
     },
     enabled: isAuthenticated && user?.role === "admin"
   });
 
-  const { data: eligibleTransactions } = useQuery({
+  const { data: eligibleTransactions } = useQuery<{ appointments?: any[]; bids?: any[] }>({
     queryKey: ["/api/admin/invoices/eligible-transactions"],
     queryFn: async () => {
-      return apiRequestJson("GET", "/api/admin/invoices/eligible-transactions");
+      const response = await apiRequestJson("GET", "/api/admin/invoices/eligible-transactions");
+      return (response as any).data || { appointments: [], bids: [] };
     },
     enabled: isAuthenticated && user?.role === "admin" && activeTab === "create"
   });
@@ -442,7 +443,7 @@ export default function AdminInvoices() {
 
         <TabsContent value="create">
           <div className="grid gap-6">
-            {eligibleTransactions && (eligibleTransactions.appointments?.length > 0 || eligibleTransactions.bids?.length > 0) && (
+            {eligibleTransactions && ((eligibleTransactions.appointments?.length ?? 0) > 0 || (eligibleTransactions.bids?.length ?? 0) > 0) && (
               <Card>
                 <CardHeader>
                   <CardTitle>Load from Transaction</CardTitle>

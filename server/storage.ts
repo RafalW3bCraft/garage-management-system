@@ -238,6 +238,11 @@ export class DatabaseStorage implements IStorage {
     this.cache.delete('all_locations');
   }
 
+  private invalidateCarsCache(): void {
+    this.cache.delete('cars_for_sale');
+    this.cache.delete('auction_cars');
+  }
+
   async getUser(id: string): Promise<User | undefined> {
     const db = await getDb();
     const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
@@ -919,6 +924,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getCarsForSale(): Promise<Car[]> {
+    const cacheKey = 'cars_for_sale';
+    const cached = this.cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const db = await getDb();
     
     // Use LEFT JOIN with JSON aggregation to fetch cars and images in one query
@@ -947,13 +958,22 @@ export class DatabaseStorage implements IStorage {
       .groupBy(cars.id)
       .orderBy(desc(cars.createdAt));
     
-    return result.map(r => ({
+    const mappedResult = result.map(r => ({
       ...r.car,
       images: r.images
     })) as any;
+
+    this.cache.set(cacheKey, mappedResult);
+    return mappedResult;
   }
 
   async getAuctionCars(): Promise<Car[]> {
+    const cacheKey = 'auction_cars';
+    const cached = this.cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const db = await getDb();
     
     // Use LEFT JOIN with JSON aggregation to fetch cars and images in one query
@@ -982,15 +1002,21 @@ export class DatabaseStorage implements IStorage {
       .groupBy(cars.id)
       .orderBy(desc(cars.createdAt));
     
-    return result.map(r => ({
+    const mappedResult = result.map(r => ({
       ...r.car,
       images: r.images
     })) as any;
+
+    this.cache.set(cacheKey, mappedResult);
+    return mappedResult;
   }
 
   async createCar(car: InsertCar): Promise<Car> {
     const db = await getDb();
     const result = await db.insert(cars).values(car).returning();
+    
+    this.invalidateCarsCache();
+    
     return result[0];
   }
 
@@ -1001,6 +1027,9 @@ export class DatabaseStorage implements IStorage {
         .set(updates)
         .where(eq(cars.id, id))
         .returning();
+      
+      this.invalidateCarsCache();
+      
       return result[0];
     } catch (error) {
       const err = error as DatabaseError;
@@ -1035,6 +1064,9 @@ export class DatabaseStorage implements IStorage {
     const db = await getDb();
     try {
       const result = await db.delete(cars).where(eq(cars.id, id)).returning();
+      
+      this.invalidateCarsCache();
+      
       return result.length > 0;
     } catch (error) {
       const err = error as DatabaseError;
@@ -1064,6 +1096,9 @@ export class DatabaseStorage implements IStorage {
     const db = await getDb();
     try {
       const result = await db.insert(carImages).values(data).returning();
+      
+      this.invalidateCarsCache();
+      
       return result[0];
     } catch (error) {
       const err = error as DatabaseError;
@@ -1086,6 +1121,8 @@ export class DatabaseStorage implements IStorage {
   async deleteCarImage(id: string): Promise<void> {
     const db = await getDb();
     await db.delete(carImages).where(eq(carImages.id, id));
+    
+    this.invalidateCarsCache();
   }
 
   async updateCarImageOrder(id: string, displayOrder: number): Promise<void> {
@@ -1093,6 +1130,8 @@ export class DatabaseStorage implements IStorage {
     await db.update(carImages)
       .set({ displayOrder })
       .where(eq(carImages.id, id));
+    
+    this.invalidateCarsCache();
   }
 
   async setCarImagePrimary(carId: string, imageId: string): Promise<void> {
@@ -1110,6 +1149,8 @@ export class DatabaseStorage implements IStorage {
           eq(carImages.id, imageId)
         ));
     });
+    
+    this.invalidateCarsCache();
   }
 
   async createContact(contact: InsertContact): Promise<Contact> {
@@ -1447,25 +1488,25 @@ export class DatabaseStorage implements IStorage {
   async getBidAnalytics(): Promise<{ totalBids: number; pendingBids: number; acceptedBids: number; rejectedBids: number; totalValue: number; avgBidAmount: number }> {
     const db = await getDb();
     
-    const [totalResult, pendingResult, acceptedResult, rejectedResult, valueResult] = await Promise.all([
-      db.select({ count: sql<number>`count(*)` }).from(bids),
-      db.select({ count: sql<number>`count(*)` }).from(bids).where(eq(bids.status, "pending")),
-      db.select({ count: sql<number>`count(*)` }).from(bids).where(eq(bids.status, "accepted")),
-      db.select({ count: sql<number>`count(*)` }).from(bids).where(eq(bids.status, "rejected")),
-      db.select({ 
-        totalValue: sql<number>`COALESCE(SUM(${bids.bidAmount}), 0)`,
-        avgBidAmount: sql<number>`COALESCE(AVG(${bids.bidAmount}), 0)`
-      }).from(bids)
-    ]);
+    const result = await db.select({
+      totalBids: sql<number>`CAST(COUNT(*) AS INTEGER)`,
+      pendingBids: sql<number>`CAST(COUNT(*) FILTER (WHERE ${bids.status} = 'pending') AS INTEGER)`,
+      acceptedBids: sql<number>`CAST(COUNT(*) FILTER (WHERE ${bids.status} = 'accepted') AS INTEGER)`,
+      rejectedBids: sql<number>`CAST(COUNT(*) FILTER (WHERE ${bids.status} = 'rejected') AS INTEGER)`,
+      totalValue: sql<number>`CAST(COALESCE(SUM(${bids.bidAmount}), 0) AS INTEGER)`,
+      avgBidAmount: sql<number>`CAST(COALESCE(AVG(${bids.bidAmount}), 0) AS DECIMAL)`
+    }).from(bids);
 
-    return {
-      totalBids: totalResult[0]?.count || 0,
-      pendingBids: pendingResult[0]?.count || 0,
-      acceptedBids: acceptedResult[0]?.count || 0,
-      rejectedBids: rejectedResult[0]?.count || 0,
-      totalValue: valueResult[0]?.totalValue || 0,
-      avgBidAmount: valueResult[0]?.avgBidAmount || 0
+    const analytics = result[0] || {
+      totalBids: 0,
+      pendingBids: 0,
+      acceptedBids: 0,
+      rejectedBids: 0,
+      totalValue: 0,
+      avgBidAmount: 0
     };
+
+    return analytics;
   }
 
   async getUserByPhone(phone: string, countryCode: string): Promise<User | undefined> {

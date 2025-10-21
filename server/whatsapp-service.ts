@@ -392,6 +392,65 @@ Please prepare for this service appointment. Contact the customer if you need an
   }
 
   /**
+   * Generate invoice notification message
+   */
+  private static generateInvoiceMessage(
+    customerName: string,
+    invoiceNumber: string,
+    totalAmount: string,
+    invoiceUrl: string
+  ): string {
+    return `🧾 *New Invoice from Ronak Motor Garage*
+
+Hi ${customerName}!
+
+Your invoice has been generated:
+
+📋 *Invoice #:* ${invoiceNumber}
+💰 *Total Amount:* ₹${totalAmount}
+
+View your invoice here:
+${invoiceUrl}
+
+Please make payment within the due date.
+
+Thank you for your business! 🚗
+
+*Ronak Motor Garage* - Your trusted automotive service center`;
+  }
+
+  /**
+   * Generate promotional message
+   */
+  private static generatePromotionalMessage(
+    customerName: string | undefined,
+    offerDetails: string,
+    validUntil?: string,
+    ctaUrl?: string
+  ): string {
+    let message = `🎉 *Special Offer from Ronak Motor Garage* 🎉\n\n`;
+    
+    if (customerName) {
+      message += `Hi ${customerName}!\n\n`;
+    }
+    
+    message += `${offerDetails}\n\n`;
+    
+    if (validUntil) {
+      message += `⏰ *Valid until:* ${validUntil}\n\n`;
+    }
+    
+    if (ctaUrl) {
+      message += `Book now: ${ctaUrl}\n\n`;
+    }
+    
+    message += `Don't miss out on this amazing deal! 🚗✨\n\n`;
+    message += `*Ronak Motor Garage* - Quality service at great prices`;
+    
+    return message;
+  }
+
+  /**
    * Core message sending function (for internal use with retry wrapper)
    */
   private static async sendMessageCore(
@@ -774,6 +833,101 @@ Please prepare for this service appointment. Contact the customer if you need an
     return this.sendMessage(whatsappNumber, message, 'booking_request', data.bookingId, fallbackEmail);
   }
 
+  /**
+   * Send invoice notification via WhatsApp
+   */
+  static async sendInvoiceNotification(
+    phone: string,
+    countryCode: string,
+    customerName: string,
+    invoiceNumber: string,
+    totalAmount: string,
+    invoiceUrl: string,
+    fallbackEmail?: string
+  ): Promise<WhatsAppSendResult> {
+    const whatsappNumber = this.formatWhatsAppNumberWithLogging(phone, countryCode);
+    const message = this.generateInvoiceMessage(customerName, invoiceNumber, totalAmount, invoiceUrl);
+    return this.sendMessage(whatsappNumber, message, 'status_update', undefined, fallbackEmail);
+  }
+
+  /**
+   * Send promotional message via WhatsApp
+   */
+  static async sendPromotionalMessage(
+    phone: string,
+    countryCode: string,
+    customerName: string | undefined,
+    offerDetails: string,
+    validUntil?: string,
+    ctaUrl?: string,
+    fallbackEmail?: string
+  ): Promise<WhatsAppSendResult> {
+    const whatsappNumber = this.formatWhatsAppNumberWithLogging(phone, countryCode);
+    const message = this.generatePromotionalMessage(customerName, offerDetails, validUntil, ctaUrl);
+    return this.sendMessage(whatsappNumber, message, 'status_update', undefined, fallbackEmail);
+  }
+
+  /**
+   * Send bulk promotional messages to multiple customers
+   */
+  static async sendBulkPromotionalMessages(
+    recipients: Array<{ phone: string; countryCode: string; customerName?: string; email?: string }>,
+    offerDetails: string,
+    validUntil?: string,
+    ctaUrl?: string
+  ): Promise<{
+    total: number;
+    successful: number;
+    failed: number;
+    results: Array<{ phone: string; success: boolean; error?: string }>;
+  }> {
+    const results: Array<{ phone: string; success: boolean; error?: string }> = [];
+    let successful = 0;
+    let failed = 0;
+
+    for (const recipient of recipients) {
+      try {
+        const result = await this.sendPromotionalMessage(
+          recipient.phone,
+          recipient.countryCode,
+          recipient.customerName,
+          offerDetails,
+          validUntil,
+          ctaUrl,
+          recipient.email
+        );
+
+        results.push({
+          phone: recipient.phone,
+          success: result.success,
+          error: result.error
+        });
+
+        if (result.success) {
+          successful++;
+        } else {
+          failed++;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        const err = error as Error;
+        results.push({
+          phone: recipient.phone,
+          success: false,
+          error: err.message
+        });
+        failed++;
+      }
+    }
+
+    return {
+      total: recipients.length,
+      successful,
+      failed,
+      results
+    };
+  }
 
   /**
    * Validate phone number format for WhatsApp
