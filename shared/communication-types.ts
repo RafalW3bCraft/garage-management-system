@@ -1,6 +1,5 @@
-/**
- * Standardized error response interface for all communication services
- */
+
+
 export interface CommunicationResult {
   success: boolean;
   message: string;
@@ -49,9 +48,6 @@ export interface CommunicationResult {
   circuitBreakerOpen?: boolean;
 }
 
-/**
- * Helper function to create standardized communication results
- */
 export function createCommunicationResult(
   service: 'whatsapp' | 'email',
   success: boolean,
@@ -90,9 +86,6 @@ export function createCommunicationResult(
   return result;
 }
 
-/**
- * Determine error type from error code or message
- */
 export function categorizeError(errorCode?: string, errorMessage?: string): CommunicationResult['errorType'] {
   if (!errorCode && !errorMessage) return 'unknown';
   
@@ -126,9 +119,6 @@ export function categorizeError(errorCode?: string, errorMessage?: string): Comm
   return 'unknown';
 }
 
-/**
- * Determine if error is retryable based on error type and code
- */
 export function isErrorRetryable(errorType: CommunicationResult['errorType'], errorCode?: string): boolean {
 
   const nonRetryableTypes: CommunicationResult['errorType'][] = [

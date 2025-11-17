@@ -20,17 +20,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import type { Service, Car as CarType } from "@shared/schema";
 
-/**
- * Home page component displaying the landing page with hero section, featured services,
- * statistics, reasons to choose the service, customer testimonials, and call-to-action sections.
- * 
- * @returns {JSX.Element} The rendered home page
- * 
- * @example
- * ```tsx
- * <Route path="/" component={Home} />
- * ```
- */
 export default function Home() {
 
   const { data: services = [], isLoading: servicesLoading, error: servicesError } = useQuery<Service[]>({
@@ -85,10 +74,8 @@ export default function Home() {
 
   return (
     <div className="min-h-screen">
-      {/* Hero Section */}
       <HeroSection />
 
-      {/* Stats Section */}
       <section className="py-16 bg-muted/50">
         <div className="container mx-auto px-4">
           <h2 className="text-3xl font-bold text-center mb-8">Our Performance</h2>
@@ -121,7 +108,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Featured Cars Section */}
       <section className="py-16">
         <div className="container mx-auto px-4">
           <div className="text-center mb-12">
@@ -188,7 +174,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Services Section */}
       <section className="py-16">
         <div className="container mx-auto px-4">
           <div className="text-center mb-12">
@@ -243,7 +228,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Why Choose Us Section */}
       <section className="py-16 bg-muted/50">
         <div className="container mx-auto px-4">
           <div className="text-center mb-12">
@@ -284,7 +268,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Testimonials Section */}
       <section className="py-16">
         <div className="container mx-auto px-4">
           <div className="text-center mb-12">
@@ -316,7 +299,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* CTA Section */}
       <section className="py-16 bg-primary text-primary-foreground">
         <div className="container mx-auto px-4 text-center">
           <h2 className="text-3xl font-bold mb-4">Ready to Service Your Vehicle?</h2>

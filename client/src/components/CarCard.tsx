@@ -10,9 +10,6 @@ import { format } from "date-fns";
 import { Link } from "wouter";
 import type { Car } from "@shared/schema";
 
-/**
- * Props for the CarCard component
- */
 interface CarCardProps {
   id: string;
   make: string;
@@ -35,31 +32,6 @@ interface CarCardProps {
   engineSize?: string;
 }
 
-/**
- * Car display card component for both sale and auction vehicles.
- * Shows car details, pricing, condition, and action buttons. Supports favorites and integrates
- * with bid/contact dialogs based on car type (auction vs. sale).
- * 
- * @param {CarCardProps} props - Component props
- * @returns {JSX.Element} The rendered car card
- * 
- * @example
- * ```tsx
- * <CarCard
- *   id="car-123"
- *   make="Maruti"
- *   model="Swift"
- *   year={2020}
- *   price={550000}
- *   mileage={25000}
- *   fuelType="Petrol"
- *   location="Mumbai"
- *   image="/cars/swift.jpg"
- *   condition="Excellent"
- *   isAuction={false}
- * />
- * ```
- */
 export function CarCard({
   id,
   make,
@@ -257,7 +229,6 @@ export function CarCard({
         )}
       </CardFooter>
 
-      {/* Bid Dialog for Auction Cars */}
       {isAuction && (
         <BidDialog
           car={{
@@ -282,7 +253,6 @@ export function CarCard({
         />
       )}
 
-      {/* Contact Dialog for Non-Auction Cars */}
       {!isAuction && (
         <ContactDialog
           carMake={make}

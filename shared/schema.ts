@@ -3,7 +3,6 @@ import { pgTable, text, varchar, integer, decimal, timestamp, boolean, index } f
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// Users table - enhanced for profiles and OAuth
 export const users = pgTable("users", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").unique(), // Optional for mobile-only registrations - nullable
@@ -23,7 +22,7 @@ export const users = pgTable("users", {
   zipCode: text("zip_code"),
   // Account settings
   provider: text("provider").notNull().default("email"), // "email" or "google"
-  role: text("role").notNull().default("customer"), // "customer" or "admin"
+  role: text("role").notNull().default("customer"), // "customer", "staff", or "admin"
   emailVerified: boolean("email_verified").default(false),
   preferredNotificationChannel: text("preferred_notification_channel").notNull().default("whatsapp"), // "whatsapp" or "email"
   isActive: boolean("is_active").default(true).notNull(), // For account suspension
@@ -90,6 +89,7 @@ export const appointments = pgTable("appointments", {
   customerId: varchar("customer_id").references(() => customers.id, { onDelete: 'restrict', onUpdate: 'cascade' }).notNull(),
   serviceId: varchar("service_id").references(() => services.id, { onDelete: 'restrict', onUpdate: 'cascade' }).notNull(),
   locationId: varchar("location_id").references(() => locations.id, { onDelete: 'restrict', onUpdate: 'cascade' }).notNull(),
+  carId: varchar("car_id").references(() => cars.id, { onDelete: 'set null', onUpdate: 'cascade' }),
   carDetails: text("car_details").notNull(),
   dateTime: timestamp("date_time").notNull(),
   status: text("status").notNull().default("pending"), // pending, confirmed, in-progress, completed, cancelled
@@ -97,19 +97,26 @@ export const appointments = pgTable("appointments", {
   estimatedDuration: text("estimated_duration").notNull(),
   price: integer("price"),
   notes: text("notes"),
+  expiresAt: timestamp("expires_at"),
+  lastRenewalDate: timestamp("last_renewal_date"),
+  completedAt: timestamp("completed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   // Single column indexes for foreign keys and filtering
   customerIdIdx: index("idx_customer_id").on(table.customerId),
   serviceIdIdx: index("idx_service_id").on(table.serviceId),
   locationIdIdx: index("idx_location_id").on(table.locationId),
+  carIdIdx: index("idx_appointment_car_id").on(table.carId),
   statusIdx: index("idx_status").on(table.status),
   dateTimeIdx: index("idx_date_time").on(table.dateTime),
+  expiresAtIdx: index("idx_expires_at").on(table.expiresAt),
   // Composite indexes for common query patterns
   customerStatusIdx: index("idx_customer_status").on(table.customerId, table.status),
   statusDateTimeIdx: index("idx_status_datetime").on(table.status, table.dateTime),
   // Composite index for appointment conflict checks
-  locationDateTimeStatusIdx: index("idx_location_datetime_status").on(table.locationId, table.dateTime, table.status)
+  locationDateTimeStatusIdx: index("idx_location_datetime_status").on(table.locationId, table.dateTime, table.status),
+  // Composite index for renewal tracking
+  statusExpiresAtIdx: index("idx_status_expires_at").on(table.status, table.expiresAt)
 }));
 
 // Cars for sale and auction
@@ -133,7 +140,11 @@ export const cars = pgTable("cars", {
   bodyType: text("body_type"),
   color: text("color"),
   engineSize: text("engine_size"),
-  features: text("features"),
+  features: text("features").array(),
+  registrationNumber: text("registration_number").notNull().unique(),
+  serviceHistory: text("service_history"),
+  userId: varchar("user_id").references(() => users.id, { onDelete: 'set null', onUpdate: 'cascade' }),
+  createdByAdminId: varchar("created_by_admin_id").references(() => users.id, { onDelete: 'set null', onUpdate: 'cascade' }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
   // Index for auction vs sale filtering
@@ -153,7 +164,11 @@ export const cars = pgTable("cars", {
   // Composite index for sale cars (most common query)
   saleIdx: index("idx_sale").on(table.isAuction, table.year, table.price),
   // Composite index for make + model searches
-  makeModelIdx: index("idx_make_model").on(table.make, table.model)
+  makeModelIdx: index("idx_make_model").on(table.make, table.model),
+  // Index for user's cars
+  userIdIdx: index("idx_car_user_id").on(table.userId),
+  // Index for registration number lookup
+  registrationNumberIdx: index("idx_registration_number").on(table.registrationNumber)
 }));
 
 // Car images for multiple photos per car
@@ -216,7 +231,6 @@ export const contacts = pgTable("contacts", {
   statusCreatedAtIdx: index("idx_contacts_status_created").on(table.status, table.createdAt)
 }));
 
-
 // Email verification tokens for email/password authentication and password reset
 export const emailVerificationTokens = pgTable("email_verification_tokens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -264,6 +278,70 @@ export const whatsappMessages = pgTable("whatsapp_messages", {
   messageSidIdx: index("idx_message_sid").on(table.messageSid),
   // Composite index for retry processing queue
   statusRetryIdx: index("idx_status_retry").on(table.status, table.nextRetryAt)
+}));
+
+// Promotion campaigns - Marketing and promotional messaging campaigns
+export const promotionCampaigns = pgTable("promotion_campaigns", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(), // Campaign name for identification
+  channel: text("channel").notNull().default("both"), // 'whatsapp', 'email', 'both'
+  targetUserType: text("target_user_type").notNull().default("all"), // 'all', 'customers'
+  subject: text("subject"), // Email subject line (nullable, not used for WhatsApp)
+  message: text("message").notNull(), // Campaign message content
+  status: text("status").notNull().default("draft"), // 'draft', 'scheduled', 'sent', 'cancelled'
+  scheduledAt: timestamp("scheduled_at"), // When to send (nullable for immediate sends)
+  sentAt: timestamp("sent_at"), // When actually sent (nullable until sent)
+  createdBy: varchar("created_by").notNull().references(() => users.id, { onDelete: 'restrict', onUpdate: 'cascade' }), // Admin who created
+  metadata: text("metadata"), // JSON string for additional tracking data
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index for campaign status filtering
+  statusIdx: index("idx_promotion_campaign_status").on(table.status),
+  // Index for creator lookups
+  createdByIdx: index("idx_promotion_campaign_created_by").on(table.createdBy),
+  // Index for scheduled campaigns
+  scheduledAtIdx: index("idx_promotion_campaign_scheduled_at").on(table.scheduledAt),
+  // Composite index for admin campaign management
+  createdByStatusIdx: index("idx_promotion_campaign_creator_status").on(table.createdBy, table.status),
+  // Composite index for scheduled campaign processing
+  statusScheduledIdx: index("idx_promotion_campaign_status_scheduled").on(table.status, table.scheduledAt),
+  // Index for sent campaigns sorted by date
+  sentAtIdx: index("idx_promotion_campaign_sent_at").on(table.sentAt)
+}));
+
+// Promotion deliveries - Track individual message deliveries per campaign
+export const promotionDeliveries = pgTable("promotion_deliveries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  campaignId: varchar("campaign_id").notNull().references(() => promotionCampaigns.id, { onDelete: 'cascade', onUpdate: 'cascade' }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: 'set null', onUpdate: 'cascade' }), // Recipient (nullable if not a user)
+  channel: text("channel").notNull(), // 'whatsapp' or 'email' (specific channel used)
+  recipientEmail: text("recipient_email"), // Email address (nullable for WhatsApp)
+  recipientPhone: text("recipient_phone"), // Phone number (nullable for email)
+  recipientCountryCode: text("recipient_country_code"), // Country code for phone (nullable for email)
+  status: text("status").notNull().default("pending"), // 'pending', 'sent', 'failed', 'delivered', 'bounced'
+  sentAt: timestamp("sent_at"), // When message was sent (nullable until sent)
+  deliveredAt: timestamp("delivered_at"), // When message was delivered (nullable)
+  errorMessage: text("error_message"), // Error details if failed (nullable)
+  metadata: text("metadata"), // JSON string for provider response, retry info, etc.
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  // Index for campaign deliveries lookup
+  campaignIdIdx: index("idx_promotion_delivery_campaign").on(table.campaignId),
+  // Index for user deliveries
+  userIdIdx: index("idx_promotion_delivery_user").on(table.userId),
+  // Index for delivery status filtering
+  statusIdx: index("idx_promotion_delivery_status").on(table.status),
+  // Index for channel filtering
+  channelIdx: index("idx_promotion_delivery_channel").on(table.channel),
+  // Composite index for campaign delivery analytics
+  campaignStatusIdx: index("idx_promotion_delivery_campaign_status").on(table.campaignId, table.status),
+  // Composite index for campaign channel analytics
+  campaignChannelIdx: index("idx_promotion_delivery_campaign_channel").on(table.campaignId, table.channel),
+  // Index for recipient email lookups
+  recipientEmailIdx: index("idx_promotion_delivery_recipient_email").on(table.recipientEmail),
+  // Index for recipient phone lookups
+  recipientPhoneIdx: index("idx_promotion_delivery_recipient_phone").on(table.recipientPhone)
 }));
 
 // Admin audit log tracking for security and compliance
@@ -419,6 +497,15 @@ export const insertAppointmentSchema = createInsertSchema(appointments).omit({
 export const insertCarSchema = createInsertSchema(cars).omit({
   id: true,
   createdAt: true,
+}).extend({
+  registrationNumber: z.string()
+    .min(1, "Registration number is required")
+    .transform(val => val.trim().toUpperCase())
+    .pipe(z.string()
+      .min(6, "Registration number must be at least 6 characters")
+      .max(20, "Registration number cannot exceed 20 characters")
+      .regex(/^[A-Z0-9\-]+$/, "Registration number can only contain letters, numbers, and hyphens")
+    ),
 });
 
 export const insertCarImageSchema = createInsertSchema(carImages).omit({
@@ -468,7 +555,6 @@ export const insertBidSchema = createInsertSchema(bids).omit({
   bidTime: true,
 });
 
-
 export const insertWhatsAppMessageSchema = createInsertSchema(whatsappMessages).omit({
   id: true,
   sentAt: true,
@@ -476,6 +562,36 @@ export const insertWhatsAppMessageSchema = createInsertSchema(whatsappMessages).
   lastRetryAt: true,
   nextRetryAt: true,
   failureReason: true,
+});
+
+export const insertPromotionCampaignSchema = createInsertSchema(promotionCampaigns, {
+  name: z.string().min(1, "Campaign name is required").max(200, "Campaign name cannot exceed 200 characters"),
+  channel: z.enum(["whatsapp", "email", "both"], {
+    errorMap: () => ({ message: "Channel must be one of: whatsapp, email, both" })
+  }),
+  targetUserType: z.enum(["all", "customers"], {
+    errorMap: () => ({ message: "Target user type must be one of: all, customers" })
+  }),
+  message: z.string().min(1, "Message is required").max(5000, "Message cannot exceed 5000 characters"),
+  status: z.enum(["draft", "scheduled", "sent", "cancelled"], {
+    errorMap: () => ({ message: "Status must be one of: draft, scheduled, sent, cancelled" })
+  }),
+}).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertPromotionDeliverySchema = createInsertSchema(promotionDeliveries, {
+  channel: z.enum(["whatsapp", "email"], {
+    errorMap: () => ({ message: "Channel must be either whatsapp or email" })
+  }),
+  status: z.enum(["pending", "sent", "failed", "delivered", "bounced"], {
+    errorMap: () => ({ message: "Status must be one of: pending, sent, failed, delivered, bounced" })
+  }),
+}).omit({
+  id: true,
+  createdAt: true,
 });
 
 export const insertAdminAuditLogSchema = createInsertSchema(adminAuditLogs).omit({
@@ -521,7 +637,6 @@ export const rescheduleAppointmentSchema = z.object({
     .uuid({ message: "Location ID must be a valid UUID" })
 });
 
-
 export const updateProfileSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").optional(),
   email: z.string().email("Invalid email format").optional(),
@@ -556,8 +671,8 @@ export const adminCreateUserSchema = z.object({
   email: z.string().email("Invalid email format"),
   name: z.string().min(2, "Name must be at least 2 characters"),
   password: passwordValidation,
-  role: z.enum(["customer", "admin"], {
-    errorMap: () => ({ message: "Role must be either customer or admin" })
+  role: z.enum(["customer", "staff", "admin"], {
+    errorMap: () => ({ message: "Role must be customer, staff, or admin" })
   }),
   phone: z.string().optional(),
   countryCode: z.string().optional(),
@@ -783,6 +898,18 @@ export const insertInvoiceSchema = createInsertSchema(invoices, {
   }
 });
 
+export const updateInvoiceSchema = createInsertSchema(invoices, {
+  customerName: z.string().min(1, "Customer name is required").optional(),
+  customerState: z.string().min(1, "Customer state is required for GST calculation").optional(),
+  invoiceNumber: z.string().min(1, "Invoice number is required").optional(),
+  subtotal: z.coerce.number().nonnegative("Subtotal must be non-negative").transform(val => String(val)).optional(),
+  cgstAmount: z.coerce.number().nonnegative("CGST amount must be non-negative").transform(val => String(val)).optional(),
+  sgstAmount: z.coerce.number().nonnegative("SGST amount must be non-negative").transform(val => String(val)).optional(),
+  igstAmount: z.coerce.number().nonnegative("IGST amount must be non-negative").transform(val => String(val)).optional(),
+  totalAmount: z.coerce.number().positive("Total amount must be positive").transform(val => String(val)).optional(),
+  businessState: z.string().default("Gujarat").optional(),
+}).omit({ id: true, createdAt: true, updatedAt: true }).partial();
+
 export const insertInvoiceItemSchema = createInsertSchema(invoiceItems, {
   description: z.string().min(1, "Item description is required"),
   quantity: z.string().or(z.number()).transform(val => String(val)),
@@ -792,7 +919,7 @@ export const insertInvoiceItemSchema = createInsertSchema(invoiceItems, {
   taxAmount: z.string().or(z.number()).transform(val => String(val)),
 }).omit({ id: true, createdAt: true });
 
-// Types
+export type Role = 'customer' | 'staff' | 'admin';
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
@@ -826,8 +953,18 @@ export type InsertEmailVerificationToken = typeof emailVerificationTokens.$infer
 export type WhatsAppMessage = typeof whatsappMessages.$inferSelect;
 export type InsertWhatsAppMessage = z.infer<typeof insertWhatsAppMessageSchema>;
 
-// Enhanced WhatsApp status types
 export type WhatsAppMessageStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed' | 'retry_failed';
+
+export type PromotionCampaign = typeof promotionCampaigns.$inferSelect;
+export type InsertPromotionCampaign = z.infer<typeof insertPromotionCampaignSchema>;
+
+export type PromotionDelivery = typeof promotionDeliveries.$inferSelect;
+export type InsertPromotionDelivery = z.infer<typeof insertPromotionDeliverySchema>;
+
+export type PromotionCampaignStatus = 'draft' | 'scheduled' | 'sent' | 'cancelled';
+export type PromotionDeliveryStatus = 'pending' | 'sent' | 'failed' | 'delivered' | 'bounced';
+export type PromotionChannel = 'whatsapp' | 'email' | 'both';
+export type PromotionTargetUserType = 'all' | 'customers';
 
 export type AdminAuditLog = typeof adminAuditLogs.$inferSelect;
 export type InsertAdminAuditLog = z.infer<typeof insertAdminAuditLogSchema>;
@@ -846,14 +983,12 @@ export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
 export type InvoiceItem = typeof invoiceItems.$inferSelect;
 export type InsertInvoiceItem = z.infer<typeof insertInvoiceItemSchema>;
 
-// Enhanced appointment type with resolved names for frontend display
 export type AppointmentWithDetails = Appointment & {
   serviceName: string;
   locationName: string;
   customerName: string;
 };
 
-// Enhanced invoice type with line items
 export type InvoiceWithItems = Invoice & {
   items: InvoiceItem[];
 };

@@ -7,7 +7,7 @@ async function createAdminUser() {
   try {
     console.log('Setting up admin user...');
     
-    // Get admin credentials from environment variables
+    
     const adminEmail = process.env.ADMIN_EMAIL;
     const adminPassword = process.env.ADMIN_PASSWORD;
     const adminName = process.env.ADMIN_NAME || 'System Administrator';
@@ -25,10 +25,10 @@ async function createAdminUser() {
       return;
     }
     
-    // Hash the password securely
+    
     const hashedPassword = await bcrypt.hash(adminPassword, 12);
     
-    // Check if admin user already exists
+    
     const existingAdmin = await sql`
       SELECT id, email, name, role FROM users WHERE email = ${adminEmail}
     `;

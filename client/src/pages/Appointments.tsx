@@ -10,17 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Calendar, Clock, Plus, Loader2 } from "lucide-react";
 import type { AppointmentWithDetails, Customer } from "@shared/schema";
 
-/**
- * Appointments page component for authenticated users to view and manage their service appointments.
- * Displays statistics, upcoming and past appointments organized in tabs, with quick action cards.
- * 
- * @returns {JSX.Element} The rendered appointments page
- * 
- * @example
- * ```tsx
- * <Route path="/appointments" component={Appointments} />
- * ```
- */
 export default function Appointments() {
   const [activeTab, setActiveTab] = useState("upcoming");
   const { user, isLoading: authLoading } = useAuth();
@@ -91,7 +80,6 @@ export default function Appointments() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <section className="py-16 bg-muted/50">
         <div className="container mx-auto px-4">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -115,7 +103,6 @@ export default function Appointments() {
         </div>
       </section>
 
-      {/* Stats Cards */}
       <section className="py-8">
         <div className="container mx-auto px-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
@@ -158,7 +145,6 @@ export default function Appointments() {
         </div>
       </section>
 
-      {/* Appointments Tabs */}
       <section className="py-8">
         <div className="container mx-auto px-4">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -275,7 +261,6 @@ export default function Appointments() {
         </div>
       </section>
 
-      {/* Quick Actions */}
       <section className="py-16 bg-muted/50">
         <div className="container mx-auto px-4">
           <div className="text-center mb-8">

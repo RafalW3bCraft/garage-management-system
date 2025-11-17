@@ -19,15 +19,14 @@ import { useErrorHandler } from "@/lib/error-utils";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertCarSchema } from "@shared/schema";
-import type { Car as CarType, Bid } from "@shared/schema";
+import type { Car as CarType, Bid, CarImage } from "@shared/schema";
 import { z } from "zod";
 import { useState, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import { format, differenceInHours, differenceInMinutes, differenceInSeconds, differenceInDays } from "date-fns";
+import { ImageUpload } from "@/components/ImageUpload";
+import { CarImageGallery } from "@/components/CarImageGallery";
 
-/**
- * Zod schema for car form validation with support for both sale and auction cars
- */
 const carFormSchema = z.object({
   make: z.string()
     .min(1, "Make is required")
@@ -47,15 +46,36 @@ const carFormSchema = z.object({
     .min(0, "Mileage must be positive")
     .max(10000000, "Mileage cannot exceed 10,000,000 km"),
   fuelType: z.string().min(1, "Fuel type is required"),
+  transmission: z.string().min(1, "Transmission is required"),
   location: z.string()
     .min(1, "Location is required")
     .min(3, "Location must be at least 3 characters")
     .max(100, "Location cannot exceed 100 characters"),
   condition: z.string().min(1, "Condition is required"),
+  registrationNumber: z.string()
+    .min(1, "Registration number is required")
+    .transform(val => val.trim().toUpperCase())
+    .pipe(z.string()
+      .min(6, "Registration number must be at least 6 characters")
+      .max(20, "Registration number cannot exceed 20 characters")
+      .regex(/^[A-Z0-9\-]+$/, "Registration number can only contain letters, numbers, and hyphens")
+    ),
+  numOwners: z.coerce.number()
+    .min(1, "Number of owners must be at least 1")
+    .max(10, "Number of owners cannot exceed 10"),
+  bodyType: z.string().min(1, "Body type is required"),
+  color: z.string().min(1, "Color is required"),
+  engineSize: z.string()
+    .min(1, "Engine size is required")
+    .regex(/^\d+(\.\d+)?$/, "Engine size must be a number (e.g., 1498, 1.5)"),
+  features: z.array(z.string()).optional().or(z.string().transform(val => val ? val.split(',').map(f => f.trim()).filter(f => f.length > 0) : [])),
+  serviceHistory: z.string().optional(),
   image: z.string()
-    .min(1, "Image URL is required")
-    .url("Please enter a valid URL")
-    .regex(/\.(jpg|jpeg|png|webp|gif)$/i, "Image URL must end with .jpg, .jpeg, .png, .webp, or .gif"),
+    .optional()
+    .or(z.literal(''))
+    .refine((val) => !val || val.match(/^https?:\/\/.+\.(jpg|jpeg|png|webp|gif)$/i), {
+      message: "If provided, image URL must be a valid URL ending with .jpg, .jpeg, .png, .webp, or .gif"
+    }),
   isAuction: z.boolean().default(false),
   currentBid: z.coerce.number()
     .min(0, "Current bid must be positive")
@@ -64,6 +84,7 @@ const carFormSchema = z.object({
   description: z.string()
     .max(1000, "Description cannot exceed 1000 characters")
     .optional(),
+  userId: z.string().optional(),
 });
 
 type CarFormData = z.infer<typeof carFormSchema>;
@@ -116,12 +137,6 @@ function CountdownTimer({ endTime }: CountdownTimerProps) {
   );
 }
 
-/**
- * Helper function to parse and generate image URLs in multiple formats
- * 
- * @param {string} imageUrl - Base image URL
- * @returns {{webp: string, jpeg: string, fallback: string}} Image URLs in different formats
- */
 const getImageUrls = (imageUrl: string) => {
   const baseUrl = imageUrl.replace(/\.(jpg|jpeg|png|webp)$/i, '');
   return {
@@ -154,6 +169,8 @@ export default function AdminCars() {
   const [viewingBids, setViewingBids] = useState<CarType | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 20;
+  const [uploadedImageUrls, setUploadedImageUrls] = useState<string[]>([]);
+  const [editCarImages, setEditCarImages] = useState<CarImage[]>([]);
 
   if (!isAuthenticated || user?.role !== "admin") {
     return (
@@ -186,6 +203,23 @@ export default function AdminCars() {
     queryKey: ["/api/cars", viewingBids?.id, "bids"],
     enabled: !!viewingBids?.id,
   });
+
+  const { data: carImages = [], refetch: refetchCarImages } = useQuery<CarImage[]>({
+    queryKey: ["/api/cars", editingCar?.id, "images"],
+    enabled: !!editingCar?.id,
+    queryFn: async () => {
+      const response = await apiRequest("GET", `/api/cars/${editingCar?.id}/images`);
+      return response.json();
+    },
+  });
+
+  useEffect(() => {
+    if (carImages.length > 0) {
+      setEditCarImages(carImages);
+    } else {
+      setEditCarImages([]);
+    }
+  }, [carImages]);
 
   const getBidCountForCar = (carId: string): number => {
     const carBids = queryClient.getQueryData<Bid[]>(["/api/cars", carId, "bids"]);
@@ -283,6 +317,101 @@ export default function AdminCars() {
     },
   });
 
+  const associateImagesMutation = useMutation({
+    mutationFn: async ({ carId, imageUrls, setFirstAsPrimary = false }: { carId: string; imageUrls: string[]; setFirstAsPrimary?: boolean }) => {
+      const imagesToAssociate = imageUrls.map((imageUrl, index) => ({
+        imageUrl,
+        displayOrder: index,
+        isPrimary: setFirstAsPrimary && index === 0
+      }));
+      const response = await apiRequestJson("POST", `/api/cars/${carId}/images`, imagesToAssociate);
+      return response;
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cars"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cars", variables.carId, "images"] });
+      toast({
+        title: "Success",
+        description: "Images associated successfully!",
+      });
+    },
+    onError: (error: Error) => {
+      handleMutationError(error, {
+        title: "Failed to Associate Images",
+        defaultMessage: "Could not associate images with car. Please try again.",
+      });
+    },
+  });
+
+  const reorderImagesMutation = useMutation({
+    mutationFn: async ({ carId, images }: { carId: string; images: CarImage[] }) => {
+      const imageData = images.map(img => ({
+        id: img.id,
+        displayOrder: img.displayOrder
+      }));
+      const response = await apiRequestJson("PATCH", `/api/cars/${carId}/images/reorder`, { images: imageData });
+      return response;
+    },
+    onSuccess: (_, variables) => {
+      setEditCarImages(variables.images);
+      queryClient.invalidateQueries({ queryKey: ["/api/cars", variables.carId, "images"] });
+      toast({
+        title: "Success",
+        description: "Images reordered successfully!",
+      });
+    },
+    onError: (error: Error) => {
+      handleMutationError(error, {
+        title: "Failed to Reorder Images",
+        defaultMessage: "Could not reorder images. Please try again.",
+      });
+    },
+  });
+
+  const setPrimaryImageMutation = useMutation({
+    mutationFn: async ({ carId, imageId }: { carId: string; imageId: string }) => {
+      const response = await apiRequestJson("PATCH", `/api/cars/${carId}/images/${imageId}`, { isPrimary: true });
+      return response;
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/cars"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/cars", variables.carId, "images"] });
+      refetchCarImages();
+      toast({
+        title: "Success",
+        description: "Primary image updated successfully!",
+      });
+    },
+    onError: (error: Error) => {
+      handleMutationError(error, {
+        title: "Failed to Set Primary Image",
+        defaultMessage: "Could not set primary image. Please try again.",
+      });
+    },
+  });
+
+  const deleteImageMutation = useMutation({
+    mutationFn: async ({ imageId }: { imageId: string }) => {
+      await apiRequest("DELETE", `/api/cars/images/${imageId}`);
+    },
+    onSuccess: () => {
+      if (editingCar?.id) {
+        queryClient.invalidateQueries({ queryKey: ["/api/cars", editingCar.id, "images"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/cars"] });
+      }
+      toast({
+        title: "Success",
+        description: "Image deleted successfully!",
+      });
+    },
+    onError: (error: Error) => {
+      handleMutationError(error, {
+        title: "Failed to Delete Image",
+        defaultMessage: "Could not delete image. Please try again.",
+      });
+    },
+  });
+
   const filteredCars = cars.filter((car: CarType) => {
     switch (selectedTab) {
       case "sale": return !car.isAuction;
@@ -316,13 +445,22 @@ export default function AdminCars() {
       price: 0,
       mileage: 0,
       fuelType: "",
+      transmission: "",
       location: "",
       condition: "",
+      registrationNumber: "",
+      numOwners: 1,
+      bodyType: "",
+      color: "",
+      engineSize: "",
+      features: [],
+      serviceHistory: "",
       image: "",
       isAuction: false,
       currentBid: 0,
       auctionEndTime: undefined,
       description: "",
+      userId: undefined,
     },
   });
 
@@ -330,7 +468,7 @@ export default function AdminCars() {
     resolver: zodResolver(carFormSchema),
   });
 
-  const handleAddCar = (data: CarFormData) => {
+  const handleAddCar = async (data: CarFormData) => {
     const transformedData: any = {
       ...data,
       auctionEndTime: data.auctionEndTime && data.auctionEndTime.trim() !== '' 
@@ -341,7 +479,22 @@ export default function AdminCars() {
     if (transformedData.auctionEndTime === undefined) {
       delete transformedData.auctionEndTime;
     }
-    createCarMutation.mutate(transformedData);
+
+    try {
+      const createdCar = await createCarMutation.mutateAsync(transformedData);
+      
+      if (uploadedImageUrls.length > 0 && createdCar?.id) {
+        await associateImagesMutation.mutateAsync({
+          carId: createdCar.id,
+          imageUrls: uploadedImageUrls,
+          setFirstAsPrimary: true
+        });
+      }
+      
+      setUploadedImageUrls([]);
+      setIsAddDialogOpen(false);
+    } catch (error) {
+    }
   };
 
   const handleEditCar = (data: CarFormData) => {
@@ -366,13 +519,69 @@ export default function AdminCars() {
 
   const openEditDialog = (car: CarType) => {
     setEditingCar(car);
+    setUploadedImageUrls([]);
     editForm.reset({
-      ...car,
+      make: car.make || "",
+      model: car.model || "",
+      year: car.year || new Date().getFullYear(),
+      price: car.price || 0,
+      mileage: car.mileage || 0,
+      fuelType: car.fuelType || "",
+      transmission: car.transmission || "",
+      location: car.location || "",
+      condition: car.condition || "",
+      registrationNumber: car.registrationNumber || "",
+      numOwners: car.numOwners || 1,
+      bodyType: car.bodyType || "",
+      color: car.color || "",
+      engineSize: car.engineSize || "",
+      features: Array.isArray(car.features) ? car.features : (car.features ? [car.features] : []),
+      serviceHistory: car.serviceHistory || "",
+      image: car.image || "",
       auctionEndTime: car.auctionEndTime ? format(new Date(car.auctionEndTime), "yyyy-MM-dd'T'HH:mm") : undefined,
       isAuction: car.isAuction ?? false,
       currentBid: car.currentBid ?? undefined,
       description: car.description ?? undefined,
+      userId: car.userId ?? undefined,
     });
+  };
+
+  const handleImageUploadComplete = async (urls: string[]) => {
+    if (editingCar?.id) {
+      await associateImagesMutation.mutateAsync({
+        carId: editingCar.id,
+        imageUrls: urls
+      });
+      refetchCarImages();
+    } else {
+      setUploadedImageUrls(prev => [...prev, ...urls]);
+    }
+  };
+
+  const handleReorderImages = (images: CarImage[]) => {
+    if (editingCar?.id) {
+      reorderImagesMutation.mutate({
+        carId: editingCar.id,
+        images
+      });
+    }
+  };
+
+  const handleSetPrimaryImage = (imageId: string) => {
+    if (editingCar?.id) {
+      setPrimaryImageMutation.mutate({
+        carId: editingCar.id,
+        imageId
+      });
+    }
+  };
+
+  const handleDeleteImage = (imageId: string) => {
+    deleteImageMutation.mutate({ imageId });
+  };
+
+  const getCarPrimaryImage = (car: CarType): string => {
+    return car.image || '';
   };
 
   const isAuctionActive = (car: CarType) => {
@@ -439,7 +648,13 @@ export default function AdminCars() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+          <Dialog open={isAddDialogOpen} onOpenChange={(open) => {
+            setIsAddDialogOpen(open);
+            if (!open) {
+              setUploadedImageUrls([]);
+              addForm.reset();
+            }
+          }}>
             <DialogTrigger asChild>
               <Button data-testid="button-add-car">
                 <Plus className="w-4 h-4 mr-2" />
@@ -587,7 +802,123 @@ export default function AdminCars() {
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                    <FormField
+                      control={addForm.control}
+                      name="transmission"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Transmission</FormLabel>
+                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            <FormControl>
+                              <SelectTrigger data-testid="select-car-transmission">
+                                <SelectValue placeholder="Select transmission" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="Manual">Manual</SelectItem>
+                              <SelectItem value="Automatic">Automatic</SelectItem>
+                              <SelectItem value="Semi-Automatic">Semi-Automatic</SelectItem>
+                              <SelectItem value="CVT">CVT</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={addForm.control}
+                      name="bodyType"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Body Type</FormLabel>
+                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                            <FormControl>
+                              <SelectTrigger data-testid="select-car-body-type">
+                                <SelectValue placeholder="Select body type" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="Sedan">Sedan</SelectItem>
+                              <SelectItem value="SUV">SUV</SelectItem>
+                              <SelectItem value="Hatchback">Hatchback</SelectItem>
+                              <SelectItem value="Coupe">Coupe</SelectItem>
+                              <SelectItem value="Convertible">Convertible</SelectItem>
+                              <SelectItem value="Wagon">Wagon</SelectItem>
+                              <SelectItem value="Truck">Truck</SelectItem>
+                              <SelectItem value="Van">Van</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={addForm.control}
+                      name="color"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Color</FormLabel>
+                          <FormControl>
+                            <Input {...field} placeholder="White" data-testid="input-car-color" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={addForm.control}
+                      name="numOwners"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Number of Owners</FormLabel>
+                          <Select onValueChange={(v) => field.onChange(parseInt(v))} value={field.value?.toString()}>
+                            <FormControl>
+                              <SelectTrigger data-testid="select-car-num-owners">
+                                <SelectValue placeholder="Select" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="1">1 (First Owner)</SelectItem>
+                              <SelectItem value="2">2</SelectItem>
+                              <SelectItem value="3">3</SelectItem>
+                              <SelectItem value="4">4</SelectItem>
+                              <SelectItem value="5">5+</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <FormField
+                      control={addForm.control}
+                      name="registrationNumber"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Registration Number</FormLabel>
+                          <FormControl>
+                            <Input {...field} placeholder="MH01AB1234" data-testid="input-car-registration" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <FormField
+                      control={addForm.control}
+                      name="engineSize"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Engine Size (cc or L)</FormLabel>
+                          <FormControl>
+                            <Input {...field} placeholder="1498 or 1.5" data-testid="input-car-engine-size" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
                     <FormField
                       control={addForm.control}
                       name="location"
@@ -618,6 +949,43 @@ export default function AdminCars() {
 
                   <FormField
                     control={addForm.control}
+                    name="features"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Features (comma-separated)</FormLabel>
+                        <FormControl>
+                          <Input 
+                            {...field} 
+                            value={Array.isArray(field.value) ? field.value.join(', ') : field.value} 
+                            onChange={(e) => field.onChange(e.target.value)}
+                            placeholder="Air Conditioning, Power Steering, ABS, Airbags" 
+                            data-testid="input-car-features" 
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          Enter features separated by commas (e.g., "Air Conditioning, Power Steering, ABS")
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={addForm.control}
+                    name="serviceHistory"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Service History (optional)</FormLabel>
+                        <FormControl>
+                          <Textarea {...field} rows={3} placeholder="Full service history available. Last serviced in Jan 2025..." data-testid="input-car-service-history" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={addForm.control}
                     name="description"
                     render={({ field }) => (
                       <FormItem>
@@ -629,6 +997,22 @@ export default function AdminCars() {
                       </FormItem>
                     )}
                   />
+
+                  <div>
+                    <Label className="mb-2 block">Additional Images</Label>
+                    <ImageUpload
+                      uploadUrl="/api/upload/car"
+                      multiple
+                      maxFiles={10}
+                      onUploadComplete={handleImageUploadComplete}
+                      label="Upload multiple car images (max 10)"
+                    />
+                    {uploadedImageUrls.length > 0 && (
+                      <p className="text-sm text-muted-foreground mt-2">
+                        {uploadedImageUrls.length} image{uploadedImageUrls.length !== 1 ? 's' : ''} ready to be associated with the car
+                      </p>
+                    )}
+                  </div>
 
                   <FormField
                     control={addForm.control}
@@ -940,7 +1324,6 @@ export default function AdminCars() {
         </TabsContent>
       </Tabs>
 
-      {/* View Bids Dialog */}
       <Dialog open={!!viewingBids} onOpenChange={() => setViewingBids(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -1062,8 +1445,13 @@ export default function AdminCars() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Car Dialog - Similar to Add but with existing data */}
-      <Dialog open={!!editingCar} onOpenChange={() => setEditingCar(null)}>
+      <Dialog open={!!editingCar} onOpenChange={(open) => {
+        if (!open) {
+          setEditingCar(null);
+          setUploadedImageUrls([]);
+          setEditCarImages([]);
+        }
+      }}>
         <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>Edit Car</DialogTitle>
@@ -1206,7 +1594,123 @@ export default function AdminCars() {
                   />
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                  <FormField
+                    control={editForm.control}
+                    name="transmission"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Transmission</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl>
+                            <SelectTrigger data-testid="select-edit-car-transmission">
+                              <SelectValue placeholder="Select transmission" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="Manual">Manual</SelectItem>
+                            <SelectItem value="Automatic">Automatic</SelectItem>
+                            <SelectItem value="Semi-Automatic">Semi-Automatic</SelectItem>
+                            <SelectItem value="CVT">CVT</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={editForm.control}
+                    name="bodyType"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Body Type</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl>
+                            <SelectTrigger data-testid="select-edit-car-body-type">
+                              <SelectValue placeholder="Select body type" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="Sedan">Sedan</SelectItem>
+                            <SelectItem value="SUV">SUV</SelectItem>
+                            <SelectItem value="Hatchback">Hatchback</SelectItem>
+                            <SelectItem value="Coupe">Coupe</SelectItem>
+                            <SelectItem value="Convertible">Convertible</SelectItem>
+                            <SelectItem value="Wagon">Wagon</SelectItem>
+                            <SelectItem value="Truck">Truck</SelectItem>
+                            <SelectItem value="Van">Van</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={editForm.control}
+                    name="color"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Color</FormLabel>
+                        <FormControl>
+                          <Input {...field} placeholder="White" data-testid="input-edit-car-color" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={editForm.control}
+                    name="numOwners"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Number of Owners</FormLabel>
+                        <Select onValueChange={(v) => field.onChange(parseInt(v))} value={field.value?.toString()}>
+                          <FormControl>
+                            <SelectTrigger data-testid="select-edit-car-num-owners">
+                              <SelectValue placeholder="Select" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="1">1 (First Owner)</SelectItem>
+                            <SelectItem value="2">2</SelectItem>
+                            <SelectItem value="3">3</SelectItem>
+                            <SelectItem value="4">4</SelectItem>
+                            <SelectItem value="5">5+</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <FormField
+                    control={editForm.control}
+                    name="registrationNumber"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Registration Number</FormLabel>
+                        <FormControl>
+                          <Input {...field} placeholder="MH01AB1234" data-testid="input-edit-car-registration" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={editForm.control}
+                    name="engineSize"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Engine Size (cc or L)</FormLabel>
+                        <FormControl>
+                          <Input {...field} placeholder="1498 or 1.5" data-testid="input-edit-car-engine-size" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                   <FormField
                     control={editForm.control}
                     name="location"
@@ -1237,6 +1741,43 @@ export default function AdminCars() {
 
                 <FormField
                   control={editForm.control}
+                  name="features"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Features (comma-separated)</FormLabel>
+                      <FormControl>
+                        <Input 
+                          {...field} 
+                          value={Array.isArray(field.value) ? field.value.join(', ') : field.value} 
+                          onChange={(e) => field.onChange(e.target.value)}
+                          placeholder="Air Conditioning, Power Steering, ABS, Airbags" 
+                          data-testid="input-edit-car-features" 
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        Enter features separated by commas (e.g., "Air Conditioning, Power Steering, ABS")
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={editForm.control}
+                  name="serviceHistory"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Service History (optional)</FormLabel>
+                      <FormControl>
+                        <Textarea {...field} rows={3} placeholder="Full service history available. Last serviced in Jan 2025..." data-testid="input-edit-car-service-history" />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={editForm.control}
                   name="description"
                   render={({ field }) => (
                     <FormItem>
@@ -1248,6 +1789,33 @@ export default function AdminCars() {
                     </FormItem>
                   )}
                 />
+
+                <div className="space-y-4">
+                  <div>
+                    <Label className="mb-2 block">Car Images Gallery</Label>
+                    {editCarImages.length > 0 ? (
+                      <CarImageGallery
+                        images={editCarImages}
+                        onReorder={handleReorderImages}
+                        onSetPrimary={handleSetPrimaryImage}
+                        onDelete={handleDeleteImage}
+                      />
+                    ) : (
+                      <p className="text-sm text-muted-foreground">No images uploaded yet</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <Label className="mb-2 block">Upload Additional Images</Label>
+                    <ImageUpload
+                      uploadUrl="/api/upload/car"
+                      multiple
+                      maxFiles={10}
+                      onUploadComplete={handleImageUploadComplete}
+                      label="Upload more car images (max 10 total)"
+                    />
+                  </div>
+                </div>
 
                 <FormField
                   control={editForm.control}
@@ -1334,7 +1902,6 @@ export default function AdminCars() {
         </DialogContent>
       </Dialog>
 
-      {/* Pagination Controls */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-6">
           <div className="text-sm text-muted-foreground">

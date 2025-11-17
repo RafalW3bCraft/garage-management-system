@@ -9,9 +9,6 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Calendar, Clock, MapPin, User, Car, IndianRupee, X, CheckCircle, AlertCircle } from "lucide-react";
 import { RescheduleDialog } from "./RescheduleDialog";
 
-/**
- * Props for the AppointmentCard component
- */
 interface AppointmentCardProps {
   id: string;
   serviceType: string;
@@ -25,12 +22,6 @@ interface AppointmentCardProps {
   price?: number;
 }
 
-/**
- * Helper function to determine status badge color based on appointment status
- * 
- * @param {string} status - Appointment status
- * @returns {string} Tailwind CSS classes for badge styling
- */
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'confirmed': return 'bg-blue-100 text-blue-800 border-blue-200';
@@ -42,12 +33,6 @@ const getStatusColor = (status: string) => {
   }
 };
 
-/**
- * Helper function to get the appropriate icon for appointment status
- * 
- * @param {string} status - Appointment status
- * @returns {JSX.Element} Icon component for the status
- */
 const getStatusIcon = (status: string) => {
   switch (status) {
     case 'confirmed': return <CheckCircle className="h-4 w-4" />;
@@ -59,30 +44,6 @@ const getStatusIcon = (status: string) => {
   }
 };
 
-/**
- * Appointment card component displaying service appointment details with action buttons.
- * Shows appointment information including service type, car details, timing, location, and status.
- * Provides options to reschedule or cancel active appointments.
- * 
- * @param {AppointmentCardProps} props - Component props
- * @returns {JSX.Element} The rendered appointment card
- * 
- * @example
- * ```tsx
- * <AppointmentCard
- *   id="apt-123"
- *   serviceType="Oil Change"
- *   carDetails="Maruti Swift 2020"
- *   dateTime="2024-03-15 10:00 AM"
- *   status="confirmed"
- *   mechanicName="John Doe"
- *   estimatedDuration="1 hour"
- *   location="Downtown Service Center"
- *   locationId="loc-1"
- *   price={1500}
- * />
- * ```
- */
 export function AppointmentCard({
   id,
   serviceType,
@@ -175,7 +136,6 @@ export function AppointmentCard({
           )}
         </div>
 
-        {/* Action Buttons */}
         {!isPast && (status === 'pending' || status === 'confirmed') && (
           <div className="flex flex-col gap-2 sm:flex-row pt-2 border-t">
             {canReschedule && (

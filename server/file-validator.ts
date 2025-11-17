@@ -94,9 +94,8 @@ export const DANGEROUS_EXTENSIONS = [
 ];
 
 export class FileValidator {
-  /**
-   * Read magic number from file
-   */
+  
+
   static async readMagicNumber(filePath: string, length: number = 12): Promise<Buffer> {
     const fileHandle = await fs.open(filePath, 'r');
     const buffer = Buffer.alloc(length);
@@ -109,9 +108,8 @@ export class FileValidator {
     }
   }
 
-  /**
-   * Check if buffer matches magic number signature
-   */
+  
+
   static matchesMagicNumber(buffer: Buffer, magicNumber: MagicNumber): boolean {
     const { signature, offset } = magicNumber;
     
@@ -124,9 +122,8 @@ export class FileValidator {
     return true;
   }
 
-  /**
-   * Detect file type based on magic number
-   */
+  
+
   static async detectFileType(filePath: string): Promise<FileValidationResult> {
     try {
       const buffer = await this.readMagicNumber(filePath);
@@ -169,9 +166,8 @@ export class FileValidator {
     }
   }
 
-  /**
-   * Check for double extensions (e.g., image.jpg.php)
-   */
+  
+
   static validateDoubleExtension(filename: string): FileValidationResult {
     const parts = filename.toLowerCase().split('.');
     
@@ -202,9 +198,8 @@ export class FileValidator {
     return { isValid: true };
   }
 
-  /**
-   * Validate that file extension matches detected file type
-   */
+  
+
   static validateExtensionMatch(
     filename: string,
     detectedMimeType: string
@@ -227,9 +222,8 @@ export class FileValidator {
     };
   }
 
-  /**
-   * Validate that MIME type matches detected file type
-   */
+  
+
   static validateMimeTypeMatch(
     claimedMimeType: string,
     detectedMimeType: string
@@ -259,9 +253,8 @@ export class FileValidator {
     };
   }
 
-  /**
-   * Sanitize SVG content to remove malicious scripts and event handlers
-   */
+  
+
   static async sanitizeSVG(filePath: string): Promise<FileValidationResult> {
     try {
       const svgContent = await fs.readFile(filePath, 'utf-8');
@@ -337,9 +330,8 @@ export class FileValidator {
     }
   }
 
-  /**
-   * Comprehensive file validation
-   */
+  
+
   static async validateUploadedFile(
     filePath: string,
     originalFilename: string,
@@ -380,9 +372,8 @@ export class FileValidator {
     };
   }
 
-  /**
-   * Check file size
-   */
+  
+
   static async validateFileSize(filePath: string, maxSize: number): Promise<FileValidationResult> {
     try {
       const stats = await fs.stat(filePath);

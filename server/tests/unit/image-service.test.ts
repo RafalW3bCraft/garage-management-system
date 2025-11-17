@@ -3,7 +3,6 @@ import { ImageService, IMAGE_CONFIG, createMulterConfig } from '../../image-serv
 import { promises as fs } from 'fs';
 import path from 'path';
 
-// Mock sharp
 const mockToFile = jest.fn();
 const mockJpeg = jest.fn().mockReturnThis();
 const mockWebp = jest.fn().mockReturnThis();
@@ -20,7 +19,7 @@ jest.mock('sharp', () => {
     toFile: mockToFile,
     metadata: mockMetadata,
   }));
-  // Add static method for direct metadata calls
+  
   Object.assign(sharpMock, {
     prototype: {
       metadata: mockMetadata,
@@ -29,7 +28,6 @@ jest.mock('sharp', () => {
   return sharpMock;
 });
 
-// Mock fs
 jest.mock('fs', () => ({
   promises: {
     unlink: jest.fn(),
@@ -38,7 +36,6 @@ jest.mock('fs', () => ({
   },
 }));
 
-// Mock multer
 jest.mock('multer', () => {
   const multerMock: any = jest.fn().mockImplementation(() => ({}));
   multerMock.diskStorage = jest.fn().mockImplementation(() => ({}));
@@ -51,7 +48,7 @@ describe('Image Service - Unit Tests', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     
-    // Reset mock implementations for clone chain
+    
     mockClone.mockReturnValue({
       webp: mockWebp.mockReturnValue({
         toFile: mockToFile,
@@ -523,8 +520,8 @@ describe('Image Service - Unit Tests', () => {
 
   describe('createMulterConfig', () => {
     it('should create multer config with correct destination path', () => {
-      // This function creates a multer instance with storage configuration
-      // The actual functionality is integration tested, unit test confirms it exists
+      
+      
       expect(createMulterConfig).toBeDefined();
       expect(typeof createMulterConfig).toBe('function');
     });

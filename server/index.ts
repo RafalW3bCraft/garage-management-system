@@ -1,11 +1,12 @@
+import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { getStorage } from "./storage";
 import { performanceMiddleware } from "./performance-monitor";
-import { 
+import {
   generalApiLimiter,
-  healthCheckLimiter 
+  healthCheckLimiter
 } from "./rate-limiters";
 
 interface ValidationResult {
@@ -229,10 +230,6 @@ app.use((req, res, next) => {
   });
 })();
 
-/**
- * Email Verification Token Cleanup Scheduler
- * Runs cleanup every 6 hours and performs initial cleanup on startup
- */
 function startEmailVerificationCleanupScheduler(): void {
   const CLEANUP_INTERVAL_HOURS: number = 6;
   const CLEANUP_INTERVAL_MS = CLEANUP_INTERVAL_HOURS * 60 * 60 * 1000;

@@ -23,9 +23,6 @@ import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { z } from "zod";
 
-/**
- * Zod schema for contact form validation
- */
 const contactFormSchema = z.object({
   name: z.string().min(1, "Name is required").max(100, "Name is too long"),
   email: z.string().email("Please enter a valid email address"),
@@ -35,9 +32,6 @@ const contactFormSchema = z.object({
 
 type ContactFormData = z.infer<typeof contactFormSchema>;
 
-/**
- * Props for the ContactDialog component
- */
 interface ContactDialogProps {
   carMake: string;
   carModel: string;
@@ -47,25 +41,6 @@ interface ContactDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-/**
- * Contact seller dialog for inquiring about cars for sale.
- * Pre-fills car details and allows users to send customized messages to sellers.
- * 
- * @param {ContactDialogProps} props - Component props
- * @returns {JSX.Element} The rendered contact dialog
- * 
- * @example
- * ```tsx
- * <ContactDialog
- *   carMake="Maruti"
- *   carModel="Swift"
- *   carYear={2020}
- *   carPrice={550000}
- *   open={isOpen}
- *   onOpenChange={setIsOpen}
- * />
- * ```
- */
 export function ContactDialog({ 
   carMake, 
   carModel, 

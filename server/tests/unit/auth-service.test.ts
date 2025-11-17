@@ -4,10 +4,8 @@ import passport from 'passport';
 import { hashPassword, verifyPassword } from '../../auth';
 import type { User } from '@shared/schema';
 
-// Mock bcrypt
 jest.mock('bcrypt');
 
-// Mock storage for passport tests
 const mockGetStorage = jest.fn();
 jest.mock('../../storage', () => ({
   getStorage: () => mockGetStorage(),
@@ -102,11 +100,11 @@ describe('Auth Service - Unit Tests', () => {
       });
 
       it('should handle edge cases', async () => {
-        // Empty password
+        
         mockedBcrypt.compare.mockResolvedValue(false as never);
         expect(await verifyPassword('', 'hash')).toBe(false);
 
-        // Special characters
+        
         mockedBcrypt.compare.mockResolvedValue(true as never);
         expect(await verifyPassword('p@$$w0rd!', 'hash')).toBe(true);
       });
@@ -135,7 +133,7 @@ describe('Auth Service - Unit Tests', () => {
           cb(null, (user as any).id);
         });
 
-        // Access the registered serialize function
+        
         const serializeFunction = (passport as any)._serializers[0];
         serializeFunction(user, (err: any, id: any) => {
           expect(err).toBeNull();
@@ -155,7 +153,6 @@ describe('Auth Service - Unit Tests', () => {
           password: 'hashed',
           googleId: null,
           phone: null,
-          phoneVerified: false,
           countryCode: '+91',
           registrationNumbers: null,
           dateOfBirth: null,
@@ -167,6 +164,8 @@ describe('Auth Service - Unit Tests', () => {
           provider: 'email',
           role: 'customer',
           emailVerified: false,
+          preferredNotificationChannel: 'whatsapp',
+          isActive: true,
           createdAt: new Date(),
         };
 
@@ -185,7 +184,7 @@ describe('Auth Service - Unit Tests', () => {
           }
         });
 
-        // Access the registered deserialize function
+        
         const deserializeFunction = (passport as any)._deserializers[0];
         deserializeFunction(userId, (err: any, user: any) => {
           expect(err).toBeNull();
@@ -275,7 +274,7 @@ describe('Auth Service - Unit Tests', () => {
       it('should reject request when user is not authenticated', async () => {
         mockReq.user = null;
 
-        // Simulate admin middleware behavior
+        
         const requiresAuth = !mockReq.user;
         
         if (requiresAuth) {
@@ -323,7 +322,7 @@ describe('Auth Service - Unit Tests', () => {
           role: 'customer',
         };
 
-        // Simulate admin authorization check
+        
         const isAdmin = mockReq.user.role === 'admin';
         
         if (!isAdmin) {
@@ -351,7 +350,7 @@ describe('Auth Service - Unit Tests', () => {
           role: 'admin',
         };
 
-        // Simulate admin authorization check
+        
         const isAdmin = mockReq.user.role === 'admin';
         
         if (isAdmin) {
@@ -412,7 +411,7 @@ describe('Auth Service - Unit Tests', () => {
         mockReq.headers['user-agent'] = 'Mozilla/5.0';
         mockReq.ip = '192.168.1.1';
 
-        // Simulate admin context creation
+        
         if (mockReq.user.role === 'admin') {
           mockReq.adminContext = {
             action: 'access',
@@ -537,7 +536,7 @@ describe('Auth Service - Unit Tests', () => {
     });
 
     it('should handle password comparison timing-safely', async () => {
-      // bcrypt.compare is timing-safe by design
+      
       const password = 'testPassword';
       const hash = 'hashedValue';
       
@@ -547,7 +546,7 @@ describe('Auth Service - Unit Tests', () => {
       await verifyPassword(password, hash);
       const endTime = Date.now();
       
-      // Verify the function completed
+      
       expect(endTime).toBeGreaterThanOrEqual(startTime);
     });
   });

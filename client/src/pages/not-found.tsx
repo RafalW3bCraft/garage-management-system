@@ -1,16 +1,6 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { AlertCircle } from "lucide-react";
 
-/**
- * 404 Not Found page component displayed when a route doesn't match any defined paths.
- * 
- * @returns {JSX.Element} The rendered 404 error page
- * 
- * @example
- * ```tsx
- * <Route component={NotFound} />
- * ```
- */
 export default function NotFound() {
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">

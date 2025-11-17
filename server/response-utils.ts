@@ -194,13 +194,46 @@ export function sendDatabaseError(
 ): Response {
   console.error(`Database error during ${operation}:`, error);
 
-  const dbError = error as { code?: string };
+  const dbError = error as { code?: string; constraint?: string; detail?: string; table?: string; column?: string };
+  
   switch (dbError?.code) {
     case '23505':
       return sendConflictError(res, `This ${operation} conflicts with existing data. Please check for duplicates.`);
       
-    case '23503':
-      return sendValidationError(res, `Invalid reference in ${operation}. Referenced data does not exist.`);
+    case '23503': {
+      
+      let errorMessage = `Invalid reference in ${operation}.`;
+      const errors: string[] = [];
+      
+      
+      if (dbError.detail) {
+        
+        const match = dbError.detail.match(/Key \((\w+)\)=\(([^)]+)\) is not present in table "(\w+)"/);
+        if (match) {
+          const [, field, value, table] = match;
+          const fieldName = field.replace(/_/g, ' ');
+          const tableName = table.replace(/_/g, ' ');
+          errorMessage = `Invalid ${fieldName} selected`;
+          errors.push(`The selected ${fieldName} (ID: ${value}) does not exist in ${tableName}. Please select a valid option.`);
+        } else {
+          errors.push(`Referenced data does not exist. ${dbError.detail}`);
+        }
+      } else if (dbError.constraint) {
+        
+        const constraintMatch = dbError.constraint.match(/(\w+)_(\w+)_fkey/);
+        if (constraintMatch) {
+          const field = constraintMatch[2].replace(/_/g, ' ');
+          errorMessage = `Invalid ${field} selected`;
+          errors.push(`The selected ${field} does not exist. Please select a valid option.`);
+        } else {
+          errors.push(`Referenced data does not exist.`);
+        }
+      } else {
+        errors.push(`Referenced data does not exist.`);
+      }
+      
+      return sendValidationError(res, errorMessage, errors);
+    }
       
     case '23502':
       return sendValidationError(res, `Missing required field in ${operation}. All required fields must be provided.`);

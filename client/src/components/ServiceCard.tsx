@@ -6,35 +6,12 @@ import { Clock, IndianRupee, Eye } from "lucide-react";
 import { Link } from "wouter";
 import type { Service } from "@shared/schema";
 
-/**
- * Props for the ServiceCard component
- */
 interface ServiceCardProps {
   service: Service;
   popular?: boolean;
   icon: React.ReactNode;
 }
 
-/**
- * Service card component displaying service offerings with pricing and features.
- * Shows service details, pricing, duration, included features, and booking/details actions.
- * Optionally highlights popular services with special styling.
- * 
- * @param {ServiceCardProps} props - Component props
- * @param {Service} props.service - The service to display
- * @param {boolean} [props.popular] - Whether to mark the service as popular
- * @param {React.ReactNode} props.icon - Icon to display for the service
- * @returns {JSX.Element} The rendered service card
- * 
- * @example
- * ```tsx
- * <ServiceCard
- *   service={oilChangeService}
- *   popular={true}
- *   icon={<Wrench className="h-6 w-6" />}
- * />
- * ```
- */
 export function ServiceCard({ 
   service,
   popular, 

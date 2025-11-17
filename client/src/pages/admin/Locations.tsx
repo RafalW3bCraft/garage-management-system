@@ -19,23 +19,8 @@ import { z } from "zod";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
-/**
- * Location form data type inferred from Zod schema
- */
 type LocationFormData = z.infer<typeof insertLocationSchema>;
 
-/**
- * Admin locations management component for managing service center locations.
- * Supports creating, editing, and deleting locations with contact information,
- * operating hours, and rating management.
- * 
- * @returns {JSX.Element} The rendered admin locations management page
- * 
- * @example
- * ```tsx
- * <Route path="/admin/locations" component={AdminLocations} />
- * ```
- */
 export default function AdminLocations() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
@@ -227,7 +212,6 @@ export default function AdminLocations() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight" data-testid="heading-admin-locations">
@@ -399,7 +383,6 @@ export default function AdminLocations() {
             </DialogContent>
           </Dialog>
 
-          {/* Edit Location Dialog */}
           <Dialog open={!!editingLocation} onOpenChange={(open) => !open && setEditingLocation(null)}>
             <DialogContent className="max-w-2xl">
               <DialogHeader>
@@ -561,7 +544,6 @@ export default function AdminLocations() {
         </div>
       </div>
 
-      {/* Locations List */}
       {locations.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center">
@@ -678,7 +660,6 @@ export default function AdminLocations() {
         </div>
       )}
 
-      {/* Summary Card */}
       {locations.length > 0 && (
         <Card className="mt-6">
           <CardHeader>

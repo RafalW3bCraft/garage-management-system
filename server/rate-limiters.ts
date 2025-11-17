@@ -56,7 +56,6 @@ export const strictAuthLimiter = rateLimit({
   handler: createRateLimitHandler("Too many login attempts from this IP, please try again after 1 hour"),
 });
 
-
 export const passwordResetLimiter = rateLimit({
   ...baseConfig,
   windowMs: 60 * 60 * 1000,

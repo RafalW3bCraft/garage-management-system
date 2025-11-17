@@ -62,7 +62,6 @@ describe('DatabaseStorage - Unit Tests', () => {
       password: 'hashed_password',
       googleId: null,
       phone: null,
-      phoneVerified: false,
       countryCode: '+91',
       registrationNumbers: null,
       dateOfBirth: null,
@@ -74,6 +73,8 @@ describe('DatabaseStorage - Unit Tests', () => {
       provider: 'email',
       role: 'customer',
       emailVerified: false,
+      preferredNotificationChannel: 'whatsapp',
+      isActive: true,
       createdAt: new Date(),
     };
 
@@ -376,7 +377,7 @@ describe('DatabaseStorage - Unit Tests', () => {
 
         expect(result1).toEqual(services);
         expect(result2).toEqual(services);
-        expect(mockDb.select).toHaveBeenCalledTimes(1); // Cache hit on second call
+        expect(mockDb.select).toHaveBeenCalledTimes(1); 
       });
     });
 
@@ -406,11 +407,11 @@ describe('DatabaseStorage - Unit Tests', () => {
         mockDb.returning.mockResolvedValue([mockService]);
         mockDb.orderBy.mockResolvedValue([mockService]);
 
-        // Populate cache first
+        
         await storage.getAllServices();
         expect(mockDb.select).toHaveBeenCalledTimes(1);
 
-        // Create service
+        
         await storage.createService({
           title: 'Oil Change',
           description: 'Test',
@@ -420,7 +421,7 @@ describe('DatabaseStorage - Unit Tests', () => {
           features: [],
         });
 
-        // Verify cache is invalidated by checking if next call hits DB
+        
         await storage.getAllServices();
         expect(mockDb.select).toHaveBeenCalledTimes(2);
       });
@@ -470,6 +471,7 @@ describe('DatabaseStorage - Unit Tests', () => {
       customerId: 'customer-123',
       serviceId: 'service-123',
       locationId: 'location-123',
+      carId: null,
       carDetails: 'Toyota Camry 2020',
       dateTime: new Date('2024-01-15T10:00:00Z'),
       status: 'pending',
@@ -477,6 +479,9 @@ describe('DatabaseStorage - Unit Tests', () => {
       estimatedDuration: '1 hour',
       price: null,
       notes: null,
+      expiresAt: null,
+      lastRenewalDate: null,
+      completedAt: null,
       createdAt: new Date(),
     };
 
@@ -485,7 +490,7 @@ describe('DatabaseStorage - Unit Tests', () => {
         mockDb.transaction.mockImplementation(async (callback: any) => {
           mockTx.select.mockReturnThis();
           mockTx.from.mockReturnThis();
-          mockTx.where.mockResolvedValue([]); // No conflicts
+          mockTx.where.mockResolvedValue([]); 
           mockTx.insert.mockReturnThis();
           mockTx.values.mockReturnThis();
           mockTx.returning.mockResolvedValue([mockAppointment]);
@@ -508,7 +513,7 @@ describe('DatabaseStorage - Unit Tests', () => {
         mockDb.transaction.mockImplementation(async (callback: any) => {
           mockTx.select.mockReturnThis();
           mockTx.from.mockReturnThis();
-          mockTx.where.mockResolvedValue([{ id: 'conflicting-apt' }]); // Conflict found
+          mockTx.where.mockResolvedValue([{ id: 'conflicting-apt' }]); 
           return callback(mockTx);
         });
 
@@ -539,7 +544,7 @@ describe('DatabaseStorage - Unit Tests', () => {
         const result = await storage.getAllAppointments();
 
         expect(result).toEqual([appointmentWithDetails]);
-        expect(mockDb.innerJoin).toHaveBeenCalledTimes(3); // services, locations, customers
+        expect(mockDb.innerJoin).toHaveBeenCalledTimes(3); 
       });
     });
 
@@ -617,7 +622,7 @@ describe('DatabaseStorage - Unit Tests', () => {
 
         expect(result1).toEqual([mockLocation]);
         expect(result2).toEqual([mockLocation]);
-        expect(mockDb.select).toHaveBeenCalledTimes(1); // Cache hit
+        expect(mockDb.select).toHaveBeenCalledTimes(1); 
       });
     });
 
@@ -644,7 +649,7 @@ describe('DatabaseStorage - Unit Tests', () => {
 
         const result = await storage.deleteLocation('loc-123');
 
-        // The actual implementation checks if result.length > 0
+        
         expect(mockDb.delete).toHaveBeenCalled();
       });
     });
@@ -655,7 +660,7 @@ describe('DatabaseStorage - Unit Tests', () => {
 
         const result = await storage.hasLocationAppointments('loc-123');
 
-        // The method returns result.length > 0 which is a boolean
+        
         expect(mockDb.where).toHaveBeenCalled();
       });
 
@@ -685,6 +690,16 @@ describe('DatabaseStorage - Unit Tests', () => {
       currentBid: null,
       auctionEndTime: null,
       description: 'Well maintained',
+      transmission: 'automatic',
+      numOwners: 1,
+      bodyType: 'sedan',
+      color: 'silver',
+      engineSize: '2.5L',
+      features: ['GPS', 'Bluetooth', 'Backup Camera'],
+      registrationNumber: 'MH01AB1234',
+      serviceHistory: 'Full service history',
+      userId: null,
+      createdByAdminId: null,
       createdAt: new Date(),
     };
 
@@ -734,6 +749,7 @@ describe('DatabaseStorage - Unit Tests', () => {
           location: 'Mumbai',
           condition: 'Excellent',
           image: '/cars/camry.jpg',
+          registrationNumber: 'MH01AB1234',
         });
 
         expect(result).toEqual(mockCar);
@@ -820,7 +836,7 @@ describe('DatabaseStorage - Unit Tests', () => {
 
         const result = await storage.hasActiveBids('car-123');
 
-        // The method returns result.length > 0
+        
         expect(mockDb.where).toHaveBeenCalled();
       });
 
@@ -888,10 +904,10 @@ describe('DatabaseStorage - Unit Tests', () => {
 
       mockDb.transaction.mockImplementation(async (callback: any) => {
         txCallbackExecuted = true;
-        // Simulate error during transaction
+        
         mockTx.select.mockReturnThis();
         mockTx.from.mockReturnThis();
-        mockTx.where.mockResolvedValue([]); // No conflicts
+        mockTx.where.mockResolvedValue([]); 
         mockTx.insert.mockReturnThis();
         mockTx.values.mockReturnThis();
         mockTx.returning.mockRejectedValue(new Error('Insert failed'));
@@ -900,7 +916,7 @@ describe('DatabaseStorage - Unit Tests', () => {
           return await callback(mockTx);
         } catch (error) {
           errorThrown = true;
-          throw error; // Transaction will rollback
+          throw error; 
         }
       });
 
@@ -925,7 +941,7 @@ describe('DatabaseStorage - Unit Tests', () => {
         try {
           return await callback(mockTx);
         } catch (error) {
-          throw error; // Rollback occurs
+          throw error; 
         }
       });
 
@@ -952,7 +968,7 @@ describe('DatabaseStorage - Unit Tests', () => {
         
         callbackExecuted = true;
         const result = await callback(mockTx);
-        // In real implementation, commit would happen here
+        
         return result;
       });
 
@@ -1000,11 +1016,11 @@ describe('DatabaseStorage - Unit Tests', () => {
       mockDb.returning.mockResolvedValue([mockService]);
       mockDb.orderBy.mockResolvedValue([mockService]);
       
-      // Populate cache first
+      
       await storage.getAllServices();
       const initialCallCount = mockDb.select.mock.calls.length;
       
-      // Create new service - should invalidate cache
+      
       await storage.createService({
         title: 'Oil Change',
         description: 'Test',
@@ -1014,7 +1030,7 @@ describe('DatabaseStorage - Unit Tests', () => {
         features: [],
       });
       
-      // Next call should hit database, not cache
+      
       await storage.getAllServices();
       const finalCallCount = mockDb.select.mock.calls.length;
       
@@ -1026,14 +1042,14 @@ describe('DatabaseStorage - Unit Tests', () => {
       mockDb.returning.mockResolvedValue([updated]);
       mockDb.orderBy.mockResolvedValue([mockService, updated]);
       
-      // Populate cache
+      
       await storage.getAllServices();
       const initialCallCount = mockDb.select.mock.calls.length;
       
-      // Update service - should invalidate cache
+      
       await storage.updateService('service-123', { title: 'Updated Service' });
       
-      // Next call should query database
+      
       await storage.getAllServices();
       const finalCallCount = mockDb.select.mock.calls.length;
       
@@ -1044,11 +1060,11 @@ describe('DatabaseStorage - Unit Tests', () => {
       mockDb.returning.mockResolvedValue([mockLocation]);
       mockDb.orderBy.mockResolvedValue([mockLocation]);
       
-      // Populate cache
+      
       await storage.getAllLocations();
       const initialCallCount = mockDb.select.mock.calls.length;
       
-      // Create location - should invalidate cache
+      
       await storage.createLocation({
         name: 'New Branch',
         address: '456 New St',
@@ -1058,7 +1074,7 @@ describe('DatabaseStorage - Unit Tests', () => {
         rating: '4.5',
       });
       
-      // Next call should query database
+      
       await storage.getAllLocations();
       const finalCallCount = mockDb.select.mock.calls.length;
       
@@ -1090,13 +1106,13 @@ describe('DatabaseStorage - Unit Tests', () => {
 
       const result = await storage.getAllAppointments();
 
-      // Verify joins were called
+      
       expect(mockDb.select).toHaveBeenCalled();
       expect(mockDb.from).toHaveBeenCalled();
       expect(mockDb.innerJoin).toHaveBeenCalledTimes(3);
       expect(mockDb.orderBy).toHaveBeenCalled();
       
-      // Verify result has joined data
+      
       expect(result[0]).toHaveProperty('serviceName', 'Oil Change');
       expect(result[0]).toHaveProperty('locationName', 'Main Branch');
       expect(result[0]).toHaveProperty('customerName', 'John Doe');
@@ -1128,7 +1144,7 @@ describe('DatabaseStorage - Unit Tests', () => {
       expect(result).toBeDefined();
       if (result) {
         expect(result.id).toBe('apt-456');
-        // Verify all fields are present
+        
         expect(result).toHaveProperty('customerId');
         expect(result).toHaveProperty('serviceId');
         expect(result).toHaveProperty('locationId');

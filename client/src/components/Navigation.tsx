@@ -17,23 +17,8 @@ import { Menu, X, User, LogOut, Settings, Car, Shield } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 import { useAuthMutations } from "@/hooks/useAuthMutations";
 
-/**
- * Lazy load AuthDialog to reduce initial bundle size
- */
 const AuthDialog = lazy(() => import("./AuthDialog").then(module => ({ default: module.AuthDialog })));
 
-/**
- * Main navigation component with responsive design, user authentication state,
- * and dropdown menu. Features sticky positioning, mobile menu, theme toggle,
- * and role-based navigation items (admin access).
- * 
- * @returns {JSX.Element} The rendered navigation bar
- * 
- * @example
- * ```tsx
- * <Navigation />
- * ```
- */
 export function Navigation() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [location] = useLocation();
@@ -58,12 +43,10 @@ export function Navigation() {
     <nav className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60" aria-label="Main navigation">
       <div className="container mx-auto px-4">
         <div className="flex h-16 items-center justify-between">
-          {/* Logo */}
           <Link href="/" data-testid="link-home" aria-label="Ronak Motor Garage - Home">
             <Logo />
           </Link>
 
-          {/* Desktop Navigation */}
           <div className="hidden md:flex items-center space-x-6" role="navigation" aria-label="Primary navigation">
             {navItems.map((item) => (
               <Link key={item.href} href={item.href} data-testid={`link-${item.label.toLowerCase().replace(/\s+/g, '-')}`}>
@@ -79,7 +62,6 @@ export function Navigation() {
             ))}
           </div>
 
-          {/* Right Side - User Menu & Theme Toggle */}
           <div className="flex items-center flex-wrap gap-2">
             <ThemeToggle />
             
@@ -93,7 +75,7 @@ export function Navigation() {
                     aria-label={`User menu for ${user.name}`}
                   >
                     <Avatar className="h-9 w-9">
-                      <AvatarImage src="" alt={`${user.name}'s profile picture`} />
+                      <AvatarImage src={user.profileImage || ""} alt={`${user.name}'s profile picture`} />
                       <AvatarFallback>
                         {user.name.split(' ').map(n => n[0]).join('')}
                       </AvatarFallback>
@@ -137,13 +119,13 @@ export function Navigation() {
                       <span>Book Service</span>
                     </Link>
                   </DropdownMenuItem>
-                  {user.role === "admin" && (
+                  {(user.role === "admin" || user.role === "staff") && (
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem asChild data-testid="menu-admin">
                         <Link href="/admin">
                           <Shield className="mr-2 h-4 w-4" aria-hidden="true" />
-                          <span>Admin Dashboard</span>
+                          <span>{user.role === "admin" ? "Admin" : "Staff"} Dashboard</span>
                         </Link>
                       </DropdownMenuItem>
                     </>
@@ -173,7 +155,6 @@ export function Navigation() {
               </Suspense>
             )}
 
-            {/* Mobile Menu Button */}
             <Button
               variant="ghost"
               size="icon"
@@ -189,7 +170,6 @@ export function Navigation() {
           </div>
         </div>
 
-        {/* Mobile Navigation */}
         {isMenuOpen && (
           <div 
             id="mobile-navigation" 

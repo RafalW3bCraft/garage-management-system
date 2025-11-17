@@ -1,30 +1,12 @@
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/**
- * Props for the LoadingSpinner component
- */
 interface LoadingSpinnerProps {
   className?: string;
   size?: "sm" | "md" | "lg";
   text?: string;
 }
 
-/**
- * Loading spinner component with customizable size and optional loading text.
- * Displays an animated spinner with configurable appearance.
- * 
- * @param {LoadingSpinnerProps} props - Component props
- * @param {string} [props.className] - Additional CSS classes
- * @param {"sm" | "md" | "lg"} [props.size="md"] - Spinner size
- * @param {string} [props.text="Loading..."] - Optional loading text
- * @returns {JSX.Element} The rendered loading spinner
- * 
- * @example
- * ```tsx
- * <LoadingSpinner size="lg" text="Please wait..." />
- * ```
- */
 export function LoadingSpinner({ 
   className, 
   size = "md", 

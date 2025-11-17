@@ -25,17 +25,6 @@ import { ContactDialog } from "@/components/ContactDialog";
 import { format } from "date-fns";
 import type { Car } from "@shared/schema";
 
-/**
- * CarDetail page component that displays comprehensive information about a specific car.
- * Includes image, specifications, features, description, and action buttons.
- * 
- * @returns {JSX.Element} The rendered car detail page
- * 
- * @example
- * ```tsx
- * <Route path="/cars/:id" component={CarDetail} />
- * ```
- */
 export default function CarDetail() {
   const { id } = useParams<{ id: string }>();
   const [bidDialogOpen, setBidDialogOpen] = useState(false);
@@ -110,7 +99,6 @@ export default function CarDetail() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Back Button */}
       <div className="container mx-auto px-4 py-6">
         <Button variant="ghost" asChild>
           <Link href="/cars">
@@ -120,10 +108,8 @@ export default function CarDetail() {
         </Button>
       </div>
 
-      {/* Hero Section with Image */}
       <section className="container mx-auto px-4 pb-8">
         <div className="grid lg:grid-cols-2 gap-8">
-          {/* Image Gallery */}
           <div className="relative">
             <picture>
               <source srcSet={imageUrls.webp} type="image/webp" />
@@ -143,7 +129,6 @@ export default function CarDetail() {
             )}
           </div>
 
-          {/* Car Info */}
           <div className="space-y-6">
             <div>
               <h1 className="text-4xl font-bold mb-2">
@@ -173,7 +158,6 @@ export default function CarDetail() {
               </div>
             )}
 
-            {/* Quick Stats */}
             <div className="grid grid-cols-2 gap-4 py-4">
               <div className="flex items-center gap-3">
                 <Gauge className="h-5 w-5 text-muted-foreground" />
@@ -205,7 +189,6 @@ export default function CarDetail() {
               </div>
             </div>
 
-            {/* Action Buttons */}
             <div className="flex flex-col sm:flex-row gap-3">
               {car.isAuction ? (
                 <Button 
@@ -229,7 +212,6 @@ export default function CarDetail() {
         </div>
       </section>
 
-      {/* Detailed Specifications */}
       <section className="container mx-auto px-4 pb-8">
         <Card>
           <CardHeader>
@@ -319,7 +301,6 @@ export default function CarDetail() {
         </Card>
       </section>
 
-      {/* Description */}
       {car.description && (
         <section className="container mx-auto px-4 pb-8">
           <Card>
@@ -335,7 +316,6 @@ export default function CarDetail() {
         </section>
       )}
 
-      {/* Features */}
       {features.length > 0 && (
         <section className="container mx-auto px-4 pb-8">
           <Card>
@@ -357,7 +337,6 @@ export default function CarDetail() {
         </section>
       )}
 
-      {/* CTA Section */}
       <section className="container mx-auto px-4 pb-12">
         <Card className="bg-muted/50">
           <CardContent className="pt-6">
@@ -400,7 +379,6 @@ export default function CarDetail() {
         </Card>
       </section>
 
-      {/* Bid Dialog for Auction Cars */}
       {car.isAuction && (
         <BidDialog
           car={car}
@@ -409,7 +387,6 @@ export default function CarDetail() {
         />
       )}
 
-      {/* Contact Dialog for Non-Auction Cars */}
       {!car.isAuction && (
         <ContactDialog
           carMake={car.make}

@@ -1,22 +1,5 @@
-/**
- * Shared Phone Number Utilities
- * 
- * Single source of truth for phone number normalization, validation, and formatting
- * across all communication services (WhatsApp, SMS, OTP).
- * 
- * Ensures consistency in:
- * - Trunk prefix removal for international numbers
- * - E.164 format conversion
- * - WhatsApp-specific formatting
- * - Phone number validation
- */
 
-/**
- * Comprehensive trunk prefix mapping for international phone numbers
- * 
- * Trunk prefixes (like '0' in many countries) are used for domestic dialing
- * but must be removed when formatting for international use (E.164)
- */
+
 export const TRUNK_PREFIX_MAP: { [countryCode: string]: { prefix: string; name: string } } = {
   '44': { prefix: '0', name: 'UK' },
   '61': { prefix: '0', name: 'Australia' },
@@ -48,19 +31,6 @@ export const TRUNK_PREFIX_MAP: { [countryCode: string]: { prefix: string; name: 
   '55': { prefix: '0', name: 'Brazil' },
 };
 
-/**
- * Enhanced phone number normalization with comprehensive trunk prefix support
- * 
- * Removes non-digit characters and trunk prefixes to get the national number
- * 
- * @param phone - Phone number (may contain formatting characters)
- * @param countryCode - Country code (with or without '+')
- * @returns Normalized phone number (digits only, no trunk prefix)
- * 
- * @example
- * normalizePhone('044 1234 5678', '+44')
- * normalizePhone('09876543210', '+91')
- */
 export function normalizePhone(phone: string, countryCode: string): string {
   let cleanPhone = phone.replace(/\D/g, '');
   const cleanCountryCode = countryCode.replace(/\D/g, '');
@@ -116,40 +86,11 @@ export function formatE164(phone: string, countryCode: string): string {
   return `+${fullNumber}`;
 }
 
-/**
- * Format phone number to WhatsApp-specific format
- * 
- * WhatsApp requires E.164 format with 'whatsapp:' prefix
- * 
- * @param phone - Phone number (will be normalized)
- * @param countryCode - Country code (with or without '+')
- * @returns WhatsApp formatted phone number
- * @throws Error if validation fails
- * 
- * @example
- * formatWhatsAppNumber('09876543210', '+91')
- */
 export function formatWhatsAppNumber(phone: string, countryCode: string): string {
   const e164Number = formatE164(phone, countryCode);
   return `whatsapp:${e164Number}`;
 }
 
-/**
- * Validate phone number format
- * 
- * Comprehensive validation including:
- * - Required fields check
- * - E.164 length validation
- * - Country-specific format validation
- * 
- * @param phone - Phone number to validate
- * @param countryCode - Country code (with or without '+')
- * @returns Validation result with success flag and optional error message
- * 
- * @example
- * validatePhoneNumber('9876543210', '+91')
- * validatePhoneNumber('123', '+1')
- */
 export function validatePhoneNumber(phone: string, countryCode: string): { valid: boolean; message?: string } {
   const cleanPhone = (phone || '').replace(/\D/g, '');
   const cleanCountryCode = (countryCode || '').trim();
@@ -167,18 +108,6 @@ export function validatePhoneNumber(phone: string, countryCode: string): { valid
   }
 }
 
-/**
- * Extract country code from full E.164 phone number
- * 
- * Uses known country code patterns to identify the country code portion
- * 
- * @param fullNumber - Full phone number with country code (e.164 format without '+')
- * @returns Extracted country code (without '+')
- * 
- * @example
- * extractCountryCode('919876543210')
- * extractCountryCode('14155551234')
- */
 export function extractCountryCode(fullNumber: string): string {
   const knownCodes = [
     '1', '7', '20', '27', '30', '31', '32', '33', '34', '36', '39', '40', '41', '43', '44', 

@@ -1,9 +1,6 @@
 import { useToast } from "@/hooks/use-toast";
 import { UseQueryResult, UseMutationResult } from "@tanstack/react-query";
 
-/**
- * Standardized error response type from API
- */
 export interface ApiError {
   message: string;
   errors?: string[];
@@ -11,9 +8,6 @@ export interface ApiError {
   status?: number;
 }
 
-/**
- * Error handler configuration options
- */
 export interface ErrorHandlerOptions {
   title?: string;
   defaultMessage?: string;
@@ -22,17 +16,6 @@ export interface ErrorHandlerOptions {
   onError?: (error: Error) => void;
 }
 
-/**
- * Centralized error logging function with context
- * 
- * @param {Error} error - The error object to log
- * @param {string} [context] - Optional context string for debugging
- * 
- * @example
- * ```tsx
- * logError(error, "UserProfile - fetchUserData");
- * ```
- */
 export function logError(error: Error, context?: string): void {
   const timestamp = new Date().toISOString();
   const errorInfo = {
@@ -46,13 +29,6 @@ export function logError(error: Error, context?: string): void {
   console.error(`[ERROR] ${context || "App"}:`, errorInfo);
 }
 
-/**
- * Extract user-friendly error message from error object
- * 
- * @param {unknown} error - Error object from API or other sources
- * @param {string} defaultMessage - Fallback message if error parsing fails
- * @returns {string} User-friendly error message
- */
 export function extractErrorMessage(error: unknown, defaultMessage: string): string {
   if (!error) return defaultMessage;
   
@@ -67,23 +43,6 @@ export function extractErrorMessage(error: unknown, defaultMessage: string): str
   return defaultMessage;
 }
 
-/**
- * Handle query errors with standardized toast notifications and logging
- * 
- * @param {Error} error - The error object from useQuery
- * @param {ErrorHandlerOptions} [options] - Configuration options
- * 
- * @example
- * ```tsx
- * const { data, isError, error } = useQuery({
- *   queryKey: ["/api/users"],
- *   onError: (error) => handleQueryError(error, {
- *     title: "Failed to Load Users",
- *     defaultMessage: "Could not fetch user data"
- *   })
- * });
- * ```
- */
 export function handleQueryError(
   error: Error,
   options: ErrorHandlerOptions = {}
@@ -107,23 +66,6 @@ export function handleQueryError(
   }
 }
 
-/**
- * Handle mutation errors with standardized toast notifications and logging
- * 
- * @param {Error} error - The error object from useMutation
- * @param {ErrorHandlerOptions} [options] - Configuration options
- * 
- * @example
- * ```tsx
- * const mutation = useMutation({
- *   mutationFn: updateUser,
- *   onError: (error) => handleMutationError(error, {
- *     title: "Update Failed",
- *     defaultMessage: "Could not update user"
- *   })
- * });
- * ```
- */
 export function handleMutationError(
   error: Error,
   options: ErrorHandlerOptions = {}
@@ -147,35 +89,6 @@ export function handleMutationError(
   }
 }
 
-/**
- * Hook for consistent error handling across components
- * Provides unified error handling functions with toast notifications
- * 
- * @returns {object} Error handling utilities
- * @property {(error: Error, options?: ErrorHandlerOptions) => void} handleError - Generic error handler
- * @property {(error: Error, options?: ErrorHandlerOptions) => void} handleQueryError - Query-specific error handler
- * @property {(error: Error, options?: ErrorHandlerOptions) => void} handleMutationError - Mutation-specific error handler
- * 
- * @example
- * ```tsx
- * const { handleError, handleQueryError, handleMutationError } = useErrorHandler();
- * 
- * const { data } = useQuery({
- *   queryKey: ["/api/data"],
- *   onError: (error) => handleQueryError(error, {
- *     title: "Failed to Load",
- *     defaultMessage: "Could not fetch data"
- *   })
- * });
- * 
- * const mutation = useMutation({
- *   mutationFn: saveData,
- *   onError: (error) => handleMutationError(error, {
- *     title: "Save Failed"
- *   })
- * });
- * ```
- */
 export function useErrorHandler() {
   const { toast } = useToast();
   
@@ -240,31 +153,12 @@ export function useErrorHandler() {
   };
 }
 
-/**
- * Create a retry handler that uses refetch instead of window.location.reload
- * 
- * @param {() => void} refetch - The refetch function from useQuery
- * @returns {() => void} Retry handler function
- * 
- * @example
- * ```tsx
- * const { data, refetch, isError } = useQuery({ queryKey: ["/api/data"] });
- * const handleRetry = createRetryHandler(refetch);
- * 
- * if (isError) {
- *   return <Button onClick={handleRetry}>Retry</Button>;
- * }
- * ```
- */
 export function createRetryHandler(refetch: () => void): () => void {
   return () => {
     refetch();
   };
 }
 
-/**
- * Standardized error display component props for consistent error UI
- */
 export interface ErrorDisplayProps {
   title?: string;
   message?: string;
@@ -272,23 +166,6 @@ export interface ErrorDisplayProps {
   retryLabel?: string;
 }
 
-/**
- * Get standardized error display props from query result
- * 
- * @param {UseQueryResult} query - The query result object
- * @param {string} defaultMessage - Default error message
- * @returns {ErrorDisplayProps | null} Error display props or null if no error
- * 
- * @example
- * ```tsx
- * const query = useQuery({ queryKey: ["/api/data"] });
- * const errorProps = getQueryErrorProps(query, "Failed to load data");
- * 
- * if (errorProps) {
- *   return <ErrorDisplay {...errorProps} />;
- * }
- * ```
- */
 export function getQueryErrorProps(
   query: UseQueryResult,
   defaultMessage: string = "Failed to load data"

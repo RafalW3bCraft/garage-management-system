@@ -1,9 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from "react";
 import { z } from "zod";
 
-/**
- * Schema for validating authentication preferences
- */
 const authPreferencesSchema = z.object({
   lastMethod: z.enum(["email", "google"]).default("email"),
   lastCountryCode: z.string().default("+91"),
@@ -32,16 +29,8 @@ interface AuthPreferencesContextState extends AuthPreferences {
 
 const AuthPreferencesContext = createContext<AuthPreferencesContextState | undefined>(undefined);
 
-/**
- * localStorage key for authentication preferences
- */
 const STORAGE_KEY = "auth-preferences";
 
-/**
- * Detects user's country code based on timezone
- * 
- * @returns {string} Detected country code
- */
 const detectCountryCode = (): string => {
   try {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -57,11 +46,6 @@ const detectCountryCode = (): string => {
   }
 };
 
-/**
- * Loads authentication preferences from localStorage with validation
- * 
- * @returns {AuthPreferences} Validated preferences or defaults
- */
 const loadPreferences = (): AuthPreferences => {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -211,32 +195,6 @@ export function AuthPreferencesProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/**
- * Hook for accessing auth preferences context and controls.
- * Must be used within an AuthPreferencesProvider component.
- * 
- * @returns {AuthPreferencesContextState} Auth preferences state and methods
- * @throws {Error} If used outside of AuthPreferencesProvider
- * 
- * @example
- * ```tsx
- * const {
- *   lastMethod,
- *   lastEmail,
- *   saveMethod,
- *   saveEmail,
- *   rememberMe
- * } = useAuthPreferences();
- * 
- *
- * saveMethod("email");
- * 
- *
- * if (rememberMe) {
- *   saveEmail("user@example.com");
- * }
- * ```
- */
 export function useAuthPreferencesContext() {
   const context = useContext(AuthPreferencesContext);
   if (context === undefined) {

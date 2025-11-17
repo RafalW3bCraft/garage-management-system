@@ -59,9 +59,6 @@ function initializeMailService() {
   return true;
 }
 
-/**
- * Sanitize SendGrid error response to prevent sensitive data exposure
- */
 function sanitizeSendGridError(responseBody: SendGridErrorResponse): Partial<SendGridErrorResponse> {
   if (!responseBody || typeof responseBody !== 'object') {
     return { error_id: 'unknown' };
@@ -95,10 +92,6 @@ function sanitizeSendGridError(responseBody: SendGridErrorResponse): Partial<Sen
   return sanitized;
 }
 
-/**
- * Check if a 403 error is specifically about sender verification
- * by inspecting the SendGrid response body
- */
 function isSenderVerificationError(responseBody: SendGridErrorResponse | null): boolean {
   if (!responseBody) {
     return false;
@@ -166,10 +159,6 @@ interface EmailParams {
   html?: string;
 }
 
-/**
- * Internal helper class that extends BaseCommunicationService
- * Provides circuit breaker and retry logic for email service
- */
 class EmailServiceHelper extends BaseCommunicationService {
   constructor(retryConfig: RetryConfig, circuitBreakerConfig: CircuitBreakerConfig) {
     super('EMAIL', retryConfig, circuitBreakerConfig);
@@ -190,9 +179,6 @@ const EMAIL_CIRCUIT_CONFIG: CircuitBreakerConfig = {
 
 const emailHelper = new EmailServiceHelper(EMAIL_RETRY_CONFIG, EMAIL_CIRCUIT_CONFIG);
 
-/**
- * Core email sending function (for internal use with retry wrapper)
- */
 async function sendEmailCore(params: EmailParams): Promise<any> {
   const emailData: EmailData = {
     to: params.to,

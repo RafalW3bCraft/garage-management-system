@@ -18,12 +18,6 @@ import { format } from "date-fns";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
-/**
- * Helper function to parse and generate user profile image URLs in multiple formats
- * 
- * @param {string | null | undefined} imageUrl - Profile image URL or object
- * @returns {{webp: string | null, jpeg: string | null} | null} Image URLs in different formats or null
- */
 const getImageUrls = (imageUrl: string | null | undefined) => {
   if (!imageUrl) return null;
 
@@ -369,7 +363,6 @@ export default function AdminUsers() {
         </div>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         <Card>
           <CardContent className="pt-6">
@@ -421,7 +414,6 @@ export default function AdminUsers() {
         </Card>
       </div>
 
-      {/* Search and Filters */}
       <Card className="mb-6">
         <CardContent className="pt-6">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -489,7 +481,6 @@ export default function AdminUsers() {
         </CardContent>
       </Card>
 
-      {/* Users List */}
       {filteredUsers.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center">
@@ -756,7 +747,6 @@ export default function AdminUsers() {
                             </div>
                           </div>
 
-                          {/* Role Management */}
                           <div className="p-4 bg-muted/30 rounded-md">
                             <h4 className="font-semibold mb-3 flex items-center gap-2">
                               <UserCheck className="w-4 h-4" />
@@ -853,7 +843,6 @@ export default function AdminUsers() {
         </div>
       )}
 
-      {/* Provider Summary */}
       {users.length > 0 && (
         <Card className="mt-6">
           <CardHeader>
@@ -915,7 +904,6 @@ export default function AdminUsers() {
         </Card>
       )}
 
-      {/* Pagination Controls */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-6">
           <div className="text-sm text-muted-foreground">
@@ -944,7 +932,6 @@ export default function AdminUsers() {
         </div>
       )}
 
-      {/* Create User Dialog */}
       <Dialog open={creatingUser} onOpenChange={(open) => {
         setCreatingUser(open);
         if (!open) setCreateFormErrors({});
@@ -1080,7 +1067,6 @@ export default function AdminUsers() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit User Dialog */}
       <Dialog open={!!editingUser} onOpenChange={(open) => {
         if (!open) {
           setEditingUser(null);
@@ -1261,7 +1247,6 @@ export default function AdminUsers() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Reset Password Dialog */}
       <Dialog open={!!resettingPasswordUser} onOpenChange={(open) => {
         if (!open) {
           setResettingPasswordUser(null);

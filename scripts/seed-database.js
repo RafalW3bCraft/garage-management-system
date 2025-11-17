@@ -5,7 +5,7 @@ import { services, locations, cars } from '../shared/schema.js';
 async function seedDatabase() {
   let url = process.env.DATABASE_URL || process.env.NEON_DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_PRISMA_URL;
 
-  // If no full connection string, construct from PostgreSQL individual components
+  
   if (!url && process.env.PGHOST && process.env.PGUSER && process.env.PGPASSWORD && process.env.PGDATABASE && process.env.PGPORT) {
     url = `postgresql://${process.env.PGUSER}:${process.env.PGPASSWORD}@${process.env.PGHOST}:${process.env.PGPORT}/${process.env.PGDATABASE}`;
   }
@@ -21,7 +21,7 @@ async function seedDatabase() {
   try {
     console.log('Starting database seeding...');
 
-    // Seed locations
+    
     console.log('Seeding locations...');
     await db.insert(locations).values([
       {
@@ -53,7 +53,7 @@ async function seedDatabase() {
       }
     ]).onConflictDoNothing();
 
-    // Seed services
+    
     console.log('Seeding services...');
     await db.insert(services).values([
       {
@@ -124,10 +124,10 @@ async function seedDatabase() {
       }
     ]).onConflictDoNothing();
 
-    // Seed cars
+    
     console.log('Seeding cars...');
     await db.insert(cars).values([
-      // Cars for sale
+      
       {
         id: "car-1",
         make: "Maruti Suzuki",
@@ -192,7 +192,7 @@ async function seedDatabase() {
         auctionEndTime: null,
         description: "Reliable sedan with excellent comfort"
       },
-      // Auction cars
+      
       {
         id: "car-auction-1", 
         make: "BMW",

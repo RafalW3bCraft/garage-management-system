@@ -29,9 +29,6 @@ import { apiRequest } from "@/lib/queryClient";
 import { useErrorHandler } from "@/lib/error-utils";
 import type { Location } from "@shared/schema";
 
-/**
- * Zod schema for contact form validation
- */
 const contactFormSchema = z.object({
   name: z.string()
     .min(2, "Name must be at least 2 characters")
@@ -52,17 +49,6 @@ const contactFormSchema = z.object({
 
 type ContactFormData = z.infer<typeof contactFormSchema>;
 
-/**
- * Contact page component providing a contact form, quick contact information,
- * service locations display, and frequently asked questions section.
- * 
- * @returns {JSX.Element} The rendered contact page
- * 
- * @example
- * ```tsx
- * <Route path="/contact" component={Contact} />
- * ```
- */
 export default function Contact() {
   const { toast } = useToast();
   const { handleMutationError } = useErrorHandler();
@@ -112,7 +98,6 @@ export default function Contact() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <section className="py-16 bg-muted/50">
         <div className="container mx-auto px-4">
           <div className="text-center">
@@ -126,7 +111,6 @@ export default function Contact() {
 
       <div className="container mx-auto px-4 py-12">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-          {/* Contact Form */}
           <div>
             <Card>
               <CardHeader>
@@ -262,7 +246,6 @@ export default function Contact() {
             </Card>
           </div>
 
-          {/* Contact Information */}
           <div className="space-y-6">
             <Card>
               <CardHeader>
@@ -294,7 +277,6 @@ export default function Contact() {
               </CardContent>
             </Card>
 
-            {/* Location Cards */}
             <div className="space-y-4">
               <h3 className="text-xl font-semibold">Our Locations</h3>
               {locationsLoading ? (
@@ -372,7 +354,6 @@ export default function Contact() {
         </div>
       </div>
 
-      {/* FAQ Section */}
       <section className="py-16 bg-muted/50">
         <div className="container mx-auto px-4">
           <div className="text-center mb-12">

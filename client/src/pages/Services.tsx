@@ -27,12 +27,6 @@ import {
 } from "lucide-react";
 import type { Service } from "@shared/schema";
 
-/**
- * Maps icon names to their corresponding Lucide icon components
- * 
- * @param {string | null} iconName - Name of the icon to retrieve
- * @returns {JSX.Element} The corresponding icon component with default styling
- */
 const getIconComponent = (iconName: string | null) => {
   const iconMap: Record<string, JSX.Element> = {
     'droplets': <Droplets className="h-6 w-6" />,

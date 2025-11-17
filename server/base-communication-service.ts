@@ -4,23 +4,12 @@ import {
   type CommunicationResult 
 } from '@shared/communication-types';
 
-/**
- * Circuit breaker states
- */
 export enum CircuitState {
   CLOSED = 'CLOSED',
   OPEN = 'OPEN',
   HALF_OPEN = 'HALF_OPEN'
 }
 
-/**
- * Generic circuit breaker implementation for communication services
- * 
- * Implements circuit breaker pattern with proper HALF_OPEN state handling:
- * - CLOSED: Normal operation, all requests allowed
- * - OPEN: Fast-failing, no requests allowed (waits for recovery timeout)
- * - HALF_OPEN: Testing recovery with limited probe requests
- */
 export class CircuitBreaker {
   private state: CircuitState = CircuitState.CLOSED;
   private failureCount: number = 0;
@@ -37,9 +26,8 @@ export class CircuitBreaker {
     this.recoveryTimeout = recoveryTimeoutMinutes * 60 * 1000;
   }
   
-  /**
-   * Check if request should be allowed
-   */
+  
+
   canAttempt(): boolean {
     if (this.state === CircuitState.CLOSED) {
       return true;
@@ -62,9 +50,8 @@ export class CircuitBreaker {
     return true;
   }
   
-  /**
-   * Record successful request
-   */
+  
+
   recordSuccess(): void {
     if (this.state === CircuitState.HALF_OPEN) {
     }
@@ -74,9 +61,8 @@ export class CircuitBreaker {
     this.halfOpenAttemptCount = 0;
   }
   
-  /**
-   * Record failed request
-   */
+  
+
   recordFailure(): void {
     this.failureCount++;
     this.lastFailureTime = Date.now();
@@ -92,23 +78,20 @@ export class CircuitBreaker {
     }
   }
   
-  /**
-   * Get current circuit state
-   */
+  
+
   getState(): CircuitState {
     return this.state;
   }
   
-  /**
-   * Get failure count
-   */
+  
+
   getFailureCount(): number {
     return this.failureCount;
   }
   
-  /**
-   * Reset circuit breaker (for testing or manual recovery)
-   */
+  
+
   reset(): void {
     this.state = CircuitState.CLOSED;
     this.failureCount = 0;
@@ -117,9 +100,6 @@ export class CircuitBreaker {
   }
 }
 
-/**
- * Retry result containing operation result and metadata
- */
 export interface RetryResult<T> {
   result?: T;
   success: boolean;
@@ -127,9 +107,6 @@ export interface RetryResult<T> {
   attempts: number;
 }
 
-/**
- * Configuration for retry behavior
- */
 export interface RetryConfig {
   initialDelayMs: number;
   maxDelayMs: number;
@@ -137,23 +114,11 @@ export interface RetryConfig {
   backoffMultiplier: number;
 }
 
-/**
- * Configuration for circuit breaker behavior
- */
 export interface CircuitBreakerConfig {
   failureThreshold: number;
   recoveryTimeoutMinutes: number;
 }
 
-/**
- * Abstract base class for all communication services
- * 
- * Provides common functionality:
- * - Circuit breaker pattern
- * - Retry with exponential backoff
- * - Error categorization and handling
- * - Standardized logging
- */
 export abstract class BaseCommunicationService {
   protected readonly serviceName: string;
   protected readonly circuitBreaker: CircuitBreaker;
@@ -173,24 +138,21 @@ export abstract class BaseCommunicationService {
     );
   }
   
-  /**
-   * Calculate exponential backoff delay
-   */
+  
+
   protected calculateBackoffDelay(attempt: number): number {
     const delay = this.retryConfig.initialDelayMs * Math.pow(this.retryConfig.backoffMultiplier, attempt - 1);
     return Math.min(delay, this.retryConfig.maxDelayMs);
   }
   
-  /**
-   * Sleep utility for retry delays
-   */
+  
+
   protected sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
   
-  /**
-   * Check if error is retryable using standardized error classification
-   */
+  
+
   protected isRetryableError(error: Error): boolean {
     if (!error.message) return true;
     
@@ -303,9 +265,8 @@ export abstract class BaseCommunicationService {
     }
   }
   
-  /**
-   * Get circuit breaker status (for monitoring/debugging)
-   */
+  
+
   public getCircuitBreakerStatus(): {
     state: string;
     failureCount: number;
@@ -320,16 +281,14 @@ export abstract class BaseCommunicationService {
     };
   }
   
-  /**
-   * Manually reset circuit breaker (for admin/debugging)
-   */
+  
+
   public resetCircuitBreaker(): void {
     this.circuitBreaker.reset();
   }
   
-  /**
-   * Get retry configuration
-   */
+  
+
   public getRetryConfig(): RetryConfig {
     return { ...this.retryConfig };
   }

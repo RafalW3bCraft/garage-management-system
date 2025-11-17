@@ -1,10 +1,8 @@
 import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals';
 import { WhatsAppService } from '../../whatsapp-service';
 import { sendEmailV2 } from '../../email-service';
-import { OTPService } from '../../otp-service';
 import { categorizeError, isErrorRetryable } from '@shared/communication-types';
 
-// Mock Twilio
 const mockTwilioCreate = jest.fn();
 jest.mock('twilio', () => {
   return jest.fn().mockImplementation(() => ({
@@ -14,7 +12,6 @@ jest.mock('twilio', () => {
   }));
 });
 
-// Mock SendGrid
 const mockSendGridSend = jest.fn();
 jest.mock('@sendgrid/mail', () => ({
   MailService: jest.fn().mockImplementation(() => ({
@@ -23,13 +20,11 @@ jest.mock('@sendgrid/mail', () => ({
   })),
 }));
 
-// Mock storage
 const mockGetStorage = jest.fn();
 jest.mock('../../storage', () => ({
   getStorage: () => mockGetStorage(),
 }));
 
-// Mock global fetch for MessageCentral
 global.fetch = jest.fn() as jest.MockedFunction<typeof fetch>;
 
 describe('Communication Services - Unit Tests', () => {
@@ -52,7 +47,7 @@ describe('Communication Services - Unit Tests', () => {
     
     (mockGetStorage as any).mockResolvedValue(mockStorage);
     
-    // Set up environment variables
+    
     process.env.TWILIO_ACCOUNT_SID = 'test-account-sid';
     process.env.TWILIO_AUTH_TOKEN = 'test-auth-token';
     process.env.TWILIO_WHATSAPP_NUMBER = 'whatsapp:+14155238886';
@@ -99,7 +94,7 @@ describe('Communication Services - Unit Tests', () => {
       });
 
       it('should retry on retryable errors and succeed', async () => {
-        // First call fails with retryable error (500)
+        
         (mockTwilioCreate as any)
           .mockRejectedValueOnce({ code: 500, status: 500, message: 'Internal Server Error' })
           .mockResolvedValueOnce({ sid: 'SM123456789', status: 'queued' });
@@ -168,7 +163,7 @@ describe('Communication Services - Unit Tests', () => {
         );
 
         expect(result.success).toBe(false);
-        expect(mockTwilioCreate).toHaveBeenCalledTimes(4); // 1 initial + 3 retries
+        expect(mockTwilioCreate).toHaveBeenCalledTimes(4); 
         expect(result.metadata?.finalFailure).toBe(true);
       });
     });
@@ -294,166 +289,6 @@ describe('Communication Services - Unit Tests', () => {
     });
   });
 
-  describe('OTP Service - Real Service Tests', () => {
-    describe('sendOTP', () => {
-      it('should send OTP via MessageCentral and store in database', async () => {
-        (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValue({
-          ok: true,
-          json: async () => ({ responseCode: 200 }),
-        } as any);
-
-        const result = await OTPService.sendOTP('9876543210', '+91', 'registration');
-
-        expect(result.success).toBe(true);
-        expect(result.service).toBe('otp');
-        expect(mockStorage.expireAllActiveOtpsForTarget).toHaveBeenCalled();
-        expect(mockStorage.storeOTPVerification).toHaveBeenCalledWith(
-          expect.objectContaining({
-            phone: '9876543210',
-            countryCode: '+91',
-            purpose: 'registration',
-          })
-        );
-        expect(global.fetch).toHaveBeenCalled();
-      });
-
-      it('should enforce rate limiting', async () => {
-        mockStorage.getRecentOtpAttempts.mockResolvedValue([
-          { id: '1' }, { id: '2' }, { id: '3' }, { id: '4' }, { id: '5' }
-        ]);
-
-        const result = await OTPService.sendOTP('9876543210', '+91', 'registration');
-
-        expect(result.success).toBe(false);
-        expect(result.errorType).toBe('rate_limit');
-        expect(mockStorage.storeOTPVerification).not.toHaveBeenCalled();
-      });
-
-      it('should work in development mode without SMS credentials', async () => {
-        delete process.env.MESSAGECENTRAL_AUTH_TOKEN;
-        delete process.env.MESSAGECENTRAL_CUSTOMER_ID;
-        process.env.NODE_ENV = 'development';
-
-        const result = await OTPService.sendOTP('9876543210', '+91', 'registration');
-
-        expect(result.success).toBe(true);
-        expect(mockStorage.storeOTPVerification).toHaveBeenCalled();
-      });
-
-      it('should handle SMS API failures', async () => {
-        (global.fetch as jest.MockedFunction<typeof fetch>).mockResolvedValue({
-          ok: false,
-          status: 500,
-          text: async () => 'Internal Server Error',
-        } as any);
-
-        const result = await OTPService.sendOTP('9876543210', '+91', 'registration');
-
-        expect(result.success).toBe(false);
-        expect(result.errorType).toBe('service_unavailable');
-      });
-    });
-
-    describe('verifyOTP', () => {
-      it('should verify valid OTP successfully', async () => {
-        const crypto = require('crypto');
-        const otpCode = '123456';
-        const phone = '9876543210';
-        const secret = 'test-otp-secret';
-        
-        const data = `${otpCode}-${phone}`;
-        const hash = crypto.createHmac('sha256', secret).update(data).digest('hex');
-
-        mockStorage.getActiveOtpVerification.mockResolvedValue({
-          id: 'otp-123',
-          phone: '9876543210',
-          countryCode: '+91',
-          otpCodeHash: hash,
-          purpose: 'registration',
-          verified: false,
-          attempts: 0,
-          maxAttempts: 3,
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-        });
-
-        const result = await OTPService.verifyOTP('9876543210', '+91', '123456', 'registration');
-
-        expect(result.success).toBe(true);
-        expect(mockStorage.markOtpAsVerified).toHaveBeenCalledWith('otp-123');
-      });
-
-      it('should reject expired OTP', async () => {
-        mockStorage.getActiveOtpVerification.mockResolvedValue({
-          id: 'otp-123',
-          phone: '9876543210',
-          countryCode: '+91',
-          otpCodeHash: 'hash',
-          purpose: 'registration',
-          verified: false,
-          attempts: 0,
-          maxAttempts: 3,
-          expiresAt: new Date(Date.now() - 1000), // Expired
-        });
-
-        const result = await OTPService.verifyOTP('9876543210', '+91', '123456', 'registration');
-
-        expect(result.success).toBe(false);
-        expect(result.metadata?.expired).toBe(true);
-        expect(mockStorage.markOtpAsExpired).toHaveBeenCalled();
-      });
-
-      it('should reject after max verification attempts', async () => {
-        mockStorage.getActiveOtpVerification.mockResolvedValue({
-          id: 'otp-123',
-          phone: '9876543210',
-          countryCode: '+91',
-          otpCodeHash: 'hash',
-          purpose: 'registration',
-          verified: false,
-          attempts: 3,
-          maxAttempts: 3,
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-        });
-
-        const result = await OTPService.verifyOTP('9876543210', '+91', '123456', 'registration');
-
-        expect(result.success).toBe(false);
-        expect(result.message).toContain('Maximum');
-        expect(mockStorage.markOtpAsExpired).toHaveBeenCalled();
-      });
-
-      it('should increment attempts on wrong OTP', async () => {
-        // Use a valid 64-character hex hash that won't match the provided OTP
-        const validWrongHash = 'a'.repeat(64);
-        
-        mockStorage.getActiveOtpVerification.mockResolvedValue({
-          id: 'otp-123',
-          phone: '9876543210',
-          countryCode: '+91',
-          otpCodeHash: validWrongHash,
-          purpose: 'registration',
-          verified: false,
-          attempts: 0,
-          maxAttempts: 3,
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-        });
-
-        const result = await OTPService.verifyOTP('9876543210', '+91', '999999', 'registration');
-
-        expect(result.success).toBe(false);
-        expect(mockStorage.incrementOtpAttempts).toHaveBeenCalledWith('otp-123');
-      });
-
-      it('should reject when no active OTP found', async () => {
-        mockStorage.getActiveOtpVerification.mockResolvedValue(null);
-
-        const result = await OTPService.verifyOTP('9876543210', '+91', '123456', 'registration');
-
-        expect(result.success).toBe(false);
-        expect(result.message).toContain('No active');
-      });
-    });
-  });
 
   describe('Error Categorization - Real Function Tests', () => {
     it('should categorize authentication errors', () => {

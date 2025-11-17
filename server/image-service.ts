@@ -109,12 +109,8 @@ export const createMulterConfig = (destinationPath: string) => {
 };
 
 export class ImageService {
-  /**
-   * Process image with WebP conversion for optimal web delivery
-   * Generates both WebP (primary) and JPEG (fallback) versions
-   * Supports multiple input formats including GIF, SVG, BMP, TIFF, ICO, AVIF
-   * Preserves animated GIFs and ICO multi-resolution icons
-   */
+  
+
   static async processImage(
     inputPath: string, 
     outputPath: string, 
@@ -175,10 +171,8 @@ export class ImageService {
     return { jpeg: jpegPath, webp: webpPath };
   }
 
-  /**
-   * Create thumbnail with WebP support
-   * Returns paths to both WebP and JPEG versions
-   */
+  
+
   static async createThumbnail(
     inputPath: string, 
     thumbnailPath: string
@@ -186,10 +180,8 @@ export class ImageService {
     return await this.processImage(inputPath, thumbnailPath, IMAGE_CONFIG.thumbnail);
   }
 
-  /**
-   * Process profile image with WebP conversion
-   * Returns paths to both WebP and JPEG versions
-   */
+  
+
   static async processProfileImage(
     inputPath: string, 
     outputPath: string
@@ -197,10 +189,8 @@ export class ImageService {
     return await this.processImage(inputPath, outputPath, IMAGE_CONFIG.profile);
   }
 
-  /**
-   * Process car image with WebP conversion
-   * Returns paths to both WebP and JPEG versions
-   */
+  
+
   static async processCarImage(
     inputPath: string, 
     outputPath: string
@@ -377,10 +367,8 @@ export class ImageService {
     }
   }
 
-  /**
-   * Generate image URLs for both WebP and JPEG versions
-   * Returns object with both URLs for <picture> element usage
-   */
+  
+
   static generateImageUrls(filename: string, type: 'profiles' | 'cars' | 'thumbs' = 'profiles'): { webp: string; jpeg: string; fallback: string } {
     const baseFilename = filename.replace(/\.(jpg|jpeg|png|webp)$/i, '');
     return {
@@ -476,10 +464,8 @@ export class ImageService {
     return { isValid: true };
   }
 
-  /**
-   * Legacy validation method - now uses comprehensive FileValidator
-   * @deprecated Use validateUploadedFile instead for better security
-   */
+  
+
   static async validateImage(filePath: string): Promise<boolean> {
     try {
       const ext = path.extname(filePath).toLowerCase();

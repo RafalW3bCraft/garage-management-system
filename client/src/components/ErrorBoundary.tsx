@@ -4,53 +4,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { logError } from "@/lib/error-utils";
 
-/**
- * Props for ErrorBoundary component
- */
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: (error: Error, reset: () => void) => ReactNode;
   onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
 }
 
-/**
- * State for ErrorBoundary component
- */
 interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
 }
 
-/**
- * React Error Boundary component to catch and handle unexpected errors
- * in the component tree. Displays a user-friendly fallback UI and provides
- * retry mechanism.
- * 
- * @class ErrorBoundary
- * @extends {Component<ErrorBoundaryProps, ErrorBoundaryState>}
- * 
- * @example
- * ```tsx
- * <ErrorBoundary>
- *   <App />
- * </ErrorBoundary>
- * ```
- * 
- * @example
- * ```tsx
- * <ErrorBoundary
- *   fallback={(error, reset) => (
- *     <CustomErrorUI error={error} onReset={reset} />
- *   )}
- *   onError={(error, errorInfo) => {
- *
- *     trackError(error, errorInfo);
- *   }}
- * >
- *   <App />
- * </ErrorBoundary>
- * ```
- */
 class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
@@ -60,12 +24,8 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
     };
   }
 
-  /**
-   * Static method to update state when an error is caught
-   * 
-   * @param {Error} error - The error that was thrown
-   * @returns {ErrorBoundaryState} New state with error information
-   */
+  
+
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return {
       hasError: true,
@@ -73,13 +33,8 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
     };
   }
 
-  /**
-   * Lifecycle method called when an error is caught
-   * Logs error details and calls optional onError callback
-   * 
-   * @param {Error} error - The error that was thrown
-   * @param {React.ErrorInfo} errorInfo - React error information with component stack
-   */
+  
+
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
 
     logError(error, "ErrorBoundary - React Component Error");
@@ -91,9 +46,8 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
     }
   }
 
-  /**
-   * Reset error boundary state and retry rendering
-   */
+  
+
   resetError = (): void => {
     this.setState({
       hasError: false,
@@ -101,12 +55,8 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
     });
   };
 
-  /**
-   * Default fallback UI for error state
-   * 
-   * @param {Error} error - The error that was caught
-   * @returns {ReactNode} Fallback UI component
-   */
+  
+
   renderDefaultFallback(error: Error): ReactNode {
     return (
       <div className="min-h-screen flex items-center justify-center p-4 bg-background">

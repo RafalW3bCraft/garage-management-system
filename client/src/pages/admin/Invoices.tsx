@@ -11,9 +11,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ArrowLeft, Plus, Trash2, Send, Eye, FileText } from "lucide-react";
+import { Loader2, ArrowLeft, Plus, Trash2, Send, Eye, FileText, Edit2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Textarea } from "@/components/ui/textarea";
 
 interface InvoiceItem {
@@ -32,7 +33,11 @@ interface Invoice {
   customerName: string;
   customerEmail?: string;
   customerPhone?: string;
+  customerAddress?: string;
+  customerCity?: string;
   customerState: string;
+  customerZipCode?: string;
+  customerGSTIN?: string;
   subtotal: string;
   cgstAmount: string;
   sgstAmount: string;
@@ -40,6 +45,10 @@ interface Invoice {
   totalAmount: string;
   status: string;
   invoiceDate: string;
+  businessState?: string;
+  businessGSTIN?: string;
+  notes?: string;
+  termsAndConditions?: string;
   items: InvoiceItem[];
 }
 
@@ -49,6 +58,7 @@ export default function AdminInvoices() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("list");
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
+  const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [invoiceData, setInvoiceData] = useState({
     customerName: "",
     customerEmail: "",
@@ -250,6 +260,68 @@ export default function AdminInvoices() {
     },
   });
 
+  const deleteInvoiceMutation = useMutation({
+    mutationFn: async (invoiceId: string) => {
+      return apiRequestJson("DELETE", `/api/admin/invoices/${invoiceId}`, {});
+    },
+    onSuccess: () => {
+      toast({
+        title: "Invoice Deleted",
+        description: "Invoice has been deleted successfully.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/invoices"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to Delete Invoice",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateInvoiceStatusMutation = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      return apiRequestJson("PATCH", `/api/admin/invoices/${id}`, { status });
+    },
+    onSuccess: () => {
+      toast({
+        title: "Invoice Updated",
+        description: "Invoice status has been updated successfully.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/invoices"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to Update Invoice",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const updateFullInvoiceMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      return apiRequestJson("PUT", `/api/admin/invoices/${id}`, data);
+    },
+    onSuccess: () => {
+      toast({
+        title: "Invoice Updated",
+        description: "Invoice has been updated successfully.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/invoices"] });
+      setActiveTab("list");
+      resetForm();
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to Update Invoice",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
   const resetForm = () => {
     setInvoiceData({
       customerName: "",
@@ -275,9 +347,34 @@ export default function AdminInvoices() {
       displayOrder: 1
     }]);
     setSelectedTransaction(null);
+    setEditingInvoice(null);
   };
 
-  const handleCreateInvoice = () => {
+  const handleEditInvoice = (invoice: Invoice) => {
+    setEditingInvoice(invoice);
+    setInvoiceData({
+      customerName: invoice.customerName,
+      customerEmail: invoice.customerEmail || "",
+      customerPhone: invoice.customerPhone || "",
+      customerAddress: invoice.customerAddress || "",
+      customerCity: invoice.customerCity || "",
+      customerState: invoice.customerState,
+      customerZipCode: invoice.customerZipCode || "",
+      customerGSTIN: invoice.customerGSTIN || "",
+      businessState: invoice.businessState || "Gujarat",
+      businessGSTIN: invoice.businessGSTIN || "",
+      notes: invoice.notes || "",
+      termsAndConditions: invoice.termsAndConditions || "Payment due within 30 days"
+    });
+    setItems(invoice.items);
+    setActiveTab("create");
+  };
+
+  const handleUpdateStatus = (invoiceId: string, newStatus: string) => {
+    updateInvoiceStatusMutation.mutate({ id: invoiceId, status: newStatus });
+  };
+
+  const handleSubmitInvoice = () => {
     const totals = calculateTotals();
     
     const invoice = {
@@ -288,10 +385,14 @@ export default function AdminInvoices() {
       igstAmount: totals.igst,
       totalAmount: totals.total,
       businessName: "Ronak Motor Garage",
-      status: "unpaid"
+      status: editingInvoice ? editingInvoice.status : "unpaid"
     };
 
-    createInvoiceMutation.mutate({ invoice, items });
+    if (editingInvoice) {
+      updateFullInvoiceMutation.mutate({ id: editingInvoice.id, data: { invoice, items } });
+    } else {
+      createInvoiceMutation.mutate({ invoice, items });
+    }
   };
 
   const totals = calculateTotals();
@@ -324,7 +425,16 @@ export default function AdminInvoices() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="mb-6">
           <TabsTrigger value="list">Invoices</TabsTrigger>
-          <TabsTrigger value="create">Create Invoice</TabsTrigger>
+          <TabsTrigger value="create">
+            {editingInvoice ? (
+              <span className="flex items-center gap-2">
+                <Edit2 className="h-4 w-4" />
+                Edit Invoice
+              </span>
+            ) : (
+              "Create Invoice"
+            )}
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="list">
@@ -377,13 +487,31 @@ export default function AdminInvoices() {
                           <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
                             <DialogHeader>
                               <DialogTitle>Invoice {invoice.invoiceNumber}</DialogTitle>
-                              <DialogDescription>Preview of the invoice</DialogDescription>
+                              <DialogDescription>Preview and manage invoice</DialogDescription>
                             </DialogHeader>
                             <div className="border rounded-lg p-6">
-                              <div className="mb-4">
-                                <h3 className="font-semibold">Bill To:</h3>
-                                <p>{invoice.customerName}</p>
-                                {invoice.customerEmail && <p className="text-sm text-muted-foreground">{invoice.customerEmail}</p>}
+                              <div className="mb-4 flex justify-between items-start">
+                                <div>
+                                  <h3 className="font-semibold">Bill To:</h3>
+                                  <p>{invoice.customerName}</p>
+                                  {invoice.customerEmail && <p className="text-sm text-muted-foreground">{invoice.customerEmail}</p>}
+                                </div>
+                                <div className="space-y-2">
+                                  <Label htmlFor={`status-${invoice.id}`}>Status</Label>
+                                  <Select 
+                                    value={invoice.status} 
+                                    onValueChange={(value) => handleUpdateStatus(invoice.id, value)}
+                                  >
+                                    <SelectTrigger id={`status-${invoice.id}`} className="w-32">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="unpaid">Unpaid</SelectItem>
+                                      <SelectItem value="paid">Paid</SelectItem>
+                                      <SelectItem value="cancelled">Cancelled</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
                               </div>
                               <div className="border-t pt-4">
                                 <h3 className="font-semibold mb-2">Items:</h3>
@@ -418,6 +546,14 @@ export default function AdminInvoices() {
                             </div>
                           </DialogContent>
                         </Dialog>
+                        <Button 
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleEditInvoice(invoice)}
+                        >
+                          <Edit2 className="mr-2 h-4 w-4" />
+                          Edit
+                        </Button>
                         {invoice.customerEmail && (
                           <Button 
                             size="sm"
@@ -432,6 +568,33 @@ export default function AdminInvoices() {
                             Send
                           </Button>
                         )}
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button 
+                              variant="destructive"
+                              size="sm"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete Invoice</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                Are you sure you want to delete invoice {invoice.invoiceNumber}? This action cannot be undone.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => deleteInvoiceMutation.mutate(invoice.id)}
+                                className="bg-destructive hover:bg-destructive/90"
+                              >
+                                Delete
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
                       </div>
                     </div>
                   </CardContent>
@@ -451,7 +614,7 @@ export default function AdminInvoices() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    {eligibleTransactions.appointments?.map((apt: any) => (
+                    {!editingInvoice && eligibleTransactions.appointments?.map((apt: any) => (
                       <Button
                         key={apt.id}
                         variant="outline"
@@ -462,7 +625,7 @@ export default function AdminInvoices() {
                         {apt.serviceName} - {apt.customerName} - ₹{apt.servicePrice}
                       </Button>
                     ))}
-                    {eligibleTransactions.bids?.map((bid: any) => (
+                    {!editingInvoice && eligibleTransactions.bids?.map((bid: any) => (
                       <Button
                         key={bid.id}
                         variant="outline"
@@ -642,19 +805,21 @@ export default function AdminInvoices() {
 
             <div className="flex gap-4">
               <Button onClick={resetForm} variant="outline" className="flex-1">
-                Reset
+                {editingInvoice ? "Cancel Edit" : "Reset"}
               </Button>
               <Button 
-                onClick={handleCreateInvoice} 
+                onClick={handleSubmitInvoice} 
                 className="flex-1"
-                disabled={createInvoiceMutation.isPending || !invoiceData.customerName}
+                disabled={createInvoiceMutation.isPending || updateFullInvoiceMutation.isPending || !invoiceData.customerName}
               >
-                {createInvoiceMutation.isPending ? (
+                {(createInvoiceMutation.isPending || updateFullInvoiceMutation.isPending) ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : editingInvoice ? (
+                  <Edit2 className="mr-2 h-4 w-4" />
                 ) : (
                   <Plus className="mr-2 h-4 w-4" />
                 )}
-                Create Invoice
+                {editingInvoice ? "Update Invoice" : "Create Invoice"}
               </Button>
             </div>
           </div>

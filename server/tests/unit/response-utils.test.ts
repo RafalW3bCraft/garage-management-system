@@ -542,7 +542,8 @@ describe('Response Utils - Unit Tests', () => {
       expect(mockStatus).toHaveBeenCalledWith(400);
       expect(mockJson).toHaveBeenCalledWith({
         success: false,
-        message: 'Invalid reference in appointment booking. Referenced data does not exist.',
+        message: 'Invalid reference in appointment booking.',
+        errors: ['Referenced data does not exist.'],
         code: 'VALIDATION_ERROR',
       });
     });

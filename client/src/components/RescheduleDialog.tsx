@@ -31,9 +31,6 @@ import { CalendarIcon, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Location } from "@shared/schema";
 
-/**
- * Zod schema for reschedule form validation with future date validation
- */
 const rescheduleSchema = z.object({
   dateTime: z.date({ required_error: "Please select a new date and time" })
     .refine((date) => date > new Date(), {
@@ -47,9 +44,6 @@ const rescheduleSchema = z.object({
 
 type RescheduleData = z.infer<typeof rescheduleSchema>;
 
-/**
- * Props for the RescheduleDialog component
- */
 interface RescheduleDialogProps {
   children: React.ReactNode;
   appointmentId: string;
@@ -57,28 +51,6 @@ interface RescheduleDialogProps {
   currentLocationId: string;
 }
 
-/**
- * Appointment rescheduling dialog for changing appointment date, time, and location.
- * Allows users to select a new date, time slot, and service location for existing appointments.
- * 
- * @param {RescheduleDialogProps} props - Component props
- * @param {React.ReactNode} props.children - Trigger element for opening the dialog
- * @param {string} props.appointmentId - ID of the appointment to reschedule
- * @param {string} props.currentDateTime - Current appointment date and time
- * @param {string} props.currentLocationId - Current location ID
- * @returns {JSX.Element} The rendered reschedule dialog
- * 
- * @example
- * ```tsx
- * <RescheduleDialog
- *   appointmentId="apt-123"
- *   currentDateTime="2024-03-15 10:00"
- *   currentLocationId="loc-1"
- * >
- *   <Button>Reschedule</Button>
- * </RescheduleDialog>
- * ```
- */
 export function RescheduleDialog({ 
   children, 
   appointmentId, 
@@ -166,7 +138,6 @@ export function RescheduleDialog({
         <div className="max-h-[60vh] overflow-y-auto">
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            {/* Date Selection */}
             <FormField
               control={form.control}
               name="dateTime"
@@ -216,7 +187,6 @@ export function RescheduleDialog({
               )}
             />
 
-            {/* Time Slot */}
             <FormField
               control={form.control}
               name="timeSlot"
@@ -250,7 +220,6 @@ export function RescheduleDialog({
               )}
             />
 
-            {/* Location */}
             <FormField
               control={form.control}
               name="locationId"

@@ -3,6 +3,8 @@ import { createServer, type Server } from "http";
 import session from "express-session";
 import express from "express";
 import { getStorage, type CarFilterOptions } from "./storage";
+import { getDb } from "./db";
+import { eq, and, or, sql, desc, asc, gte, lte, lt, gt, isNotNull, isNull } from "drizzle-orm";
 import {
   authLimiter,
   strictAuthLimiter,
@@ -27,6 +29,7 @@ import {
   insertLocationSchema,
   insertInvoiceSchema,
   insertInvoiceItemSchema,
+  updateInvoiceSchema,
   registerSchema,
   serverRegisterSchema,
   loginSchema,
@@ -44,7 +47,12 @@ import {
   whatsappStatusUpdateSchema,
   whatsappBidNotificationSchema,
   whatsappWebhookSchema,
-  type User
+  type User,
+  appointments,
+  customers,
+  services,
+  cars,
+  locations
 } from "@shared/schema";
 import { fromZodError } from "zod-validation-error";
 import { hashPassword, verifyPassword, passport } from "./auth";
@@ -72,6 +80,7 @@ import {
   createSuccessResponse,
   createErrorResponse
 } from "./response-utils";
+import { isAdminOrStaff } from "./rbac-middleware";
 import path from "path";
 import crypto from 'crypto';
 import memoizee from 'memoizee';
@@ -1449,6 +1458,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       updateData.registrationNumbers = updateData.registrationNumbers.map(value => sanitizeString(value));
     }
     
+    if (updateData.profileImage) {
+      updateData.profileImage = sanitizeUrl(updateData.profileImage);
+    }
+    
     const storage = await getStorage();
 
     if (updateData.dateOfBirth) {
@@ -1485,6 +1498,72 @@ export async function registerRoutes(app: Express): Promise<Server> {
     sendResourceUpdated(res, { 
       preferredNotificationChannel: userResponse.preferredNotificationChannel 
     }, "Notification preferences updated successfully");
+  }));
+
+  app.get("/api/my-cars", requireAuth, asyncRoute("get user's cars", async (req: Request, res: Response) => {
+    const storage = await getStorage();
+    const offset = parseInt(req.query.offset as string) || 0;
+    const limit = parseInt(req.query.limit as string) || 50;
+    
+    const cars = await storage.getCarsByUser(req.user!.id, offset, limit);
+    sendSuccess(res, { cars });
+  }));
+
+  app.post("/api/my-cars", requireAuth, asyncRoute("create user car", async (req: Request, res: Response) => {
+    const validationResult = insertCarSchema.safeParse(req.body);
+    
+    if (!validationResult.success) {
+      return sendValidationError(res, "Validation failed", [fromZodError(validationResult.error).toString()]);
+    }
+
+    const storage = await getStorage();
+    const carData = {
+      ...validationResult.data,
+      userId: req.user!.id,
+      createdByAdminId: null
+    };
+
+    const car = await storage.createCar(carData);
+    sendResourceCreated(res, { car }, "Car created successfully");
+  }));
+
+  app.patch("/api/my-cars/:id", requireAuth, asyncRoute("update user car", async (req: Request, res: Response) => {
+    const storage = await getStorage();
+    const car = await storage.getCar(req.params.id);
+
+    if (!car) {
+      return sendNotFoundError(res, "Car not found");
+    }
+
+    if (car.userId !== req.user!.id && req.user!.role !== 'admin' && req.user!.role !== 'staff') {
+      return sendForbiddenError(res, "You don't have permission to update this car");
+    }
+
+    const updates: Partial<typeof req.body> = { ...req.body };
+    delete updates.userId;
+    delete updates.createdByAdminId;
+    delete updates.isAuction;
+    delete updates.currentBid;
+    delete updates.auctionEndTime;
+
+    const updatedCar = await storage.updateCar(req.params.id, updates);
+    sendResourceUpdated(res, { car: updatedCar }, "Car updated successfully");
+  }));
+
+  app.delete("/api/my-cars/:id", requireAuth, asyncRoute("delete user car", async (req: Request, res: Response) => {
+    const storage = await getStorage();
+    const car = await storage.getCar(req.params.id);
+
+    if (!car) {
+      return sendNotFoundError(res, "Car not found");
+    }
+
+    if (car.userId !== req.user!.id && req.user!.role !== 'admin' && req.user!.role !== 'staff') {
+      return sendForbiddenError(res, "You don't have permission to delete this car");
+    }
+
+    await storage.deleteCar(req.params.id);
+    sendResourceDeleted(res, "Car deleted successfully");
   }));
 
   app.post("/api/whatsapp/send-confirmation", whatsappLimiter, requireAuth, asyncRoute("send WhatsApp confirmation", async (req: Request, res: Response) => {
@@ -1806,9 +1885,172 @@ export async function registerRoutes(app: Express): Promise<Server> {
     };
   };
 
+  const createEnhancedStaffMiddleware = (options: {
+    action: string;
+    resource: string;
+    validateInput?: AdminValidationFunction;
+    rateLimit?: number;
+    adminOnly?: boolean; 
+  }) => {
+    return async (req: Request, res: Response, next: NextFunction) => {
+      const { action, resource, validateInput, rateLimit = ADMIN_RATE_LIMIT, adminOnly = false } = options;
+
+      if (!req.user) {
+        return res.status(401).json({ 
+          message: "Authentication required",
+          code: "AUTH_REQUIRED" 
+        });
+      }
+
+      
+      const allowedRoles = adminOnly ? ['admin'] : ['admin', 'staff'];
+      if (!allowedRoles.includes(req.user.role)) {
+        return res.status(403).json({ 
+          message: adminOnly ? "Admin access required" : "Admin or staff access required",
+          code: "INSUFFICIENT_PRIVILEGES" 
+        });
+      }
+
+      try {
+        const storage = await getStorage();
+        const dbUser = await storage.getUser(req.user.id);
+        
+        if (!dbUser) {
+          console.warn(`[SECURITY] User ${req.user.id} not found in database during request`);
+          return res.status(401).json({ 
+            message: "User account not found. Please login again.",
+            code: "USER_NOT_FOUND" 
+          });
+        }
+        
+        
+        if (adminOnly && dbUser.role !== "admin") {
+          console.warn(`[SECURITY] User ${req.user.id} role changed, admin required but got ${dbUser.role}`);
+          return res.status(403).json({ 
+            message: "Admin privileges required",
+            code: "PRIVILEGES_REVOKED" 
+          });
+        }
+        
+        if (!adminOnly && !['admin', 'staff'].includes(dbUser.role)) {
+          console.warn(`[SECURITY] User ${req.user.id} role changed to ${dbUser.role}`);
+          return res.status(403).json({ 
+            message: "Staff or admin privileges have been revoked",
+            code: "PRIVILEGES_REVOKED" 
+          });
+        }
+        
+        req.user = dbUser;
+      } catch (error) {
+        console.error('[SECURITY] Database verification error:', error);
+        return res.status(500).json({ 
+          message: "Security verification failed",
+          code: "VERIFICATION_ERROR" 
+        });
+      }
+
+      if (req.session) {
+        const now = Date.now();
+        const sessionAge = req.session.createdAt ? now - req.session.createdAt : 0;
+        const MAX_STAFF_SESSION_AGE = 8 * 60 * 60 * 1000; 
+        
+        if (!req.session.createdAt) {
+          return res.status(401).json({ 
+            message: "Invalid session. Please login again.",
+            code: "INVALID_SESSION" 
+          });
+        }
+        
+        if (sessionAge > MAX_STAFF_SESSION_AGE) {
+          return res.status(401).json({ 
+            message: "Session expired. Please login again.",
+            code: "SESSION_EXPIRED" 
+          });
+        }
+
+        const isReplit = !!(process.env.REPL_SLUG || process.env.REPL_OWNER || process.env.REPLIT_DB_URL);
+        const currentDeviceFingerprint = generateDeviceFingerprint(req);
+        
+        if (!isReplit && req.session.deviceFingerprint && req.session.deviceFingerprint !== currentDeviceFingerprint) {
+          console.error(`[SECURITY] Device fingerprint mismatch for user ${req.user.id}`);
+          return res.status(401).json({ 
+            message: "Session security violation detected. Please login again.",
+            code: "DEVICE_MISMATCH" 
+          });
+        }
+        
+        const currentIP = req.ip || req.connection.remoteAddress;
+        
+        if (!isReplit && req.session.lastIP && req.session.lastIP !== currentIP) {
+          console.warn(`[SECURITY] Session IP change detected: ${req.session.lastIP} -> ${currentIP} for user ${req.user.id}`);
+        }
+        
+        req.session.lastIP = currentIP;
+        req.session.lastActivity = Date.now();
+      }
+
+      const userId = req.user.id;
+      
+      try {
+        const storage = await getStorage();
+        const rateResult = await storage.checkAndIncrementRateLimit(userId, RATE_LIMIT_WINDOW);
+        
+        if (rateResult.withinWindow && rateResult.count > rateLimit) {
+          const now = Date.now();
+          return res.status(429).json({ 
+            message: "Rate limit exceeded. Please try again later.",
+            code: "RATE_LIMIT_EXCEEDED",
+            retryAfter: Math.ceil((rateResult.resetTime - now) / 1000)
+          });
+        }
+      } catch (error) {
+        console.error('[RATE_LIMIT] Storage error, allowing request:', error);
+      }
+
+      if (validateInput) {
+        const validationError = validateInput(req);
+        if (validationError) {
+          return res.status(400).json({ 
+            message: validationError,
+            code: "VALIDATION_ERROR" 
+          });
+        }
+      }
+
+      req.adminContext = {
+        action,
+        resource,
+        adminUserId: userId,
+        ipAddress: req.ip || req.connection.remoteAddress || null,
+        userAgent: req.get('User-Agent') || null,
+        timestamp: new Date()
+      };
+
+      next();
+    };
+  };
+
+  
   const requireAdmin = createEnhancedAdminMiddleware({
     action: "access",
     resource: "admin_area"
+  });
+  
+  
+
+  
+  
+  const requireAdminAccess = createEnhancedStaffMiddleware({
+    action: "access",
+    resource: "admin_area",
+    adminOnly: true
+  });
+  
+  
+  const requireAdminOrStaffAccess = createEnhancedStaffMiddleware({
+    action: "access",
+    resource: "admin_area",
+    adminOnly: false
   });
 
   function captureEntitySnapshot(entity: any): Record<string, any> {
@@ -2278,13 +2520,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })
   );
 
-  app.get("/api/admin/stats", requireAdmin, asyncRoute("get admin dashboard statistics", async (req: Request, res: Response) => {
+  
+  app.get("/api/admin/stats", requireAdminOrStaffAccess, asyncRoute("get admin dashboard statistics", async (req: Request, res: Response) => {
     const startTime = Date.now();
     
     try {
       const storage = await getStorage();
       
-      // Parallelize all storage calls for optimal performance
+      
       const [
         appointments,
         userCount,
@@ -2408,6 +2651,137 @@ export async function registerRoutes(app: Express): Promise<Server> {
           failedSources: ['appointments', 'users', 'services', 'locations', 'cars'],
           successRate: 0
         }
+      });
+    }
+  }));
+
+  
+  app.get("/api/admin/service-renewals", requireAdmin, asyncRoute("get service renewals", async (req: Request, res: Response) => {
+    try {
+      const storage = await getStorage();
+      const db = await getDb();
+      
+      const now = new Date();
+      const thirtyDaysFromNow = new Date(now);
+      thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+      
+      
+      const upcomingRenewalsRaw = await db.select({
+        id: appointments.id,
+        customerName: customers.name,
+        customerEmail: customers.email,
+        customerPhone: customers.phone,
+        serviceName: services.title,
+        servicePrice: services.price,
+        expiresAt: appointments.expiresAt,
+        lastRenewalDate: appointments.lastRenewalDate,
+        completedAt: appointments.completedAt,
+        carDetails: appointments.carDetails
+      })
+        .from(appointments)
+        .innerJoin(customers, eq(appointments.customerId, customers.id))
+        .innerJoin(services, eq(appointments.serviceId, services.id))
+        .where(
+          and(
+            eq(appointments.status, 'completed'),
+            isNotNull(appointments.expiresAt),
+            gte(appointments.expiresAt, now),
+            lte(appointments.expiresAt, thirtyDaysFromNow)
+          )
+        )
+        .orderBy(asc(appointments.expiresAt))
+        .limit(50);
+      
+      
+      const expiredPromotionsRaw = await db.select({
+        id: appointments.id,
+        customerName: customers.name,
+        customerEmail: customers.email,
+        customerPhone: customers.phone,
+        serviceName: services.title,
+        servicePrice: services.price,
+        expiresAt: appointments.expiresAt,
+        lastRenewalDate: appointments.lastRenewalDate,
+        completedAt: appointments.completedAt,
+        carDetails: appointments.carDetails
+      })
+        .from(appointments)
+        .innerJoin(customers, eq(appointments.customerId, customers.id))
+        .innerJoin(services, eq(appointments.serviceId, services.id))
+        .where(
+          and(
+            eq(appointments.status, 'completed'),
+            isNotNull(appointments.expiresAt),
+            lt(appointments.expiresAt, now)
+          )
+        )
+        .orderBy(desc(appointments.expiresAt))
+        .limit(50);
+      
+      
+      const ninetyDaysAgo = new Date(now);
+      ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+      
+      const completionHistoryRaw = await db.select({
+        id: appointments.id,
+        customerName: customers.name,
+        customerEmail: customers.email,
+        serviceName: services.title,
+        servicePrice: services.price,
+        completedAt: appointments.completedAt,
+        expiresAt: appointments.expiresAt,
+        lastRenewalDate: appointments.lastRenewalDate,
+        carDetails: appointments.carDetails
+      })
+        .from(appointments)
+        .innerJoin(customers, eq(appointments.customerId, customers.id))
+        .innerJoin(services, eq(appointments.serviceId, services.id))
+        .where(
+          and(
+            eq(appointments.status, 'completed'),
+            isNotNull(appointments.completedAt),
+            gte(appointments.completedAt, ninetyDaysAgo)
+          )
+        )
+        .orderBy(desc(appointments.completedAt))
+        .limit(100);
+      
+      
+      const renewalStats = await db.select({
+        totalCompleted: sql<number>`COUNT(*)`.mapWith(Number),
+        withRenewalTracking: sql<number>`COUNT(CASE WHEN ${appointments.expiresAt} IS NOT NULL THEN 1 END)`.mapWith(Number),
+        renewed: sql<number>`COUNT(CASE WHEN ${appointments.lastRenewalDate} IS NOT NULL THEN 1 END)`.mapWith(Number)
+      })
+        .from(appointments)
+        .where(
+          and(
+            eq(appointments.status, 'completed'),
+            gte(appointments.completedAt, ninetyDaysAgo)
+          )
+        );
+      
+      const stats = renewalStats[0] || { totalCompleted: 0, withRenewalTracking: 0, renewed: 0 };
+      const renewalConversionRate = stats.withRenewalTracking > 0 
+        ? ((stats.renewed / stats.withRenewalTracking) * 100).toFixed(2)
+        : '0.00';
+      
+      res.json({
+        upcomingRenewals: upcomingRenewalsRaw,
+        expiredPromotions: expiredPromotionsRaw,
+        completionHistory: completionHistoryRaw,
+        statistics: {
+          totalCompletedLast90Days: stats.totalCompleted,
+          withRenewalTracking: stats.withRenewalTracking,
+          renewalConversionRate: renewalConversionRate,
+          upcomingRenewalsCount: upcomingRenewalsRaw.length,
+          expiredPromotionsCount: expiredPromotionsRaw.length
+        }
+      });
+    } catch (error) {
+      console.error('[SERVICE_RENEWALS] Error fetching renewal data:', error);
+      res.status(500).json({ 
+        message: "Failed to retrieve service renewal data",
+        error: error instanceof Error ? error.message : "Unknown error"
       });
     }
   }));
@@ -2588,6 +2962,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const storage = await getStorage();
     const services = await storage.getAllServices();
     const duration = Date.now() - startTime;
+    
+    
+    res.set('Cache-Control', 'public, max-age=300, s-maxage=600'); 
     
     console.log(`[PERF] GET /api/services completed in ${duration}ms`);
     res.json(services);
@@ -3297,6 +3674,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         notes: validatedData.notes ? sanitizeMessage(validatedData.notes) : undefined
       };
 
+      
+      const service = await storage.getService(sanitizedAppointment.serviceId);
+      if (!service) {
+        return sendValidationError(res, "Invalid service selected", [
+          `Service with ID '${sanitizedAppointment.serviceId}' does not exist. Please select a valid service.`
+        ]);
+      }
+
+      
+      const location = await storage.getLocation(sanitizedAppointment.locationId);
+      if (!location) {
+        return sendValidationError(res, "Invalid location selected", [
+          `Location with ID '${sanitizedAppointment.locationId}' does not exist. Please select a valid location.`
+        ]);
+      }
+
       let customer = await storage.getCustomerByUserId(user.id);
       if (!customer) {
 
@@ -3320,12 +3713,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const appointment = await storage.createAppointment(appointmentWithCustomer);
 
       try {
-        // Parallelize fetching customer, service, and location data
-        const [customer, service, location] = await Promise.all([
-          storage.getCustomer(appointment.customerId),
-          storage.getService(appointment.serviceId),
-          storage.getLocation(appointment.locationId)
-        ]);
+        
         
         if (customer && service && location) {
           const appointmentData = {
@@ -3722,7 +4110,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         bodyType: validatedData.bodyType ? sanitizeString(validatedData.bodyType) : undefined,
         color: validatedData.color ? sanitizeString(validatedData.color) : undefined,
         engineSize: validatedData.engineSize ? sanitizeString(validatedData.engineSize) : undefined,
-        features: validatedData.features ? sanitizeMessage(validatedData.features) : undefined,
+        features: validatedData.features ? validatedData.features.map(f => sanitizeString(f)) : undefined,
         fuelType: sanitizeString(validatedData.fuelType)
       };
       
@@ -3746,7 +4134,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/api/cars/:id/images", requireAdmin, asyncRoute("upload car image", async (req: Request, res: Response) => {
+  app.post("/api/cars/:id/images", requireAdmin, asyncRoute("add car images", async (req: Request, res: Response) => {
     const { id } = req.params;
     const storage = await getStorage();
 
@@ -3755,16 +4143,107 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return sendNotFoundError(res, "Car not found");
     }
 
-    const validatedData = insertCarImageSchema.parse({
-      carId: id,
-      ...req.body
-    });
+    const images = Array.isArray(req.body) ? req.body : [req.body];
+    
+    const validatedImages = images.map((img, index) => 
+      insertCarImageSchema.parse({
+        carId: id,
+        imageUrl: img.imageUrl,
+        displayOrder: img.displayOrder ?? index,
+        isPrimary: img.isPrimary ?? false,
+      })
+    );
 
-    const carImage = await storage.createCarImage(validatedData);
+    const createdImages = [];
+    let primaryImageId: string | null = null;
+    
+    for (let i = 0; i < validatedImages.length; i++) {
+      const imgData = validatedImages[i];
+      const carImage = await storage.createCarImage(imgData);
+      createdImages.push(carImage);
+      
+      if (imgData.isPrimary && !primaryImageId) {
+        primaryImageId = carImage.id;
+      }
+    }
+
+    if (primaryImageId) {
+      await storage.setCarImagePrimary(id, primaryImageId);
+      const primaryImage = createdImages.find(img => img.id === primaryImageId);
+      if (primaryImage) {
+        await storage.updateCar(id, { image: primaryImage.imageUrl });
+      }
+    }
 
     cacheManager.invalidateCarCaches(id);
     
-    sendResourceCreated(res, carImage, "Car image uploaded successfully");
+    sendResourceCreated(res, createdImages, `${createdImages.length} car image(s) added successfully`);
+  }));
+
+  app.patch("/api/cars/:id/images/reorder", requireAdmin, asyncRoute("reorder car images", async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { images } = req.body;
+    const storage = await getStorage();
+
+    const car = await storage.getCar(id);
+    if (!car) {
+      return sendNotFoundError(res, "Car not found");
+    }
+
+    if (!Array.isArray(images)) {
+      return sendValidationError(res, "Invalid request", ["images must be an array"]);
+    }
+
+    const carImages = await storage.getCarImages(id);
+    const carImageIds = new Set(carImages.map(img => img.id));
+    
+    for (const img of images) {
+      if (!img.id || typeof img.displayOrder !== 'number') {
+        return sendValidationError(res, "Invalid request", ["Each image must have id and displayOrder"]);
+      }
+      
+      if (!carImageIds.has(img.id)) {
+        return sendValidationError(res, "Invalid request", [`Image ${img.id} does not belong to this car`]);
+      }
+      
+      await storage.updateCarImageOrder(img.id, img.displayOrder);
+    }
+
+    cacheManager.invalidateCarCaches(id);
+    
+    sendResourceUpdated(res, null, "Images reordered successfully");
+  }));
+
+  app.patch("/api/cars/:id/images/:imageId", requireAdmin, asyncRoute("update car image", async (req: Request, res: Response) => {
+    const { id, imageId } = req.params;
+    const { isPrimary } = req.body;
+    const storage = await getStorage();
+
+    const car = await storage.getCar(id);
+    if (!car) {
+      return sendNotFoundError(res, "Car not found");
+    }
+
+    const carImages = await storage.getCarImages(id);
+    const imageExists = carImages.some(img => img.id === imageId);
+    
+    if (!imageExists) {
+      return sendNotFoundError(res, "Image not found or does not belong to this car");
+    }
+
+    if (isPrimary === true) {
+      await storage.setCarImagePrimary(id, imageId);
+      
+      const updatedImages = await storage.getCarImages(id);
+      const primaryImage = updatedImages.find(img => img.id === imageId);
+      if (primaryImage) {
+        await storage.updateCar(id, { image: primaryImage.imageUrl });
+      }
+    }
+
+    cacheManager.invalidateCarCaches(id);
+    
+    sendResourceUpdated(res, null, "Image updated successfully");
   }));
 
   app.delete("/api/cars/images/:imageId", requireAdmin, asyncRoute("delete car image", async (req: Request, res: Response) => {
@@ -3891,7 +4370,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Admin bid management endpoints
+  
   app.get("/api/admin/bids", requireAdmin, async (req: Request, res: Response) => {
     try {
       const storage = await getStorage();
@@ -4668,7 +5147,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     if (validatedData.bodyType) sanitizedData.bodyType = sanitizeString(validatedData.bodyType);
     if (validatedData.color) sanitizedData.color = sanitizeString(validatedData.color);
     if (validatedData.engineSize) sanitizedData.engineSize = sanitizeString(validatedData.engineSize);
-    if (validatedData.features) sanitizedData.features = sanitizeMessage(validatedData.features);
+    if (validatedData.features) sanitizedData.features = validatedData.features.map(f => sanitizeString(f));
     if (validatedData.fuelType) sanitizedData.fuelType = sanitizeString(validatedData.fuelType);
     
     const updatedCar = await storage.updateCar(id, sanitizedData);
@@ -5530,7 +6009,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         console.error(`[ADMIN] WhatsApp send failed: ${result.message}`);
         
-        // Provide helpful error messages for common issues
+        
         let userMessage = result.message || "Failed to send promotional WhatsApp";
         let suggestions: string[] = [];
         
@@ -5763,7 +6242,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })
   );
 
-  // Invoice API Routes
+  
   app.get("/api/admin/invoices",
     requireAdmin,
     asyncRoute("get all invoices", async (req: Request, res: Response) => {
@@ -5877,9 +6356,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     })
   );
 
+  app.put("/api/admin/invoices/:id",
+    requireAdmin,
+    asyncRoute("update full invoice with items", async (req: Request, res: Response) => {
+      const { id } = req.params;
+      const storage = await getStorage();
+      
+      const existingInvoice = await storage.getInvoiceById(id);
+      if (!existingInvoice) {
+        return sendNotFoundError(res, "Invoice not found");
+      }
+
+      const invoiceInput = {
+        ...req.body.invoice
+      };
+      
+      const validationResult = updateInvoiceSchema.safeParse(invoiceInput);
+      
+      if (!validationResult.success) {
+        const errorMessage = fromZodError(validationResult.error).toString();
+        return sendValidationError(res, "Invalid invoice data", [errorMessage]);
+      }
+
+      const { items } = req.body;
+      if (items !== undefined && (!Array.isArray(items) || items.length === 0)) {
+        return sendValidationError(res, "Invoice must have at least one item", []);
+      }
+
+      const updatedInvoice = await storage.updateInvoice(id, validationResult.data, items);
+      
+      if (!updatedInvoice) {
+        return sendError(res, "Failed to update invoice", 500);
+      }
+
+      await logAdminAction(req, res, {
+        resourceId: id,
+        oldValue: { 
+          invoiceNumber: existingInvoice.invoiceNumber,
+          customerName: existingInvoice.customerName,
+          totalAmount: existingInvoice.totalAmount
+        },
+        newValue: { 
+          invoiceNumber: updatedInvoice.invoiceNumber,
+          customerName: updatedInvoice.customerName,
+          totalAmount: updatedInvoice.totalAmount
+        },
+        additionalInfo: `Updated full invoice ${updatedInvoice.invoiceNumber}`
+      });
+      
+      return sendResourceUpdated(res, updatedInvoice, "Invoice updated successfully");
+    })
+  );
+
   app.patch("/api/admin/invoices/:id",
     requireAdmin,
-    asyncRoute("update invoice", async (req: Request, res: Response) => {
+    asyncRoute("update invoice status", async (req: Request, res: Response) => {
       const { id } = req.params;
       const storage = await getStorage();
       

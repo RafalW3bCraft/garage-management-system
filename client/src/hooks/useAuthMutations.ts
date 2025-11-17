@@ -4,17 +4,11 @@ import { apiRequest } from "@/lib/queryClient";
 import type { AuthMode, AuthMethod, AuthContext } from "./useAuthFlow";
 import type { User } from "@shared/schema";
 
-/**
- * Login mutation data interface
- */
 interface LoginData {
   email: string;
   password: string;
 }
 
-/**
- * Registration mutation data interface
- */
 interface RegisterData {
   email: string;
   name: string;
@@ -22,18 +16,11 @@ interface RegisterData {
   confirmPassword: string;
 }
 
-
-/**
- * Authentication response interface
- */
 interface AuthResponse {
   message: string;
   user: User;
 }
 
-/**
- * Callbacks for mutation success/error handling
- */
 interface AuthMutationCallbacks {
   onSuccess?: () => void;
   onError?: (error: Error) => void;
@@ -41,31 +28,6 @@ interface AuthMutationCallbacks {
   onComplete?: () => void;
 }
 
-/**
- * Hook for centralized authentication mutations with automatic toast notifications.
- * Provides mutations for login, registration, and logout.
- * Handles query cache invalidation and success/error callbacks.
- * 
- * @param {AuthMutationCallbacks} [callbacks] - Optional callbacks for mutation lifecycle
- * @returns {object} Authentication mutations and methods
- * @property {object} loginMutation - Login mutation
- * @property {object} registerMutation - Registration mutation
- * @property {object} logoutMutation - Logout mutation
- * @property {(method: AuthMethod, data: object, context: AuthContext) => void} executeLogin - Execute login
- * @property {(method: AuthMethod, data: object, context: AuthContext) => void} executeRegister - Execute registration
- * @property {() => void} googleLogin - Initiate Google OAuth
- * @property {boolean} isLoading - Whether any mutation is loading
- * 
- * @example
- * ```tsx
- * const { executeLogin, isLoading } = useAuthMutations({
- *   onComplete: () => navigate("/dashboard"),
- *   onError: (error) => console.error(error)
- * });
- * 
- * executeLogin("email", { password: "******" }, { email: "user@example.com" });
- * ```
- */
 export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -142,7 +104,6 @@ export function useAuthMutations(callbacks?: AuthMutationCallbacks) {
       handleError(error, "Logout failed. Please try again.");
     },
   });
-
 
   const googleLogin = () => {
     window.location.href = "/api/auth/google";

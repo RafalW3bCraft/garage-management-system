@@ -11,18 +11,12 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { Car } from "@shared/schema";
 
-/**
- * Props for the BidDialog component
- */
 interface BidDialogProps {
   car: Car;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-/**
- * Zod schema for bid form validation with dynamic minimum bid validation
- */
 const createBidSchema = (minimumBid: number) => z.object({
   bidAmount: z.coerce
     .number({
@@ -37,26 +31,6 @@ const createBidSchema = (minimumBid: number) => z.object({
 
 type BidFormData = z.infer<ReturnType<typeof createBidSchema>>;
 
-/**
- * Auction bid placement dialog for submitting bids on auction cars.
- * Validates minimum bid amounts, displays current bid information, and handles bid submission.
- * Uses Zod schema validation with react-hook-form for comprehensive input validation.
- * 
- * @param {BidDialogProps} props - Component props
- * @param {Car} props.car - The auction car to bid on
- * @param {boolean} props.open - Dialog open state
- * @param {(open: boolean) => void} props.onOpenChange - Callback when dialog state changes
- * @returns {JSX.Element} The rendered bid dialog
- * 
- * @example
- * ```tsx
- * <BidDialog
- *   car={auctionCar}
- *   open={isOpen}
- *   onOpenChange={setIsOpen}
- * />
- * ```
- */
 export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -130,7 +104,6 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
         </DialogHeader>
         
         <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-          {/* Car Info */}
           <div className="bg-muted p-4 rounded-lg space-y-2">
             <div className="flex justify-between items-center">
               <span className="text-sm text-muted-foreground">Current Bid:</span>
@@ -164,7 +137,6 @@ export function BidDialog({ car, open, onOpenChange }: BidDialogProps) {
             )}
           </div>
 
-          {/* Bid Form */}
           {auctionEnded ? (
             <div className="text-center p-4 bg-destructive/10 rounded-lg">
               <p className="text-destructive font-medium" data-testid="text-auction-ended">

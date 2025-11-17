@@ -35,30 +35,10 @@ import { useAuthMutations } from "@/hooks/useAuthMutations";
 import { useAuthForm } from "@/hooks/useAuthForm";
 import { useAuth } from "@/hooks/use-auth";
 
-
-/**
- * Props for the AuthDialog component
- */
 interface AuthDialogProps {
   children: React.ReactNode;
 }
 
-/**
- * Comprehensive authentication dialog supporting multiple authentication methods.
- * Features email/password and Google OAuth authentication flows with
- * smart method selection, preference memory, and seamless multi-step registration.
- * 
- * @param {AuthDialogProps} props - Component props
- * @param {React.ReactNode} props.children - Trigger element for opening the dialog
- * @returns {JSX.Element} The rendered authentication dialog
- * 
- * @example
- * ```tsx
- * <AuthDialog>
- *   <Button>Login</Button>
- * </AuthDialog>
- * ```
- */
 export function AuthDialog({ children }: AuthDialogProps) {
   const [open, setOpen] = useState(false);
 
@@ -85,7 +65,6 @@ export function AuthDialog({ children }: AuthDialogProps) {
     preferences.getDefaultEmail(),
     preferences.lastCountryCode
   );
-
 
   useEffect(() => {
     if (open && preferences.lastMethod) {
@@ -175,7 +154,6 @@ export function AuthDialog({ children }: AuthDialogProps) {
     }
   };
 
-
   const renderStepFields = () => {
     const fields = authForm.getStepFields();
     
@@ -239,7 +217,6 @@ export function AuthDialog({ children }: AuthDialogProps) {
             </div>
           </div>
           
-          {/* Progress indicator */}
           {flow.step !== "method-selection" && (
             <div className="mt-4">
               <Progress value={flow.progress} className="h-2" />
@@ -248,10 +225,8 @@ export function AuthDialog({ children }: AuthDialogProps) {
         </DialogHeader>
 
         <div className="space-y-6 mt-6 max-h-[60vh] overflow-y-auto">
-          {/* Method Selection Step */}
           {flow.step === "method-selection" && (
             <div className="space-y-4">
-              {/* Smart recommendation */}
               {preferences.lastMethod !== 'email' && preferences.lastEmail && (
                 <div className="text-sm text-muted-foreground bg-muted/50 p-3 rounded-lg">
                   <div className="flex items-center gap-2">
@@ -261,7 +236,6 @@ export function AuthDialog({ children }: AuthDialogProps) {
                 </div>
               )}
               
-              {/* Google OAuth Button */}
               {isGoogleEnabled && (
                 <>
                   <Button
@@ -288,7 +262,6 @@ export function AuthDialog({ children }: AuthDialogProps) {
                 </>
               )}
               
-              {/* Email Button */}
               <div className="grid grid-cols-1 gap-3">
                 <Button
                   variant={preferences.lastMethod === 'email' ? "default" : "outline"}
@@ -314,10 +287,8 @@ export function AuthDialog({ children }: AuthDialogProps) {
             </div>
           )}
 
-          {/* Form Steps */}
           {flow.step !== "method-selection" && (
             <div className="space-y-4">
-              {/* Context display for current step */}
               {flow.step === "password-input" && flow.context.email && (
                 <div className="text-sm text-muted-foreground">
                   <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
@@ -347,10 +318,8 @@ export function AuthDialog({ children }: AuthDialogProps) {
             </div>
           )}
           
-          {/* Mode Switch and Settings */}
           {flow.step === "method-selection" && (
             <div className="space-y-3">
-              {/* Remember me toggle */}
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Remember my preferences</span>
                 <label className="flex items-center gap-2 cursor-pointer">

@@ -11,18 +11,6 @@ import type { AppointmentWithDetails } from "@shared/schema";
 import { format } from "date-fns";
 import { useState } from "react";
 
-/**
- * Admin appointments management component for viewing and updating service appointments.
- * Allows admins to change appointment status (pending, confirmed, in-progress, completed, cancelled).
- * Displays detailed appointment information including customer, service, location, and timing.
- * 
- * @returns {JSX.Element} The rendered admin appointments page
- * 
- * @example
- * ```tsx
- * <Route path="/admin/appointments" component={AdminAppointments} />
- * ```
- */
 export default function AdminAppointments() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
@@ -119,7 +107,6 @@ export default function AdminAppointments() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight" data-testid="heading-admin-appointments">
@@ -134,7 +121,6 @@ export default function AdminAppointments() {
         </Link>
       </div>
 
-      {/* Appointments List */}
       {appointments.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center">
@@ -217,7 +203,6 @@ export default function AdminAppointments() {
           ))}
           </div>
 
-          {/* Pagination Controls */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between mt-6">
               <div className="text-sm text-muted-foreground">

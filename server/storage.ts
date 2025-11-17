@@ -136,6 +136,7 @@ export interface IStorage {
   getAllCars(offset?: number, limit?: number, filters?: CarFilterOptions): Promise<Car[]>;
   getCarCount(filters?: CarFilterOptions): Promise<number>;
   getCar(id: string): Promise<Car | undefined>;
+  getCarsByUser(userId: string, offset?: number, limit?: number): Promise<Car[]>;
   getCarsForSale(): Promise<Car[]>;
   getAuctionCars(): Promise<Car[]>;
   createCar(car: InsertCar): Promise<Car>;
@@ -211,7 +212,7 @@ export interface IStorage {
   createInvoice(invoiceData: InsertInvoice, items: InsertInvoiceItem[]): Promise<InvoiceWithItems>;
   getInvoices(filters?: InvoiceFilterOptions): Promise<{ invoices: InvoiceWithItems[]; total: number; hasMore: boolean }>;
   getInvoiceById(id: string): Promise<InvoiceWithItems | undefined>;
-  updateInvoice(id: string, invoiceData: Partial<InsertInvoice>): Promise<InvoiceWithItems | undefined>;
+  updateInvoice(id: string, invoiceData: Partial<InsertInvoice>, items?: InsertInvoiceItem[]): Promise<InvoiceWithItems | undefined>;
   deleteInvoice(id: string): Promise<boolean>;
   getEligibleTransactionsForInvoicing(): Promise<{ appointments: any[]; bids: any[]; cars: any[] }>;
 }
@@ -766,7 +767,7 @@ export class DatabaseStorage implements IStorage {
     const startWindow = new Date(targetDateTime.getTime() - 30 * 60000);
     const endWindow = new Date(targetDateTime.getTime() + 30 * 60000);
     
-    // Use SQL EXISTS for efficient conflict checking with composite index
+    
     let query = sql`
       SELECT EXISTS (
         SELECT 1 
@@ -887,7 +888,7 @@ export class DatabaseStorage implements IStorage {
   async getCar(id: string): Promise<Car | undefined> {
     const db = await getDb();
     
-    // Use LEFT JOIN with JSON aggregation to fetch car and images in one query
+    
     const result = await db
       .select({
         car: cars,
@@ -923,6 +924,43 @@ export class DatabaseStorage implements IStorage {
     } as any;
   }
 
+  async getCarsByUser(userId: string, offset: number = 0, limit: number = 50): Promise<Car[]> {
+    const db = await getDb();
+    
+    
+    const result = await db
+      .select({
+        car: cars,
+        images: sql<CarImage[]>`
+          COALESCE(
+            json_agg(
+              json_build_object(
+                'id', ${carImages.id},
+                'carId', ${carImages.carId},
+                'imageUrl', ${carImages.imageUrl},
+                'displayOrder', ${carImages.displayOrder},
+                'isPrimary', ${carImages.isPrimary},
+                'createdAt', ${carImages.createdAt}
+              ) ORDER BY ${carImages.displayOrder}
+            ) FILTER (WHERE ${carImages.id} IS NOT NULL),
+            '[]'::json
+          )
+        `
+      })
+      .from(cars)
+      .leftJoin(carImages, eq(cars.id, carImages.carId))
+      .where(eq(cars.userId, userId))
+      .groupBy(cars.id)
+      .orderBy(desc(cars.createdAt))
+      .offset(offset)
+      .limit(limit);
+    
+    return result.map(r => ({
+      ...r.car,
+      images: r.images
+    })) as any;
+  }
+
   async getCarsForSale(): Promise<Car[]> {
     const cacheKey = 'cars_for_sale';
     const cached = this.cache.get(cacheKey);
@@ -932,7 +970,7 @@ export class DatabaseStorage implements IStorage {
 
     const db = await getDb();
     
-    // Use LEFT JOIN with JSON aggregation to fetch cars and images in one query
+    
     const result = await db
       .select({
         car: cars,
@@ -976,7 +1014,7 @@ export class DatabaseStorage implements IStorage {
 
     const db = await getDb();
     
-    // Use LEFT JOIN with JSON aggregation to fetch cars and images in one query
+    
     const result = await db
       .select({
         car: cars,
@@ -1996,7 +2034,7 @@ export class DatabaseStorage implements IStorage {
     return (result.rowCount ?? 0) > 0;
   }
 
-  async updateInvoice(id: string, invoiceData: Partial<InsertInvoice>): Promise<InvoiceWithItems | undefined> {
+  async updateInvoice(id: string, invoiceData: Partial<InsertInvoice>, items?: InsertInvoiceItem[]): Promise<InvoiceWithItems | undefined> {
     const db = await getDb();
     
     const [updatedInvoice] = await db.update(invoices)
@@ -2008,13 +2046,24 @@ export class DatabaseStorage implements IStorage {
       return undefined;
     }
 
-    const items = await db.select().from(invoiceItems)
+    if (items && items.length > 0) {
+      await db.delete(invoiceItems).where(eq(invoiceItems.invoiceId, id));
+      
+      const itemsToInsert = items.map(item => ({
+        ...item,
+        invoiceId: id
+      }));
+      
+      await db.insert(invoiceItems).values(itemsToInsert);
+    }
+
+    const updatedItems = await db.select().from(invoiceItems)
       .where(eq(invoiceItems.invoiceId, updatedInvoice.id))
       .orderBy(asc(invoiceItems.displayOrder));
 
     return {
       ...updatedInvoice,
-      items
+      items: updatedItems
     };
   }
 
@@ -2664,6 +2713,13 @@ export class MemStorage implements IStorage {
 
   async getCar(id: string): Promise<Car | undefined> {
     return this.cars.get(id);
+  }
+
+  async getCarsByUser(userId: string, offset: number = 0, limit: number = 50): Promise<Car[]> {
+    return Array.from(this.cars.values())
+      .filter(car => car.userId === userId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(offset, offset + limit);
   }
 
   async getCarsForSale(): Promise<Car[]> {
@@ -3400,7 +3456,7 @@ export class MemStorage implements IStorage {
     throw new Error("Invoice operations not supported in memory storage");
   }
 
-  async updateInvoice(id: string, invoiceData: Partial<InsertInvoice>): Promise<InvoiceWithItems | undefined> {
+  async updateInvoice(id: string, invoiceData: Partial<InsertInvoice>, items?: InsertInvoiceItem[]): Promise<InvoiceWithItems | undefined> {
     throw new Error("Invoice operations not supported in memory storage");
   }
 

@@ -5,23 +5,14 @@ import { useEffect, useMemo } from "react";
 import type { AuthStep, AuthMode, AuthContext } from "./useAuthFlow";
 import { passwordValidation } from "@shared/schema";
 
-/**
- * Validation schema for email input step
- */
 const emailSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
 });
 
-/**
- * Validation schema for password input step with strength requirements
- */
 const passwordSchema = z.object({
   password: passwordValidation,
 });
 
-/**
- * Validation schema for password confirmation (registration) with strength requirements
- */
 const confirmPasswordSchema = z.object({
   password: passwordValidation,
   confirmPassword: z.string().min(1, "Please confirm your password"),
@@ -30,17 +21,10 @@ const confirmPasswordSchema = z.object({
   path: ["confirmPassword"],
 });
 
-/**
- * Validation schema for name input step
- */
 const nameSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
 });
 
-
-/**
- * Schema mapping for each authentication step
- */
 const STEP_SCHEMAS: Record<AuthStep, z.ZodSchema> = {
   "method-selection": z.object({}),
   "email-input": emailSchema,
@@ -49,19 +33,10 @@ const STEP_SCHEMAS: Record<AuthStep, z.ZodSchema> = {
   "profile-setup": nameSchema,
 };
 
-/**
- * Gets the appropriate password schema based on authentication mode
- * 
- * @param {AuthMode} mode - Current authentication mode
- * @returns {z.ZodSchema} Validation schema for password step
- */
 const getPasswordStepSchema = (mode: AuthMode): z.ZodSchema => {
   return mode === "register" ? confirmPasswordSchema : passwordSchema;
 };
 
-/**
- * Form data type containing all possible authentication fields
- */
 type AuthFormData = {
   email?: string;
   password?: string;
@@ -69,16 +44,6 @@ type AuthFormData = {
   name?: string;
 };
 
-/**
- * Gets default form values for the current authentication step
- * 
- * @param {AuthStep} step - Current authentication step
- * @param {AuthMode} mode - Current authentication mode
- * @param {AuthContext} context - Authentication context
- * @param {string} [defaultEmail=""] - Default email to pre-fill
- * @param {string} [defaultCountryCode="+91"] - Default country code
- * @returns {Partial<AuthFormData>} Default form values
- */
 const getStepDefaultValues = (
   step: AuthStep, 
   mode: AuthMode,

@@ -53,9 +53,8 @@ interface NotificationResult {
 }
 
 class NotificationServiceClass {
-  /**
-   * Get user contact information from database
-   */
+  
+
   private async getUserContactInfo(userId: string): Promise<UserContactInfo | null> {
     try {
       const storage = await getStorage();
@@ -79,9 +78,8 @@ class NotificationServiceClass {
     }
   }
 
-  /**
-   * Validate that user has required contact info for a channel
-   */
+  
+
   private validateContactInfo(userInfo: UserContactInfo, channel: 'whatsapp' | 'email'): boolean {
     if (channel === 'whatsapp') {
       return !!(userInfo.phone && userInfo.countryCode);
@@ -90,9 +88,8 @@ class NotificationServiceClass {
     }
   }
 
-  /**
-   * Send appointment confirmation respecting user's preferred channel
-   */
+  
+
   async sendAppointmentConfirmation(
     userId: string, 
     appointmentData: NotificationAppointmentData
@@ -154,9 +151,8 @@ class NotificationServiceClass {
     };
   }
 
-  /**
-   * Send appointment confirmation via specific channel
-   */
+  
+
   private async sendAppointmentViaChannel(
     userInfo: UserContactInfo,
     appointmentData: NotificationAppointmentData,
@@ -214,9 +210,8 @@ class NotificationServiceClass {
     );
   }
 
-  /**
-   * Send status update respecting user's preferred channel
-   */
+  
+
   async sendStatusUpdate(
     userId: string,
     statusData: NotificationStatusData
@@ -278,9 +273,8 @@ class NotificationServiceClass {
     };
   }
 
-  /**
-   * Send status update via specific channel
-   */
+  
+
   private async sendStatusViaChannel(
     userInfo: UserContactInfo,
     statusData: NotificationStatusData,
@@ -341,10 +335,8 @@ class NotificationServiceClass {
     );
   }
 
+  
 
-  /**
-   * Send promotional message respecting user's preferred channel
-   */
   async sendPromotionalMessage(
     userId: string,
     message: string,
@@ -485,9 +477,8 @@ class NotificationServiceClass {
     };
   }
 
-  /**
-   * Send bid status update notification
-   */
+  
+
   async sendBidStatusUpdate(
     userId: string,
     bidData: {
@@ -512,7 +503,7 @@ class NotificationServiceClass {
     const preferredChannel = userInfo.preferredChannel;
     const alternateChannel = preferredChannel === 'whatsapp' ? 'email' : 'whatsapp';
 
-    // Try preferred channel
+    
     let result: CommunicationResult;
     if (preferredChannel === 'whatsapp' && userInfo.phone && userInfo.countryCode) {
       result = await WhatsAppService.sendMessage(
@@ -547,7 +538,7 @@ class NotificationServiceClass {
       };
     }
 
-    // Try fallback channel
+    
     console.warn(`[BID_NOTIFICATION] ⚠️ Preferred channel ${preferredChannel} failed, trying ${alternateChannel}`);
     
     if (alternateChannel === 'whatsapp' && userInfo.phone && userInfo.countryCode) {

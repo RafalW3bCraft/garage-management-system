@@ -10,15 +10,6 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import { lazy, Suspense } from "react";
 import { Loader2 } from "lucide-react";
 
-/**
- * Bundle Optimization Strategy:
- * - All pages are lazy loaded for automatic code splitting
- * - Admin pages are in separate chunks (only loaded when accessed)
- * - Vite automatically performs tree shaking in production builds
- * - Dynamic imports create separate bundle chunks per route
- * - This reduces initial bundle size and improves load times
- */
-
 const Home = lazy(() => import("@/pages/Home"));
 const Services = lazy(() => import("@/pages/Services"));
 const ServiceDetail = lazy(() => import("@/pages/ServiceDetail"));

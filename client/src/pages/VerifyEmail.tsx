@@ -7,10 +7,6 @@ import { apiRequest } from "@/lib/queryClient";
 import { CheckCircle2, XCircle, Loader2, Mail } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-/**
- * Email verification page component that handles email verification via token
- * from the URL query parameters
- */
 export default function VerifyEmail() {
   const [, navigate] = useLocation();
   const searchString = useSearch();

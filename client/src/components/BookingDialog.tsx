@@ -36,9 +36,6 @@ import { CalendarIcon, Clock, MapPin, Loader2, CheckCircle2, XCircle } from "luc
 import { cn } from "@/lib/utils";
 import type { Service, Location, Customer, Appointment } from "@shared/schema";
 
-/**
- * Zod schema for booking form validation with future date validation
- */
 const bookingSchema = z.object({
   carDetails: z.string()
     .min(5, "Please provide car details (make, model, year, registration)")
@@ -58,31 +55,11 @@ const bookingSchema = z.object({
 
 type BookingData = z.infer<typeof bookingSchema>;
 
-/**
- * Props for the BookingDialog component
- */
 interface BookingDialogProps {
   children: React.ReactNode;
   service: Service;
 }
 
-/**
- * Service appointment booking dialog with real-time availability checking.
- * Features date/time selection, location choice, car details input, and conflict detection.
- * Shows available time slots with visual indicators for booked vs. available times.
- * 
- * @param {BookingDialogProps} props - Component props
- * @param {React.ReactNode} props.children - Trigger element for opening the dialog
- * @param {Service} props.service - The service to book an appointment for
- * @returns {JSX.Element} The rendered booking dialog
- * 
- * @example
- * ```tsx
- * <BookingDialog service={selectedService}>
- *   <Button>Book Now</Button>
- * </BookingDialog>
- * ```
- */
 export function BookingDialog({ children, service }: BookingDialogProps) {
   const [open, setOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>();
@@ -271,7 +248,6 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
         <div className="max-h-[60vh] overflow-y-auto">
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            {/* Car Details */}
             <FormField
               control={form.control}
               name="carDetails"
@@ -296,7 +272,6 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               )}
             />
 
-            {/* Date Selection */}
             <FormField
               control={form.control}
               name="dateTime"
@@ -350,7 +325,6 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               )}
             />
 
-            {/* Time Slot with Availability Indicators */}
             <FormField
               control={form.control}
               name="timeSlot"
@@ -425,7 +399,6 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               )}
             />
 
-            {/* Location with Loading State */}
             <FormField
               control={form.control}
               name="locationId"
@@ -467,7 +440,6 @@ export function BookingDialog({ children, service }: BookingDialogProps) {
               )}
             />
 
-            {/* Notes */}
             <FormField
               control={form.control}
               name="notes"

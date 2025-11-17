@@ -1,28 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import type { User } from "@shared/schema";
 
-/**
- * Authentication hook providing user state, authentication status, and login methods.
- * Queries current user information and available authentication providers.
- * 
- * @returns {object} Authentication state and methods
- * @property {User | null | undefined} user - Current authenticated user or null
- * @property {boolean} isLoading - Whether user data is being loaded
- * @property {boolean} isAuthenticated - Whether a user is currently authenticated
- * @property {string[]} providers - Available authentication providers (email, google, etc.)
- * @property {boolean} isGoogleEnabled - Whether Google OAuth is enabled
- * @property {() => void} googleLogin - Function to initiate Google OAuth flow
- * 
- * @example
- * ```tsx
- * const { user, isLoading, isAuthenticated, googleLogin } = useAuth();
- * 
- * if (isLoading) return <LoadingSpinner />;
- * if (!isAuthenticated) return <LoginPrompt />;
- * 
- * return <UserProfile user={user} />;
- * ```
- */
 export function useAuth() {
 
   const { data: user, isLoading } = useQuery<User | null>({

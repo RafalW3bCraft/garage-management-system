@@ -4,24 +4,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Users, Car, Calendar, Settings, MapPin, Wrench, AlertCircle, MessageSquare, DollarSign, Megaphone, FileText } from "lucide-react";
+import { Users, Car, Calendar, Settings, MapPin, Wrench, AlertCircle, MessageSquare, DollarSign, Megaphone, FileText, TrendingUp, Clock, CheckCircle2 } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { useEffect } from "react";
 import type { Appointment, Service, Location, Car as CarType } from "@shared/schema";
 
-/**
- * Admin dashboard component providing an overview of key business metrics and quick access
- * to management pages. Displays statistics for appointments, services, locations, and cars.
- * Restricted to admin users only.
- * 
- * @returns {JSX.Element} The rendered admin dashboard
- * 
- * @example
- * ```tsx
- * <Route path="/admin" component={AdminDashboard} />
- * ```
- */
 export default function AdminDashboard() {
   const { user, isAuthenticated } = useAuth();
   const { toast } = useToast();
@@ -76,6 +64,23 @@ export default function AdminDashboard() {
     };
   }>({
     queryKey: ["/api/admin/stats"],
+  });
+
+  
+  const { data: renewalData } = useQuery<{
+    upcomingRenewals: any[];
+    expiredPromotions: any[];
+    completionHistory: any[];
+    statistics: {
+      totalCompletedLast90Days: number;
+      withRenewalTracking: number;
+      renewalConversionRate: string;
+      upcomingRenewalsCount: number;
+      expiredPromotionsCount: number;
+    };
+  }>({
+    queryKey: ["/api/admin/service-renewals"],
+    enabled: isAuthenticated && user?.role === "admin"
   });
 
   useEffect(() => {
@@ -228,14 +233,12 @@ export default function AdminDashboard() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      {/* Error Alert */}
       {errorComponent && (
         <div className="mb-6">
           {errorComponent}
         </div>
       )}
 
-      {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold tracking-tight mb-2" data-testid="heading-admin-dashboard">
           Admin Dashboard
@@ -245,7 +248,6 @@ export default function AdminDashboard() {
         </p>
       </div>
 
-      {/* Quick Stats */}
       <section aria-labelledby="stats-heading" className="mb-8">
         <h2 id="stats-heading" className="sr-only">Dashboard Statistics</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -308,7 +310,127 @@ export default function AdminDashboard() {
         </div>
       </section>
 
-      {/* Admin Actions */}
+      {renewalData && (
+        <section className="mb-8">
+          <h2 className="text-2xl font-semibold mb-4">Service Renewal Tracking</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Upcoming Renewals</CardTitle>
+                <Clock className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-blue-600">
+                  {renewalData.statistics.upcomingRenewalsCount}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Due in next 30 days
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Expired Promotions</CardTitle>
+                <AlertCircle className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-orange-600">
+                  {renewalData.statistics.expiredPromotionsCount}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Require follow-up
+                </p>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Renewal Rate</CardTitle>
+                <TrendingUp className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">
+                  {typeof renewalData.statistics.renewalConversionRate === 'string' 
+                    ? renewalData.statistics.renewalConversionRate 
+                    : `${renewalData.statistics.renewalConversionRate}%`}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Last 90 days conversion
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {renewalData.upcomingRenewals.length > 0 && (
+            <Card className="mb-6">
+              <CardHeader>
+                <CardTitle>Upcoming Renewals (Next 30 Days)</CardTitle>
+                <CardDescription>Contact these customers for service renewal</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {renewalData.upcomingRenewals.slice(0, 5).map((renewal: any) => (
+                    <div key={renewal.id} className="flex items-center justify-between p-3 border rounded-lg">
+                      <div>
+                        <p className="font-medium">{renewal.customerName}</p>
+                        <p className="text-sm text-muted-foreground">{renewal.serviceName} - {renewal.carDetails}</p>
+                      </div>
+                      <div className="text-right">
+                        <Badge variant="outline" className="mb-1">
+                          {new Date(renewal.expiresAt).toLocaleDateString()}
+                        </Badge>
+                        <p className="text-sm text-muted-foreground">₹{renewal.servicePrice}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {renewalData.upcomingRenewals.length > 5 && (
+                    <p className="text-sm text-muted-foreground text-center pt-2">
+                      + {renewalData.upcomingRenewals.length - 5} more renewals
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {renewalData.completionHistory.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Recent Completions</CardTitle>
+                <CardDescription>Last 90 days service completion history</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {renewalData.completionHistory.slice(0, 5).map((completion: any) => (
+                    <div key={completion.id} className="flex items-center justify-between p-3 border rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <CheckCircle2 className="h-5 w-5 text-green-600" />
+                        <div>
+                          <p className="font-medium">{completion.customerName}</p>
+                          <p className="text-sm text-muted-foreground">{completion.serviceName}</p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-medium">
+                          {new Date(completion.completedAt).toLocaleDateString()}
+                        </p>
+                        <p className="text-xs text-muted-foreground">₹{completion.servicePrice}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {renewalData.completionHistory.length > 5 && (
+                    <p className="text-sm text-muted-foreground text-center pt-2">
+                      + {renewalData.completionHistory.length - 5} more completions
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </section>
+      )}
+
       <section aria-labelledby="actions-heading">
         <h2 id="actions-heading" className="sr-only">Admin Management Actions</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

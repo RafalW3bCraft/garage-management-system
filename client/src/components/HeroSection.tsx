@@ -1,33 +1,17 @@
 import { Button } from "@/components/ui/button";
 import { Calendar, Shield, Wrench } from "lucide-react";
 
-/**
- * Using a professional automotive garage image from Unsplash
- */
 const heroImage = "https://images.unsplash.com/photo-1621939514649-280e2198acc0?w=1920&h=600&fit=crop&crop=center";
 
-/**
- * Hero section component for the landing page featuring a background image,
- * main headline, call-to-action buttons, and key feature highlights.
- * 
- * @returns {JSX.Element} The rendered hero section
- * 
- * @example
- * ```tsx
- * <HeroSection />
- * ```
- */
 export function HeroSection() {
   return (
     <section className="relative h-[600px] flex items-center justify-center overflow-hidden">
-      {/* Background Image with Dark Overlay */}
       <div 
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{ backgroundImage: `url(${heroImage})` }}
       />
       <div className="absolute inset-0 bg-black/50" />
       
-      {/* Content */}
       <div className="relative z-10 text-center text-white max-w-4xl mx-auto px-4 md:px-6">
         <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold mb-4 md:mb-6">
           Professional Automotive Services You Can Trust
@@ -57,7 +41,6 @@ export function HeroSection() {
           </Button>
         </div>
 
-        {/* Features */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
           <div className="flex items-center justify-center gap-2">
             <Shield className="h-5 w-5 text-accent" />

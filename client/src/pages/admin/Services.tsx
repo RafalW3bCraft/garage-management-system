@@ -22,10 +22,6 @@ import { z } from "zod";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
-/**
- * Service form schema with features as comma-separated string for form input,
- * transformed to array when submitting to API
- */
 const serviceFormSchema = z.object({
   title: z.string()
     .min(1, "Title is required")
@@ -67,18 +63,6 @@ const serviceFormSchema = z.object({
 
 type ServiceFormData = z.infer<typeof serviceFormSchema>;
 
-/**
- * Admin services management component for managing automotive service offerings.
- * Supports CRUD operations, category filtering, and marking services as popular.
- * Features include pricing, duration, provider details, and feature list management.
- * 
- * @returns {JSX.Element} The rendered admin services management page
- * 
- * @example
- * ```tsx
- * <Route path="/admin/services" component={AdminServices} />
- * ```
- */
 export default function AdminServices() {
   const { user, isAuthenticated } = useAuth();
   const queryClient = useQueryClient();
@@ -260,7 +244,6 @@ export default function AdminServices() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight" data-testid="heading-admin-services">
@@ -513,7 +496,6 @@ export default function AdminServices() {
         </div>
       </div>
 
-      {/* Filters */}
       <Card className="mb-6">
         <CardContent className="pt-6">
           <div className="flex items-center gap-4">
@@ -539,7 +521,6 @@ export default function AdminServices() {
         </CardContent>
       </Card>
 
-      {/* Services List */}
       {filteredServices.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center">
@@ -638,7 +619,6 @@ export default function AdminServices() {
         </div>
       )}
 
-      {/* Edit Service Dialog */}
       <Dialog open={!!editingService} onOpenChange={() => setEditingService(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>

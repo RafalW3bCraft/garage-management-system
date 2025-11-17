@@ -89,10 +89,6 @@ export interface ServiceProviderBookingData {
   price?: number;
 }
 
-/**
- * Internal helper class that extends BaseCommunicationService
- * Used for composition to maintain backward compatibility with static interface
- */
 class WhatsAppServiceHelper extends BaseCommunicationService {
   constructor(retryConfig: RetryConfig, circuitBreakerConfig: CircuitBreakerConfig) {
     super('WhatsApp', retryConfig, circuitBreakerConfig);
@@ -133,9 +129,8 @@ export class WhatsAppService {
     }
   );
   
-  /**
-   * Get Twilio credentials from Replit Connector
-   */
+  
+
   private static async getTwilioCredentials(): Promise<TwilioCredentials> {
     if (this.twilioCredentials) {
       return this.twilioCredentials;
@@ -199,9 +194,8 @@ export class WhatsAppService {
     }
   }
 
-  /**
-   * Get WhatsApp phone number
-   */
+  
+
   private static async getWhatsAppPhone(): Promise<string> {
     if (this.twilioPhone) {
       return this.twilioPhone;
@@ -218,9 +212,8 @@ export class WhatsAppService {
     return phoneNumber;
   }
 
-  /**
-   * Initialize Twilio client using Replit Connector
-   */
+  
+
   private static async getTwilioClient(): Promise<TwilioClient> {
     try {
       const credentials = await this.getTwilioCredentials();
@@ -257,9 +250,8 @@ export class WhatsAppService {
     }
   }
 
-  /**
-   * Wrapper for formatWhatsAppNumber with WhatsApp-specific logging
-   */
+  
+
   private static formatWhatsAppNumberWithLogging(phone: string, countryCode: string): string {
     
     try {
@@ -272,9 +264,8 @@ export class WhatsAppService {
     }
   }
 
-  /**
-   * Generate appointment confirmation message
-   */
+  
+
   private static generateAppointmentConfirmationMessage(data: AppointmentConfirmationData): string {
     const priceText = data.price ? `\n💰 *Total Cost:* ₹${data.price.toLocaleString()}` : '';
     const mechanicText = data.mechanicName ? `\n👨‍🔧 *Mechanic:* ${data.mechanicName}` : '';
@@ -295,9 +286,8 @@ We'll be ready to serve you! If you need to reschedule or have questions, please
 *Ronak Motor Garage* - Your trusted automotive service center`;
   }
 
-  /**
-   * Generate status update message
-   */
+  
+
   private static generateStatusUpdateMessage(data: StatusUpdateData): string {
     const statusEmojis: { [key: string]: string } = {
       'confirmed': '✅',
@@ -341,9 +331,8 @@ We'll notify you about the auction status. Good luck!
 *Ronak Motor Garage* - Quality cars, competitive prices`;
   }
 
-  /**
-   * Generate welcome message for new users
-   */
+  
+
   private static generateWelcomeMessage(customerName: string): string {
     return `🎉 *Welcome to Ronak Motor Garage!*
 
@@ -364,10 +353,8 @@ Need help? Just reply to this message!
 *Ronak Motor Garage* - Your automotive partner`;
   }
 
+  
 
-  /**
-   * Generate service provider booking notification message
-   */
   private static generateServiceProviderBookingMessage(data: ServiceProviderBookingData): string {
     const priceText = data.price ? `\n💰 *Service Cost:* ₹${data.price.toLocaleString()}` : '';
     const customerPhoneText = data.customerPhone ? `\n📱 *Customer Phone:* ${data.customerPhone}` : '';
@@ -450,9 +437,8 @@ Thank you for your business! 🚗
     return message;
   }
 
-  /**
-   * Core message sending function (for internal use with retry wrapper)
-   */
+  
+
   private static async sendMessageCore(
     to: string,
     message: string,
@@ -490,7 +476,7 @@ Thank you for your business! 🚗
       console.error(`[WhatsApp]    - HTTP status: ${twilioError.status || 'N/A'}`);
       console.error(`[WhatsApp]    - More info: ${twilioError.moreInfo || 'N/A'}`);
       
-      // Provide helpful guidance for common errors
+      
       if (twilioError.code === 63007) {
         console.error(`[WhatsApp] 📋 SOLUTION: Error 63007 means the WhatsApp sender number is not configured.`);
         console.error(`[WhatsApp]    To fix this:`);
@@ -510,14 +496,8 @@ Thank you for your business! 🚗
     }
   }
 
-  /**
-   * Attempt email fallback when WhatsApp fails
-   * 
-   * @param email - Email address (if available)
-   * @param message - Message content
-   * @param subject - Email subject
-   * @returns CommunicationResult
-   */
+  
+
   private static async attemptEmailFallback(
     email: string | undefined,
     message: string,
@@ -559,16 +539,8 @@ Thank you for your business! 🚗
     }
   }
 
-  /**
-   * Send WhatsApp message with circuit breaker, retry mechanism, and fallback
-   * 
-   * @param to - WhatsApp number in E.164 format (whatsapp:+1234567890)
-   * @param message - Message content
-   * @param messageType - Type of message for tracking
-   * @param appointmentId - Optional appointment ID for linking
-   * @param fallbackEmail - Optional email for fallback notifications
-   * @returns WhatsAppSendResult with success status and details
-   */
+  
+
   public static async sendMessage(
     to: string, 
     message: string, 
@@ -725,10 +697,8 @@ Thank you for your business! 🚗
     };
   }
 
-  /**
-   * Extract country code from full E.164 number
-   * Uses longest match from known country codes
-   */
+  
+
   private static extractCountryCode(fullNumber: string): string {
 
     const digits = fullNumber.replace(/\D/g, '');
@@ -763,9 +733,8 @@ Thank you for your business! 🚗
     return digits.substring(0, 1);
   }
 
-  /**
-   * Send appointment confirmation message via WhatsApp
-   */
+  
+
   static async sendAppointmentConfirmation(
     phone: string,
     countryCode: string,
@@ -777,9 +746,8 @@ Thank you for your business! 🚗
     return this.sendMessage(whatsappNumber, message, 'appointment_confirmation', data.bookingId, fallbackEmail);
   }
 
-  /**
-   * Send status update message via WhatsApp
-   */
+  
+
   static async sendStatusUpdate(
     phone: string,
     countryCode: string,
@@ -791,9 +759,8 @@ Thank you for your business! 🚗
     return this.sendMessage(whatsappNumber, message, 'status_update', undefined, fallbackEmail);
   }
 
-  /**
-   * Send bid notification via WhatsApp
-   */
+  
+
   static async sendBidNotification(
     phone: string,
     countryCode: string,
@@ -805,9 +772,8 @@ Thank you for your business! 🚗
     return this.sendMessage(whatsappNumber, message, 'bid_notification', undefined, fallbackEmail);
   }
 
-  /**
-   * Send welcome message via WhatsApp
-   */
+  
+
   static async sendWelcomeMessage(
     phone: string,
     countryCode: string,
@@ -819,9 +785,8 @@ Thank you for your business! 🚗
     return this.sendMessage(whatsappNumber, message, 'welcome_message', undefined, fallbackEmail);
   }
 
-  /**
-   * Send service provider booking notification via WhatsApp
-   */
+  
+
   static async sendServiceProviderNotification(
     phone: string,
     countryCode: string,
@@ -833,9 +798,8 @@ Thank you for your business! 🚗
     return this.sendMessage(whatsappNumber, message, 'booking_request', data.bookingId, fallbackEmail);
   }
 
-  /**
-   * Send invoice notification via WhatsApp
-   */
+  
+
   static async sendInvoiceNotification(
     phone: string,
     countryCode: string,
@@ -850,9 +814,8 @@ Thank you for your business! 🚗
     return this.sendMessage(whatsappNumber, message, 'status_update', undefined, fallbackEmail);
   }
 
-  /**
-   * Send promotional message via WhatsApp
-   */
+  
+
   static async sendPromotionalMessage(
     phone: string,
     countryCode: string,
@@ -867,9 +830,8 @@ Thank you for your business! 🚗
     return this.sendMessage(whatsappNumber, message, 'status_update', undefined, fallbackEmail);
   }
 
-  /**
-   * Send bulk promotional messages to multiple customers
-   */
+  
+
   static async sendBulkPromotionalMessages(
     recipients: Array<{ phone: string; countryCode: string; customerName?: string; email?: string }>,
     offerDetails: string,
@@ -929,9 +891,8 @@ Thank you for your business! 🚗
     };
   }
 
-  /**
-   * Validate phone number format for WhatsApp
-   */
+  
+
   static validatePhoneNumber(phone: string, countryCode: string): { valid: boolean; message?: string } {
     try {
       formatWhatsAppNumber(phone, countryCode);
@@ -942,16 +903,14 @@ Thank you for your business! 🚗
     }
   }
 
-  /**
-   * Validate WhatsApp phone number (alias for validatePhoneNumber for compatibility)
-   */
+  
+
   static validateWhatsAppNumber(phone: string, countryCode: string): { valid: boolean; message?: string } {
     return this.validatePhoneNumber(phone, countryCode);
   }
 
-  /**
-   * Get WhatsApp message history for a phone number
-   */
+  
+
   static async getMessageHistory(phone: string, limit: number = 20): Promise<any[]> {
     try {
       const storage = await getStorage();
@@ -964,9 +923,8 @@ Thank you for your business! 🚗
     }
   }
   
-  /**
-   * Get circuit breaker status (for monitoring/debugging)
-   */
+  
+
   static getCircuitBreakerStatus(): {
     state: string;
     failureCount: number;
@@ -981,21 +939,14 @@ Thank you for your business! 🚗
     };
   }
   
-  /**
-   * Manually reset circuit breaker (for admin/debugging)
-   */
+  
+
   static resetCircuitBreaker(): void {
     this.helper.resetCircuitBreaker();
   }
 
-  /**
-   * Send bulk promotional WhatsApp messages to multiple users
-   * 
-   * @param recipients - Array of recipient objects with phone, countryCode, name, and optional email
-   * @param message - Message content to send
-   * @param messageSubject - Subject for email fallback
-   * @returns Object with success/failure counts and detailed results
-   */
+  
+
   static async sendBulkPromotionalMessages(
     recipients: Array<{
       phone: string;
@@ -1092,9 +1043,8 @@ Thank you for your business! 🚗
     };
   }
 
-  /**
-   * Generate promotional message template
-   */
+  
+
   static generatePromotionalMessage(
     recipientName: string,
     offerTitle: string,

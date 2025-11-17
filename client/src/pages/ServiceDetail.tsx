@@ -25,13 +25,6 @@ import {
 } from "lucide-react";
 import type { Service, Location } from "@shared/schema";
 
-/**
- * Maps icon names to their corresponding Lucide icon components with configurable size
- * 
- * @param {string | null} iconName - Name of the icon to retrieve
- * @param {"sm" | "lg"} [size="sm"] - Icon size variant
- * @returns {JSX.Element} The corresponding icon component with size styling
- */
 const getIconComponent = (iconName: string | null, size: "sm" | "lg" = "sm") => {
   const iconClass = size === "lg" ? "h-12 w-12" : "h-6 w-6";
   const iconMap: Record<string, JSX.Element> = {
@@ -120,7 +113,6 @@ export default function ServiceDetail() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Breadcrumb */}
       <div className="border-b">
         <div className="container mx-auto px-4 py-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -137,11 +129,9 @@ export default function ServiceDetail() {
         </div>
       </div>
 
-      {/* Service Header */}
       <section className="py-8 bg-muted/50">
         <div className="container mx-auto px-4">
           <div className="flex flex-col lg:flex-row gap-8 items-start">
-            {/* Service Info */}
             <div className="flex-1">
               <div className="flex items-center gap-4 mb-4">
                 <div className="text-accent">
@@ -157,7 +147,6 @@ export default function ServiceDetail() {
                 </div>
               </div>
 
-              {/* Service Badges */}
               <div className="flex flex-wrap gap-2 mb-6">
                 <Badge variant="secondary" data-testid="badge-category">
                   {service.category}
@@ -173,7 +162,6 @@ export default function ServiceDetail() {
               </div>
             </div>
 
-            {/* Pricing Card */}
             <div className="lg:w-80">
               <Card className="sticky top-4">
                 <CardHeader>
@@ -213,13 +201,10 @@ export default function ServiceDetail() {
         </div>
       </section>
 
-      {/* Service Details */}
       <section className="py-12">
         <div className="container mx-auto px-4">
           <div className="grid lg:grid-cols-3 gap-8">
-            {/* Main Content */}
             <div className="lg:col-span-2 space-y-8">
-              {/* What's Included */}
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -249,7 +234,6 @@ export default function ServiceDetail() {
                 </CardContent>
               </Card>
 
-              {/* Service Process */}
               <Card>
                 <CardHeader>
                   <CardTitle>Service Process</CardTitle>
@@ -305,9 +289,7 @@ export default function ServiceDetail() {
               </Card>
             </div>
 
-            {/* Sidebar */}
             <div className="space-y-6">
-              {/* Available Locations */}
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -335,7 +317,6 @@ export default function ServiceDetail() {
                 </CardContent>
               </Card>
 
-              {/* Contact Support */}
               <Card>
                 <CardHeader>
                   <CardTitle>Need Help?</CardTitle>
@@ -361,7 +342,6 @@ export default function ServiceDetail() {
         </div>
       </section>
 
-      {/* Related Services */}
       {relatedServices.length > 0 && (
         <section className="py-12 bg-muted/50">
           <div className="container mx-auto px-4">

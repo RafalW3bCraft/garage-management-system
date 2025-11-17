@@ -61,9 +61,8 @@ class PerformanceMonitor {
     this.slowRequestThreshold = slowRequestThreshold ?? parseInt(process.env.PERF_SLOW_MS || '1000', 10);
   }
 
-  /**
-   * Express middleware to track request performance
-   */
+  
+
   middleware() {
     return (req: Request, res: Response, next: NextFunction) => {
 
@@ -98,9 +97,8 @@ class PerformanceMonitor {
     };
   }
 
-  /**
-   * Normalize endpoint path by removing IDs and dynamic segments
-   */
+  
+
   private normalizeEndpoint(path: string): string {
 
     let normalized = path.replace(
@@ -115,9 +113,8 @@ class PerformanceMonitor {
     return normalized;
   }
 
-  /**
-   * Record a request metric
-   */
+  
+
   private recordMetric(metric: RequestMetric): void {
 
     this.requestCache.set(this.requestCounter++, metric);
@@ -148,9 +145,8 @@ class PerformanceMonitor {
     }
   }
 
-  /**
-   * Get comprehensive performance metrics
-   */
+  
+
   getMetrics(): PerformanceMetrics {
     const allMetrics = Array.from(this.requestCache.values());
     const totalRequests = allMetrics.length;
@@ -200,9 +196,8 @@ class PerformanceMonitor {
     };
   }
 
-  /**
-   * Reset all metrics (useful for testing or manual reset)
-   */
+  
+
   reset(): void {
     this.requestCache.clear();
     this.endpointStatsMap.clear();
@@ -210,16 +205,14 @@ class PerformanceMonitor {
     this.requestCounter = 0;
   }
 
-  /**
-   * Get current cache size
-   */
+  
+
   getCacheSize(): number {
     return this.requestCache.size;
   }
 
-  /**
-   * Get monitoring uptime in milliseconds
-   */
+  
+
   getUptime(): number {
     return Date.now() - this.monitoringStartTime;
   }
